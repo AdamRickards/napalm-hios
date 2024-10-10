@@ -110,6 +110,10 @@ The driver includes a mock HiOS device for testing and development purposes. To 
 
 Note: The mock device functionality is still in development
 
+## Known Issues
+
+Since we have focused on SSH driver with fallback methods saying "Protocol Not Implemented" for the other protocols we plan to support, if SSH connection fails you might get a response of "Protocol Not Implemented".
+
 ## Contributing
 
 Contributions to the NAPALM HiOS driver are welcome! Please refer to the CONTRIBUTING.md file for guidelines.
