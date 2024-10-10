@@ -1,30 +1,28 @@
-"""setup.py file."""
-
-import uuid
-
 from setuptools import setup, find_packages
 
-__author__ = 'David Barroso <dbarrosop@dravetech.com>'
-
-with open("requirements.txt", "r") as fs:
-    reqs = [r for r in fs.read().splitlines() if (len(r) > 0 and not r.startswith("#"))]
-
 setup(
-    name="napalm-skeleton",
+    name="napalm-hios",
     version="0.1.0",
     packages=find_packages(),
-    author="David Barroso",
-    author_email="dbarrosop@dravetech.com",
-    description="Network Automation and Programmability Abstraction Layer with Multivendor support",
-    classifiers=[
-        'Topic :: Utilities',
-         'Programming Language :: Python',
-         'Programming Language :: Python :: 2',
-         'Programming Language :: Python :: 2.7',
-        'Operating System :: POSIX :: Linux',
-        'Operating System :: MacOS',
+    description="NAPALM driver for HiOS network switches by Belden",
+    author="Your Name",
+    author_email="your.email@example.com",
+    url="https://github.com/yourusername/napalm-hios",
+    install_requires=[
+        "napalm>=3.0.0",
+        "ncclient>=0.6.9",
+        "netmiko>=3.3.0",
+        "pysnmp>=4.4.12"
     ],
-    url="https://github.com/napalm-automation/napalm-skeleton",
-    include_package_data=True,
-    install_requires=reqs,
+    entry_points={
+        'napalm_drivers': [
+            'hios=napalm_hios:HIOSDriver'
+        ],
+    },
+    classifiers=[
+        "Programming Language :: Python :: 3",
+        "License :: OSI Approved :: MIT License",
+        "Operating System :: OS Independent",
+    ],
+    python_requires='>=3.7',
 )
