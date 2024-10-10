@@ -1,1 +1,4 @@
-napalm>=2.0.0
+napalm>=3.0.0
+ncclient>=0.6.9
+netmiko>=3.3.0
+pysnmp>=4.4.12
