@@ -104,6 +104,8 @@ Note: I've been using tests/integration/test_hioy.py against real devices by cal
 
 The driver includes a mock HiOS device for testing and development purposes. To use the mock device, set the hostname to 'localhost' when initializing the driver.
 
+Note: The mock device functionality is still in development
+
 ## Contributing
 
 Contributions to the NAPALM HiOS driver are welcome! Please refer to the CONTRIBUTING.md file for guidelines.
