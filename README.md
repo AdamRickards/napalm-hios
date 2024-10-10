@@ -74,6 +74,16 @@ Note: Configuration-related methods like `load_merge_candidate()`, `load_replace
 
 For a complete list and detailed explanations, see the [documentation](docs/napalm_hios_documentation.md).
 
+## Example
+
+```
+python -m examples/ssh_examply.py
+
+```
+Note: the example runs with user permissions against an online application lab provided by Hirschmann in Germany, this limits which commands you can execute.
+
+For more details about the application lab, see http://applicationlab.hirschmann.de/remoteaccess
+
 ## Testing
 
 To run the unit tests:
