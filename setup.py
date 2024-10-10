@@ -1,10 +1,17 @@
 from setuptools import setup, find_packages
+from pathlib import Path
+
+# Read the contents of README.md
+this_directory = Path(__file__).parent
+long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="napalm-hios",
     version="0.1.0",
     packages=find_packages(),
     description="NAPALM driver for HiOS network switches by Belden",
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     author="Your Name",
     author_email="your.email@example.com",
     url="https://github.com/yourusername/napalm-hios",
