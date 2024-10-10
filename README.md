@@ -49,7 +49,8 @@ it will log the json returned dicts into the current folder in a file called tes
 
 ## Documentation
 
-For detailed information about the NAPALM HiOS driver, including supported methods, advanced usage, and error handling, please refer to the [comprehensive documentation](docs/napalm_hios_documentation.md).
+For detailed information about the NAPALM HiOS driver, including supported methods, advanced usage, and error handling, please refer to the [comprehensive documentation](docs/usage.md).
+This docuemntation was written by Claude from Anthropic so if anything is wrong I take no responsibility.
 
 ## Supported Methods
 
