@@ -1,116 +1,101 @@
-# napalm-skeleton
+# NAPALM HiOS Driver
 
-Congratulations! You are going to embark on an epic adventure that will bring you glory, fame and
-fortune.
+This is a NAPALM driver for HiOS network switches by Belden. It currently supports SSH protocol for interacting with HiOS devices.
 
-> “Don't wish, Miss Tick had said. Do things.”
-> -- Terry Pratchett
+## Features
 
-## Instructions
+- Supports SSH protocol
+- Implements standard NAPALM methods
+- Includes comprehensive unit and integration tests
+- Offers a mock device for testing and development
 
-### Before starting
+## Installation
 
-1. Pick a name. Something that can easily identify which NOS you are supporting. From now on we will
-call it `SKELETON` so everytime you see `SKELETON` on this repo, replace it with the name you just
-picked.
-1. Let the `napalm` community know that you are planning to write a new driver. You can try reaching
-out on slack or on the mailing list. Someone will create a repo for you under the
-[`napalm-automation-community`](https://github.com/napalm-automation-community) organization. You
-can host your own driver if you prefer but we think it's more interesting if we can host all of the
-drivers together.
-You can find more details regarding the [Community drivers guidelines](http://napalm.readthedocs.io/en/develop/contributing/drivers.html).
-1. Feel free to amend the Copyright holder.
+To install the NAPALM HiOS driver, run:
 
-### Replacing the skeleton to the new repo
-
-After cloning this repository, you can bootstrap a new repository for
-your driver using the following commands (keep `skeleton` as is, but
-replace `newname` and `NewName` appropriately):
-
-```sh
-git archive --prefix=napalm-newname/ HEAD | tar -C .. -xf -
-cd ../napalm-newname
-grep -rl skeleton | xargs sed -i"" s/skeleton/newname/g
-grep -rl Skeleton | xargs sed -i"" s/Skeleton/NewName/g
-for d in $(find . -type d -name '*skeleton*'); do mv $d ${d/skeleton/newname}; done
-for f in $(find . -type f -name '*skeleton*'); do mv $f ${f/skeleton/newname}; done
-for f in $(find . -type f -name '*Skeleton*'); do mv $f ${f/Skeleton/NewName}; done
-git init
-git add .
+```
+pip install napalm-hios
 ```
 
-Alternatively, you can replace the first two commands by using the
-*Use this template* button in GitHub interface.
+## Quick Start
 
-### Fixing the `README.md` and `AUTHORS`
+Here's a basic example of how to use the NAPALM HiOS driver:
 
-1. Replace the occurrences on this file of `SKELETON`. Replace only the ones above
-the `CUTTING_LINE`. Don't bother about `pypi`, `travis`, etc. That will be taking care of later,
-after the first merge.
-1. Feel free to replace the content of AUTHORS as well and put yourself there. That's what will
-bring you the fame and fortune after all ;)
-1. Add any other useful information on the `README.md` file you think it's interesting.
+```python
+from napalm import get_network_driver
 
-### The Driver
+# Initialize the driver
+driver = get_network_driver('hios')
+device = driver(
+    hostname='your_device_ip',
+    username='your_username',
+    password='your_password',
+    optional_args={'ssh_port': 22}  # Optional: specify SSH port if different from default
+)
 
-All the code should be inside `napalm_skeleton`. You are free to organize your code as you want,
-however, there are some parts that have to be done in a certain way:
+# Open the connection
+device.open()
 
-* `napalm_skeleton/__init__.py` - That file should import your class driver. That's what the
-dynamic importer will expect.
-* `napalm_skeleton/skeleton.py` - Here goes your driver.
-* `napalm_skeleton/templates/` - We use this folder to store templates used by the `load_template`
-method.
-* `napalm_skeleton/utils/` - For consistency with other repos we recommend putting your additional
-code here. Helper functions or anything you want to keep out of the main driver file.
-* `napalm_skeleton/utils/textfsm_templates` - For consistency as well, we recommend keeping your
-`textfsm` templates here. We are planning to do some stuff around here so might have some common
-code that will assume they are there.
-* `MANIFEST.in` - If you need some additional support files that are not code, don't forget to add
-them to this file. Please, don't forget to set the correct paths.
+# Use NAPALM methods
+facts = device.get_facts()
+interfaces = device.get_interfaces()
 
-### The Tests
+# Close the connection
+device.close()
+```
 
-Code for testing is inside the `test` folder.
+## Documentation
 
-* `test/unit/TestDriver.py` - Here goes the following classes:
-  * `TestConfigDriver` - Tests for configuration management related methods.
-  * `TestGetterDriver` - Tests for getters.
-  * `FakeDevice` - Test double for your device.
-* `test/unit/skeleton/` - Here goes some configuration files that are used by `TestConfigDriver`.
-* `test/unit/skeleton/mock_data/` - Here goes files that contain mocked data used by
-                                    `TestGetterDriver`.
+For detailed information about the NAPALM HiOS driver, including supported methods, advanced usage, and error handling, please refer to the [comprehensive documentation](docs/napalm_hios_documentation.md).
 
-#### Testing configuration management methods
+## Supported Methods
 
-This is tricky. Cloud CI services like `Travis-CI` don't support running virtual machines and
-we currently don't have the resources or the means to test from a cloud service or with real
-machines. Moreover, mocking this might be very difficult and error prone. Vendors like changing
-the internal with every minor release and we might have end up mocking several parts of the system
-that are undocumented and have hundreds of edge cases. The only way we could safely mock this is
-if vendors would provide us with their parsers and that's not going to happen. Because of these
-reasons, the only safe way of testing is by using a VM or physical machine and testing manually
-every time someone pushes code that changes a configuration management method. Luckily, these are
-limited so once they are stable we can forget about them.
+The NAPALM HiOS driver supports the following standard NAPALM methods:
 
-If there is a VM available, please, provide a vagrant environment and use it for the tests,
-that way other developers will be able to test as well.
+- `get_facts()`
+- `get_interfaces()`
+- `get_interfaces_ip()`
+- `get_interfaces_counters()`
+- `get_lldp_neighbors()`
+- `get_lldp_neighbors_detail()`
+- `get_mac_address_table()`
+- `get_arp_table()`
+- `get_ntp_servers()`
+- `get_ntp_stats()`
+- `get_users()`
+- `get_optics()`
+- `get_config()`
+- `get_environment()`
+- `get_snmp_information()`
+- `ping()`
+- `get_vlans()`
 
-If you want Travis CI for your new driver (once hosted under the
-[`napalm-automation-community`](https://github.com/napalm-automation-community)
-organization), just let us know and we'll enable it for you.
+Note: Configuration-related methods like `load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, and `rollback()` are not currently implemented.
 
-#### Testing getters
+For a complete list and detailed explanations, see the [documentation](docs/napalm_hios_documentation.md).
 
-This is easier, we can use a real machine or just mock the device. Write a test double for your
-device and provide the necessary mocked data.
+## Testing
 
-After you implement one or more methods, make sure the driver respects the base
-NAPALM API. To check this, simply execute ``tox`` on the command line.
+To run the unit tests:
 
-### Other files
+```
+python -m unittest discover tests/unit
+```
 
-Some other stuff you have to do:
+To run the integration tests (requires a real HiOS device or a properly configured mock):
 
-* `setup.py` - Set yourself as the author and set the correct `name`.
-* `requirements.txt` - Make sure requirements are up to date.
+```
+python -m unittest discover tests/integration
+```
+
+## Mock Device
+
+The driver includes a mock HiOS device for testing and development purposes. To use the mock device, set the hostname to 'localhost' when initializing the driver.
+
+## Contributing
+
+Contributions to the NAPALM HiOS driver are welcome! Please refer to the CONTRIBUTING.md file for guidelines.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
