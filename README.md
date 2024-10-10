@@ -43,7 +43,7 @@ interfaces = device.get_interfaces()
 # Close the connection
 device.close()
 ```
-If you want to see it in action without a specific purpose or use case, simply create your virtual environment, install with the pip command above and then execute the test_hios.py file found in tests/integration/test_hios.py
+If you want to see it in action without a specific purpose or use case, simply create your virtual environment, install with the pip command above and then execute the test_hios.py file found in examples/test_all_commands.py
 This command takes <hostname> <username> <password> [ip address for ping] [count] (with the later two being optional)
 it will log the json returned dicts into the current folder in a file called test_live_device.md
 
