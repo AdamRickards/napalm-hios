@@ -17,6 +17,8 @@ To install the NAPALM HiOS driver, run:
 pip install napalm-hios
 ```
 
+Note: This is waiting on me to get PyPi sorted, stay tuned. Right now you can clone it and build it locally.
+
 ## Quick Start
 
 Here's a basic example of how to use the NAPALM HiOS driver:
