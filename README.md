@@ -78,7 +78,6 @@ For a complete list and detailed explanations, see the [documentation](docs/napa
 
 ```
 python -m examples/ssh_examply.py
-
 ```
 Note: the example runs with user permissions against an online application lab provided by Hirschmann in Germany, this limits which commands you can execute.
 
