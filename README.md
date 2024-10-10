@@ -81,12 +81,15 @@ To run the unit tests:
 ```
 python -m unittest discover tests/unit
 ```
+Note: tests are still a work in progress...
 
 To run the integration tests (requires a real HiOS device or a properly configured mock):
 
 ```
 python -m unittest discover tests/integration
 ```
+
+Note: I've been using tests/integration/test_hioy.py against real devices by calling it with <hostname> <user> <password> <ping ip> <count>, the ping ip and count are optional and will default to 8.8.8.8 if not specified. This writes results to test_live_device.md and i've included an example output from a live device
 
 ## Mock Device
 
