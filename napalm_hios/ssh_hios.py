@@ -721,7 +721,40 @@ class SSHHIOS:
                     key = key.lower()
                     value = value.lstrip('.')
                     
-                    # ... (rest of the parsing logic remains the same)
+                    if key == 'system name':
+                        neighbor['remote_system_name'] = value
+                    elif key == 'port description':
+                        neighbor['remote_port_description'] = value
+                    elif key == 'system description':
+                        neighbor['remote_system_description'] = value
+                    elif key == 'chassis id':
+                        neighbor['remote_chassis_id'] = value.split('(')[0].strip()
+                    elif key == 'port id':
+                        neighbor['remote_port'] = value.split('(')[0].strip()
+                    elif key == 'autoneg. cap. bits':
+                        if '(' in value:
+                            caps = value.split('(')[1].split(')')[0].split(',')
+                            neighbor['remote_system_capab'] = [self._map_capability(cap.strip()) for cap in caps if self._map_capability(cap.strip()) != 'other']
+                            neighbor['remote_system_enable_capab'] = neighbor['remote_system_capab'].copy()
+                        if not neighbor['remote_system_capab']:
+                            neighbor['remote_system_capab'] = []
+                            neighbor['remote_system_enable_capab'] = []
+                    elif key == 'ipv4 management address':
+                        neighbor['remote_management_ipv4'] = value
+                    elif key == 'autoneg. supp./enabled':
+                        supp, enabled = value.split('/')
+                        neighbor['autoneg_support'] = supp.strip()
+                        neighbor['autoneg_enabled'] = enabled.strip()
+                    elif key == 'port oper. mau type':
+                        neighbor['port_oper_mau_type'] = value
+                    elif key == 'port vlan id':
+                        neighbor['port_vlan_id'] = value
+                    elif key == 'vlan membership':
+                        neighbor['vlan_membership'] = [int(vlan.strip()) for vlan in value.split(',')]
+                    elif key == 'link agg. status':
+                        neighbor['link_agg_status'] = value
+                    elif key == 'link agg. port id':
+                        neighbor['link_agg_port_id'] = value
             
             if local_port:
                 neighbor['parent_interface'] = local_port
