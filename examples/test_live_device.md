@@ -1420,6 +1420,154 @@ Method Results:
   }
 }
 ```
+#### ✓ get_lldp_neighbors_detail_extended (Duration: 0.09s)
+```json
+{
+  "2/7": [
+    {
+      "parent_interface": "2/7",
+      "remote_port": "FDB",
+      "remote_port_description": "",
+      "remote_chassis_id": "00:0C:42:04:7C:74",
+      "remote_system_name": "",
+      "remote_system_description": "",
+      "remote_system_capab": [],
+      "remote_system_enable_capab": [],
+      "remote_management_ipv4": "",
+      "remote_management_ipv6": "",
+      "autoneg_support": "",
+      "autoneg_enabled": "",
+      "port_oper_mau_type": "",
+      "port_vlan_id": "",
+      "vlan_membership": [],
+      "link_agg_status": "",
+      "link_agg_port_id": ""
+    }
+  ],
+  "1/7": [
+    {
+      "parent_interface": "1/7",
+      "remote_port": "64:60:38:3F:4A:EA",
+      "remote_port_description": "Module: 1 Port: 5 - 1 Gbit",
+      "remote_chassis_id": "64:60:38:3F:4A:E1",
+      "remote_system_name": "BRS50-LOUNGE",
+      "remote_system_description": "Hirschmann BOBCAT - SW: HiOS-2A-09.4.00",
+      "remote_system_capab": [],
+      "remote_system_enable_capab": [],
+      "remote_management_ipv4": "192.168.1.239",
+      "remote_management_ipv6": "",
+      "autoneg_support": "yes",
+      "autoneg_enabled": "yes",
+      "port_oper_mau_type": "1000BaseTFD",
+      "port_vlan_id": "1",
+      "vlan_membership": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "link_agg_status": "agg. capable",
+      "link_agg_port_id": "0"
+    }
+  ],
+  "3/3": [
+    {
+      "parent_interface": "3/3",
+      "remote_port": "1",
+      "remote_port_description": "eth1",
+      "remote_chassis_id": "50:27:A9:04:EE:60",
+      "remote_system_name": "eero",
+      "remote_system_description": "eero 6+ GGC1UCD124550L9A",
+      "remote_system_capab": [],
+      "remote_system_enable_capab": [],
+      "remote_management_ipv4": "192.168.1.115",
+      "remote_management_ipv6": "fe80::5227:a9ff:fe04:ee6d",
+      "autoneg_support": "yes",
+      "autoneg_enabled": "yes",
+      "port_oper_mau_type": "1000BaseTFD",
+      "port_vlan_id": "1",
+      "vlan_membership": [],
+      "link_agg_status": "agg. capable",
+      "link_agg_port_id": "0"
+    }
+  ],
+  "1/1": [
+    {
+      "parent_interface": "1/1",
+      "remote_port": "64:60:38:3F:4A:A6",
+      "remote_port_description": "Module: 1 Port: 1 - 2.5 Gbit",
+      "remote_chassis_id": "64:60:38:3F:4A:A1",
+      "remote_system_name": "BRS50-Office",
+      "remote_system_description": "Hirschmann BOBCAT - SW: HiOS-2A-10.0.00",
+      "remote_system_capab": [],
+      "remote_system_enable_capab": [],
+      "remote_management_ipv4": "192.168.1.4",
+      "remote_management_ipv6": "fe80::6660:38ff:fe3f:4aa1",
+      "autoneg_support": "no",
+      "autoneg_enabled": "no",
+      "port_oper_mau_type": "2p5GbaseX",
+      "port_vlan_id": "1",
+      "vlan_membership": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        9
+      ],
+      "link_agg_status": "agg. capable",
+      "link_agg_port_id": "0"
+    }
+  ],
+  "1/3": [
+    {
+      "parent_interface": "1/3",
+      "remote_port": "FDB",
+      "remote_port_description": "",
+      "remote_chassis_id": "90:EC:77:1B:6C:2B",
+      "remote_system_name": "",
+      "remote_system_description": "",
+      "remote_system_capab": [],
+      "remote_system_enable_capab": [],
+      "remote_management_ipv4": "",
+      "remote_management_ipv6": "",
+      "autoneg_support": "",
+      "autoneg_enabled": "",
+      "port_oper_mau_type": "",
+      "port_vlan_id": "",
+      "vlan_membership": [],
+      "link_agg_status": "",
+      "link_agg_port_id": ""
+    }
+  ],
+  "1/8": [
+    {
+      "parent_interface": "1/8",
+      "remote_port": "D8:CB:8A:C0:37:C8",
+      "remote_port_description": "",
+      "remote_chassis_id": "D8:CB:8A:C0:37:C8",
+      "remote_system_name": "",
+      "remote_system_description": "",
+      "remote_system_capab": [],
+      "remote_system_enable_capab": [],
+      "remote_management_ipv4": "",
+      "remote_management_ipv6": "",
+      "autoneg_support": "yes",
+      "autoneg_enabled": "yes",
+      "port_oper_mau_type": "0",
+      "port_vlan_id": "1",
+      "vlan_membership": [],
+      "link_agg_status": "",
+      "link_agg_port_id": ""
+    }
+  ]
+}
+```
 
 #### ✓ show vlan brief (Duration: 0.08s)
 ```json
