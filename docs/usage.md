@@ -73,6 +73,7 @@ The NAPALM HiOS driver supports the following methods:
 - `get_interfaces_counters()`
 - `get_lldp_neighbors()`
 - `get_lldp_neighbors_detail()`
+- `get_lldp_neighbors_detail_extended()` This is a custom HiOS method
 - `get_mac_address_table()`
 - `get_arp_table()`
 - `get_ntp_servers()`
@@ -87,6 +88,19 @@ The NAPALM HiOS driver supports the following methods:
 - `cli()`
 
 Note: Configuration-related methods like `load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, and `rollback()` are not implemented for this device.
+
+## Custom Method(s)
+
+### get_lldp_neighbors_detail_extended(interface="")
+
+Retrives extended LLDP data beyond the scope of the NAPALM driver, but in a seperate method so as to not conflict with compatability.
+We accept a single argument to filter results by an interface, otherwise all interfaces are iterated through and returned.
+We return all values supported by HiOS when executing the cli command 'show lldp remote-data' and the purpose of this method is to get the IPv4 or IPv6 management address.
+
+**Arguments:**
+- `interface` (str): The interface as it appears in the device, can you review the returned values from get_lldp_neighbors(), get_lldp_neighbors_detail() or get_lldp_neighbors_detail_extended() for the interface name.
+
+**Arguments:** 
 
 ## Method Details
 
