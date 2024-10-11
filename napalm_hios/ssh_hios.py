@@ -679,7 +679,6 @@ class SSHHIOS:
     
     def get_lldp_neighbors_detail_extended(self, interface: str = '') -> Dict[str, List[Dict[str, Any]]]:
         extended_lldp_details = {}
-        print("test")
         output = self.cli('show lldp remote-data')['show lldp remote-data']
         remote_data_sections = output.split('Remote data,')[1:]
         
@@ -709,17 +708,12 @@ class SSHHIOS:
             if lines:
                 port_info = lines[0].split('-')[0].strip()
                 local_port = port_info.split(',')[-1].strip()
-            print("lines")
-            print(lines)
             for line in lines[1:]:
                 line = line.strip()
                 if '....' in line:
                     key, value = [part.strip() for part in line.split('....', 1)]
                     key = key.lower()
                     value = value.lstrip('.')
-                    print("test output")
-                    print(key)
-                    print(value)
                     if key == 'ipv4 management address':
                         neighbor['remote_management_ipv4'] = value
                     elif key == 'ipv6 management address':
