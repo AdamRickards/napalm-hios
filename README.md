@@ -76,7 +76,7 @@ The NAPALM HiOS driver supports the following standard NAPALM methods:
 
 Note: Configuration-related methods like `load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, and `rollback()` are not currently implemented.
 
-For a complete list and detailed explanations, see the [documentation](docs/usage.md).
+For a complete list and detailed explanations including custom vendor-specific methods, see the [documentation](docs/usage.md).
 
 ## Example
 
