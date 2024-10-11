@@ -110,6 +110,10 @@ The driver includes a mock HiOS device for testing and development purposes. To 
 
 Note: The mock device functionality is still in development
 
+## To-do
+
+Some musings about what to do for next release, [Wishlist](TODO.md), feel free to make suggestions if you have a specific need.
+
 ## Known Issues
 
 Since we have focused on SSH driver with fallback methods saying "Protocol Not Implemented" for the other protocols we plan to support, if SSH connection fails you might get a response of "Protocol Not Implemented".
