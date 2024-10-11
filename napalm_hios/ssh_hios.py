@@ -678,13 +678,9 @@ class SSHHIOS:
         return lldp_neighbors_detail
     
     def get_lldp_neighbors_detail_extended(self, interface: str = '') -> Dict[str, List[Dict[str, Any]]]:
-        # Use a different variable name to avoid any confusion
         extended_lldp_details = {}
-        
-        # Get LLDP remote data
+        print("test")
         output = self.cli('show lldp remote-data')['show lldp remote-data']
-        
-        # Split the output into individual remote data sections
         remote_data_sections = output.split('Remote data,')[1:]
         
         for section in remote_data_sections:
@@ -699,6 +695,7 @@ class SSHHIOS:
                 'remote_system_capab': [],
                 'remote_system_enable_capab': [],
                 'remote_management_ipv4': '',
+                'remote_management_ipv6': '',
                 'autoneg_support': '',
                 'autoneg_enabled': '',
                 'port_oper_mau_type': '',
@@ -709,19 +706,25 @@ class SSHHIOS:
             }
             local_port = None
             
-            # Extract local port from the first line
             if lines:
                 port_info = lines[0].split('-')[0].strip()
                 local_port = port_info.split(',')[-1].strip()
-            
+            print("lines")
+            print(lines)
             for line in lines[1:]:
                 line = line.strip()
                 if '....' in line:
                     key, value = [part.strip() for part in line.split('....', 1)]
                     key = key.lower()
                     value = value.lstrip('.')
-                    
-                    if key == 'system name':
+                    print("test output")
+                    print(key)
+                    print(value)
+                    if key == 'ipv4 management address':
+                        neighbor['remote_management_ipv4'] = value
+                    elif key == 'ipv6 management address':
+                        neighbor['remote_management_ipv6'] = value
+                    elif key == 'system name':
                         neighbor['remote_system_name'] = value
                     elif key == 'port description':
                         neighbor['remote_port_description'] = value
@@ -731,6 +734,10 @@ class SSHHIOS:
                         neighbor['remote_chassis_id'] = value.split('(')[0].strip()
                     elif key == 'port id':
                         neighbor['remote_port'] = value.split('(')[0].strip()
+                    elif key == 'autoneg. supp./enabled':
+                        supp, enabled = value.split('/')
+                        neighbor['autoneg_support'] = supp.strip()
+                        neighbor['autoneg_enabled'] = enabled.strip()
                     elif key == 'autoneg. cap. bits':
                         if '(' in value:
                             caps = value.split('(')[1].split(')')[0].split(',')
@@ -739,18 +746,12 @@ class SSHHIOS:
                         if not neighbor['remote_system_capab']:
                             neighbor['remote_system_capab'] = []
                             neighbor['remote_system_enable_capab'] = []
-                    elif key == 'ipv4 management address':
-                        neighbor['remote_management_ipv4'] = value
-                    elif key == 'autoneg. supp./enabled':
-                        supp, enabled = value.split('/')
-                        neighbor['autoneg_support'] = supp.strip()
-                        neighbor['autoneg_enabled'] = enabled.strip()
                     elif key == 'port oper. mau type':
-                        neighbor['port_oper_mau_type'] = value
+                        neighbor['port_oper_mau_type'] = value.split('(')[-1].strip(')')
                     elif key == 'port vlan id':
                         neighbor['port_vlan_id'] = value
                     elif key == 'vlan membership':
-                        neighbor['vlan_membership'] = [int(vlan.strip()) for vlan in value.split(',')]
+                        neighbor['vlan_membership'] = self._parse_vlan_membership(value)
                     elif key == 'link agg. status':
                         neighbor['link_agg_status'] = value
                     elif key == 'link agg. port id':
@@ -762,11 +763,19 @@ class SSHHIOS:
                     extended_lldp_details[local_port] = []
                 extended_lldp_details[local_port].append(neighbor)
         
-        # If an interface is specified, filter the results
         if interface:
             return {interface: extended_lldp_details.get(interface, [])}
         
         return extended_lldp_details
+
+    def _parse_vlan_membership(self, value: str) -> List[int]:
+        if value == '<n/a>' or not value:
+            return []
+        try:
+            return [int(vlan.strip()) for vlan in value.split(',') if vlan.strip()]
+        except ValueError:
+            print(f"Warning: Unable to parse VLAN membership value: {value}")
+            return []
 
     def _map_capability(self, cap: str) -> str:
         # List of recognized capabilities
