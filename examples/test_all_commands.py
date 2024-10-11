@@ -43,7 +43,8 @@ class LiveDeviceTest:
             'get_optics',
             'get_users',
             'get_vlans',
-            'ping'
+            'ping',
+            'get_lldp_neighbors_detail_extended'
         ]
 
         # Define CLI commands here

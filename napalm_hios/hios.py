@@ -213,6 +213,31 @@ class HIOSDriver(NetworkDriver):
                             neighbor[key] = '' if key != 'remote_system_capab' and key != 'remote_system_enable_capab' else []
             return neighbors_detail
         raise NotImplementedError("get_lldp_neighbors_detail is not implemented for this protocol")
+    
+    def get_lldp_neighbors_detail_extended(self, interface=""):
+        if self.active_protocol == 'ssh':
+            neighbors_detail = self._get_active_connection().get_lldp_neighbors_detail(interface)
+            required_keys = [
+                'parent_interface', 'remote_port', 'remote_port_description', 'remote_chassis_id',
+                'remote_system_name', 'remote_system_description', 'remote_system_capab',
+                'remote_system_enable_capab', 'remote_management_ipv4', 'autoneg_support',
+                'autoneg_enabled', 'port_oper_mau_type', 'port_vlan_id', 'vlan_membership',
+                'link_agg_status', 'link_agg_port_id'
+            ]
+            
+            for interface_neighbors in neighbors_detail.values():
+                for neighbor in interface_neighbors:
+                    for key in required_keys:
+                        if key not in neighbor:
+                            if key in ['remote_system_capab', 'remote_system_enable_capab', 'vlan_membership']:
+                                neighbor[key] = []
+                            elif key in ['port_vlan_id', 'link_agg_port_id']:
+                                neighbor[key] = '0'  # Default to '0' for numeric ID fields
+                            else:
+                                neighbor[key] = ''
+            
+            return neighbors_detail
+        raise NotImplementedError("get_lldp_neighbors_detail_extended is not implemented for this protocol")
 
     def get_mac_address_table(self):
         if self.active_protocol == 'ssh':

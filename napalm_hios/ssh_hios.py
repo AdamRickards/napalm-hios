@@ -676,6 +676,64 @@ class SSHHIOS:
             return {interface: lldp_neighbors_detail.get(interface, [])}
         
         return lldp_neighbors_detail
+    
+    def get_lldp_neighbors_detail_extended(self, interface: str = '') -> Dict[str, List[Dict[str, Any]]]:
+        # Use a different variable name to avoid any confusion
+        extended_lldp_details = {}
+        
+        # Get LLDP remote data
+        output = self.cli('show lldp remote-data')['show lldp remote-data']
+        
+        # Split the output into individual remote data sections
+        remote_data_sections = output.split('Remote data,')[1:]
+        
+        for section in remote_data_sections:
+            lines = section.strip().split('\n')
+            neighbor = {
+                'parent_interface': '',
+                'remote_port': '',
+                'remote_port_description': '',
+                'remote_chassis_id': '',
+                'remote_system_name': '',
+                'remote_system_description': '',
+                'remote_system_capab': [],
+                'remote_system_enable_capab': [],
+                'remote_management_ipv4': '',
+                'autoneg_support': '',
+                'autoneg_enabled': '',
+                'port_oper_mau_type': '',
+                'port_vlan_id': '',
+                'vlan_membership': [],
+                'link_agg_status': '',
+                'link_agg_port_id': ''
+            }
+            local_port = None
+            
+            # Extract local port from the first line
+            if lines:
+                port_info = lines[0].split('-')[0].strip()
+                local_port = port_info.split(',')[-1].strip()
+            
+            for line in lines[1:]:
+                line = line.strip()
+                if '....' in line:
+                    key, value = [part.strip() for part in line.split('....', 1)]
+                    key = key.lower()
+                    value = value.lstrip('.')
+                    
+                    # ... (rest of the parsing logic remains the same)
+            
+            if local_port:
+                neighbor['parent_interface'] = local_port
+                if local_port not in extended_lldp_details:
+                    extended_lldp_details[local_port] = []
+                extended_lldp_details[local_port].append(neighbor)
+        
+        # If an interface is specified, filter the results
+        if interface:
+            return {interface: extended_lldp_details.get(interface, [])}
+        
+        return extended_lldp_details
 
     def _map_capability(self, cap: str) -> str:
         # List of recognized capabilities
