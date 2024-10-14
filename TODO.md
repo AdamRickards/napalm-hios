@@ -1,3 +1,11 @@
+# Improvements from testing
+
+- get_arp_table() `on L3 switch this should execute to get from the router, not from the agent`
+- get_interfaces_ip() `on L2 switch this should execute to return cpu/1 ip address`
+- get_environment() `seems erroneous in testing with nautobot/nornir, fan status showing as a problem with our returned values means our values must be bad in some way. cpu usage likewise shows as unknown%, memory values sometimes show negative`
+- get_facts() ` has a bug with the parsing of the interface list, returns a "-" with every second line`
+- get_lldp_*() `returns missing entries double check parsing code as it appears to not always produce complete lines`
+
 # Ideas to implement
 
 ## Safe configuration saving in HiOS environment
