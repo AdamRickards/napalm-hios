@@ -1,0 +1,1102 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index e6fa291..cbbb614 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,32 @@
+ # Changelog
+ 
++## 1.2.0 — 2026-02-21
++
++### Bug fixes
++- **CLI output truncation**: `expect_string` changed from `r'[>#]'` to `r'[>#]\s*$'`. The bare `[>#]` matched `#` mid-line in LLDP output (`Remote data, X/Y - #N`), causing netmiko to stop reading prematurely on random chunk boundaries. The `$` anchor ensures only actual prompt characters at end-of-line are matched, supporting both user mode (`>`) and enable mode (`#`).
++- **`get_interfaces_ip()` L2 fallback**: L2-only switches (no `show ip interface`) now fall back to `show network parms` and return the management IP keyed by `vlan/{mgmt_vlan_id}`.
++
++### New methods
++- **`get_config_status()`**: check if running config is saved to NVM. Returns `saved` boolean plus individual sync states for NVM, ACA (external memory), and boot parameters. Polls through transient "busy" state.
++- **`save_config()`**: save running config to non-volatile memory (`copy config running-config nvm`). Waits for NVM write to complete before returning.
++- **`get_mrp()`**: returns MRP (Media Redundancy Protocol) ring status — domain, mode (manager/client), ports, port states, VLAN, recovery delay, ring state, redundancy, open count. Returns `{'configured': False}` when no MRP domain exists.
++- **`set_mrp(operation, mode, port_primary, port_secondary, vlan, recovery_delay)`**: configure MRP ring on the default domain. **Safety check**: refuses to assign ports that are currently link-up to avoid production impact. Creates default domain automatically if needed.
++- **`delete_mrp()`**: disable and delete the MRP domain.
++- **`get_hidiscovery()`**: returns HiDiscovery protocol status — enabled, mode (read-only/read-write), blinking, supported protocols, and relay status (L3 only)
++- **`set_hidiscovery(status)`**: set HiDiscovery to `'on'` (read-write), `'off'` (disabled), or `'ro'` (read-only, recommended for production). Enters/exits enable mode automatically.
++- **`_enable()` / `_disable()`**: enter/exit privileged (enable) mode for config commands
++- **`_config_mode()` / `_exit_config_mode()`**: enter/exit global config mode (enable → configure) for MRP and other protocol configuration
++
++### Test additions
++- `TestConfigStatus` — synced/unsaved/busy states, `saved` boolean logic
++- `TestMRPParser` — unconfigured returns `configured: False`, client mode parses all fields, manager mode shows ring state/redundancy/open count, safety check rejects link-up ports
++- `TestInterfacesIpL2Fallback` — L2 management IP returned, 0.0.0.0 yields empty dict, L3 still uses `show ip interface`
++- `TestHiDiscoveryParser` — L3 with relay, L2 without relay, disabled state
++- Fixtures: `show_config_status_synced.txt`, `show_config_status_unsaved.txt`, `show_mrp_configured.txt`, `show_mrp_unconfigured.txt`, `show_mrp_manager.txt`, `show_network_parms.txt`, `show_network_hidiscovery.txt`
++- Live validated: config save cycle (dirty → out of sync → save → ok) on BRS50
++- Live validated: MRP configure/reconfigure/disable/delete cycle on BRS50 and GRS1042 using disconnected ports
++- Live validated: HiDiscovery toggle cycle (on/off/ro) on BRS50 and GRS1042, blinking round-trip confirmed
++
+ ## 1.1.2 — 2026-02-21
+ 
+ LLDP parser refactor — replaced three independent parsers with a single
+diff --git a/README.md b/README.md
+index 22025a5..ff534d9 100644
+--- a/README.md
++++ b/README.md
+@@ -76,7 +76,9 @@ The NAPALM HiOS driver supports the following standard NAPALM methods:
+ 
+ Note: Configuration-related methods like `load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, and `rollback()` are not currently implemented.
+ 
+-For a complete list and detailed explanations including custom vendor-specific methods, see the [documentation](docs/usage.md).
++For vendor-specific methods (MRP ring redundancy, HiDiscovery, extended LLDP), see [docs/vendor_specific.md](docs/vendor_specific.md).
++
++For a complete list and detailed explanations of standard methods, see the [documentation](docs/usage.md).
+ 
+ ## Example
+ 
+diff --git a/napalm_hios/ssh_hios.py b/napalm_hios/ssh_hios.py
+index 7a36b8f..fc6d8c6 100644
+--- a/napalm_hios/ssh_hios.py
++++ b/napalm_hios/ssh_hios.py
+@@ -18,6 +18,7 @@ class SSHHIOS:
+         self.port = port
+         self.connection = None
+         self.pagination_disabled = False  # Track the pagination state
++        self._in_config_mode = False      # Track global config mode
+ 
+     def open(self):
+         try:
+@@ -36,7 +37,18 @@ class SSHHIOS:
+ 
+     def close(self):
+         if self.connection:
++            try:
++                status = self.get_config_status()
++                if not status['saved']:
++                    logger.warning(
++                        "Closing with unsaved config (NVM: %s). "
++                        "Call save_config() before close() to persist changes.",
++                        status['nvm']
++                    )
++            except Exception:
++                pass  # best-effort check — don't block close
+             self.connection.disconnect()
++            self._in_config_mode = False
+ 
+     def cli(self, commands: list[str] | str, encoding: str = 'text') -> dict[str, str]:
+         """Execute a command or list of commands and return the output in a dictionary format."""
+@@ -53,7 +65,7 @@ class SSHHIOS:
+             try:
+                 output = self.connection.send_command(
+                     command,
+-                    expect_string=r'[>#]',
++                    expect_string=r'[>#]\s*$',
+                     strip_prompt=True,
+                     strip_command=True
+                 )
+@@ -557,18 +569,67 @@ class SSHHIOS:
+             log_error(logger, f"Error retrieving configuration: {str(e)}")
+ 
+         return config_dict
+-    
++
++    def get_config_status(self):
++        """Check if running config is saved to NVM.
++
++        Returns::
++
++            {
++                'saved': True,            # running-config matches NVM
++                'nvm': 'ok',              # 'ok' | 'out of sync' | 'busy'
++                'aca': 'absent',          # 'ok' | 'out of sync' | 'absent'
++                'boot': 'ok',
++            }
++        """
++        output = self.cli('show config status')['show config status']
++        data = parse_dot_keys(output)
++
++        nvm = data.get('running-config to NVM', '').lower()
++        aca = data.get('NVM to ACA', '').lower()
++        boot = data.get('Boot parameters', '').lower()
++
++        return {
++            'saved': nvm == 'ok',
++            'nvm': nvm,
++            'aca': aca,
++            'boot': boot,
++        }
++
++    def save_config(self):
++        """Save running config to non-volatile memory.
++
++        Equivalent to ``copy config running-config nvm`` in enable mode.
++        Waits for the NVM write to complete (up to 10s) before returning.
++        Returns the post-save config status.
++        """
++        self._enable()
++        try:
++            self.cli('copy config running-config nvm')
++        finally:
++            self._disable()
++
++        # NVM write is async — poll until settled (not "busy")
++        for _ in range(10):
++            status = self.get_config_status()
++            if status['nvm'] != 'busy':
++                return status
++            time.sleep(1)
++
++        return self.get_config_status()
++
+     def get_interfaces_ip(self):
+         """Get IP addresses configured on interfaces.
+ 
+-        Uses ``show ip interface`` — only available on L3 switches.
+-        L2-only devices return an error which yields an empty dict.
++        Uses ``show ip interface`` on L3 switches.  Falls back to
++        ``show network parms`` on L2-only devices to return the
++        management IP.
+         """
+         output = self.cli('show ip interface')['show ip interface']
+ 
+-        # L2 switches don't support this command
++        # L2 switches don't support this command — fall back to management IP
+         if 'Error' in output:
+-            return {}
++            return self._parse_network_parms()
+ 
+         interfaces = {}
+         for fields in parse_table(output, min_fields=3):
+@@ -588,6 +649,26 @@ class SSHHIOS:
+ 
+         return interfaces
+ 
++    def _parse_network_parms(self):
++        """Parse ``show network parms`` for L2 management IP."""
++        output = self.cli('show network parms')['show network parms']
++        data = parse_dot_keys(output)
++        ip = data.get('Local IP address', '0.0.0.0')
++        mask = data.get('Subnetmask', '0.0.0.0')
++        vlan_id = data.get('Management VLAN ID', '1')
++
++        if ip == '0.0.0.0':
++            return {}
++
++        prefix_length = sum(bin(int(x)).count('1') for x in mask.split('.'))
++        return {
++            f'vlan/{vlan_id}': {
++                'ipv4': {
++                    ip: {'prefix_length': prefix_length}
++                }
++            }
++        }
++
+     def _calculate_prefix_length(self, subnet_mask):
+         """Helper method to calculate prefix length from subnet mask."""
+         return sum([bin(int(x)).count('1') for x in subnet_mask.split('.')])
+@@ -1215,6 +1296,259 @@ class SSHHIOS:
+ 
+         return snmp_info
+ 
++    def get_hidiscovery(self):
++        """Get HiDiscovery protocol status.
++
++        Returns::
++
++            {
++                'enabled': True,
++                'mode': 'read-only',      # 'read-only' | 'read-write'
++                'blinking': False,
++                'protocols': ['v1', 'v2'],
++                'relay': True              # only present on L3/managed switches
++            }
++        """
++        output = self.cli('show network hidiscovery')['show network hidiscovery']
++        data = parse_dot_keys(output)
++
++        result = {
++            'enabled': data.get('Operating status', '').lower() == 'enabled',
++            'mode': data.get('Operating mode', ''),
++            'blinking': data.get('Blinking status', '').lower() == 'enabled',
++            'protocols': [p.strip() for p in data.get('Supported protocols', '').split(',') if p.strip()],
++        }
++
++        if 'Relay status' in data:
++            result['relay'] = data['Relay status'].lower() == 'enabled'
++
++        return result
++
++    def _enable(self):
++        """Enter enable (privileged) mode.  Prompt changes from > to #."""
++        self.connection.send_command(
++            'enable', expect_string=r'[>#]\s*$',
++            strip_prompt=True, strip_command=True
++        )
++
++    def _disable(self):
++        """Exit enable mode back to user mode."""
++        self.connection.send_command(
++            'disable', expect_string=r'[>#]\s*$',
++            strip_prompt=True, strip_command=True
++        )
++
++    def _config_mode(self):
++        """Enter global config mode (enable → configure).
++
++        Safe to call multiple times — no-ops if already in config mode.
++        """
++        if self._in_config_mode:
++            return
++        self._enable()
++        self.cli('configure')
++        self._in_config_mode = True
++
++    def _exit_config_mode(self):
++        """Exit global config mode back to user mode.
++
++        Safe to call even if not in config mode.
++        """
++        if not self._in_config_mode:
++            return
++        self.cli('exit')
++        self._disable()
++        self._in_config_mode = False
++
++    def get_mrp(self):
++        """Get MRP (Media Redundancy Protocol) ring status.
++
++        Returns::
++
++            {
++                'configured': True,
++                'operation': 'enabled',
++                'mode': 'client',
++                'port_primary': '1/3',
++                'port_secondary': '1/4',
++                'port_primary_state': 'forwarding',
++                'port_secondary_state': 'blocked',
++                'domain_id': '255.255.255...255 (Default)',
++                'domain_name': '',
++                'vlan': 1,
++                'recovery_delay': '200ms',
++                'recovery_delay_supported': ['200ms', '500ms'],
++                'advanced_mode': True,
++                'manager_priority': 32768,
++                'fixed_backup': False,
++                'fast_mrp': False,          # only on some models
++                'info': 'ring port link error',
++                'ring_state': 'closed',     # manager only
++                'redundancy': True,         # manager only
++                'ring_open_count': 0,
++                'blocked_support': True,    # client field
++            }
++
++        Returns ``{'configured': False}`` when no MRP domain exists.
++        """
++        output = self.cli('show mrp')['show mrp']
++        data = parse_dot_keys(output)
++
++        if '(MRP not configured)' in output:
++            return {'configured': False}
++
++        result = {'configured': True}
++
++        result['operation'] = data.get('Operation', 'disabled')
++        result['mode'] = data.get('Mode (administrative setting)', '')
++        result['mode_actual'] = data.get('Mode (real operating state)', '')
++        result['port_primary'] = data.get('Port number, Primary', '')
++        result['port_secondary'] = data.get('Port number, Secondary', '')
++        result['port_primary_state'] = data.get('Port oper state, Primary', '')
++        result['port_secondary_state'] = data.get('Port oper state, Secondary', '')
++        result['domain_id'] = data.get('Domain ID', '')
++        result['domain_name'] = data.get('Domain name', '')
++
++        try:
++            result['vlan'] = int(data.get('VLAN ID', '0'))
++        except ValueError:
++            result['vlan'] = 0
++
++        result['recovery_delay'] = data.get('Recovery delay', '')
++        supported = data.get('Recovery delay supported', '')
++        result['recovery_delay_supported'] = [s.strip() for s in supported.split(',') if s.strip()]
++
++        result['advanced_mode'] = data.get('Advanced mode (react on link change)', '').lower() == 'enabled'
++
++        try:
++            result['manager_priority'] = int(data.get('Manager priority', '32768'))
++        except ValueError:
++            result['manager_priority'] = 32768
++
++        result['fixed_backup'] = data.get('Fixed backup port (manager only)', '').lower() == 'enabled'
++
++        if 'FastMRP supported' in data:
++            result['fast_mrp'] = data['FastMRP supported'].lower() == 'yes'
++
++        # General operating states
++        result['info'] = data.get('Configuration info', '')
++
++        # Manager states
++        result['ring_state'] = data.get('Ring state', '')
++        result['redundancy'] = data.get('Redundancy exists', '').lower() == 'yes'
++        try:
++            result['ring_open_count'] = int(data.get('Ring open count', '0'))
++        except ValueError:
++            result['ring_open_count'] = 0
++
++        # Client states
++        result['blocked_support'] = data.get('Blocked support', '').lower() == 'enabled'
++
++        return result
++
++    def set_mrp(self, operation='enable', mode='client', port_primary=None,
++                port_secondary=None, vlan=None, recovery_delay=None):
++        """Configure MRP ring on the default domain.
++
++        Args:
++            operation: 'enable' or 'disable'
++            mode: 'manager' or 'client'
++            port_primary: primary ring port (e.g. '1/3'). Must be link-down.
++            port_secondary: secondary ring port (e.g. '1/4'). Must be link-down.
++            vlan: VLAN ID for MRP domain (0-4042)
++            recovery_delay: '200ms', '500ms', '30ms', or '10ms'
++
++        Raises ValueError if specified ports are currently link-up.
++        Creates the default domain if none exists.
++        """
++        if operation not in ('enable', 'disable'):
++            raise ValueError(f"operation must be 'enable' or 'disable', got '{operation}'")
++        if mode not in ('manager', 'client'):
++            raise ValueError(f"mode must be 'manager' or 'client', got '{mode}'")
++
++        # Safety: verify ring ports are link-down before configuring
++        if operation == 'enable' and (port_primary or port_secondary):
++            interfaces = self.get_interfaces()
++            for port, label in [(port_primary, 'primary'), (port_secondary, 'secondary')]:
++                if port and port in interfaces and interfaces[port]['is_up']:
++                    raise ValueError(
++                        f"Refusing to configure MRP: {label} port {port} is currently link-up. "
++                        f"Only configure MRP on disconnected ports to avoid production impact."
++                    )
++
++        self._config_mode()
++        try:
++            # Ensure default domain exists (harmless if already present)
++            current = self.cli('show mrp')['show mrp']
++            if '(MRP not configured)' in current:
++                self.cli('mrp domain add default-domain')
++
++            if operation == 'disable':
++                self.cli('no mrp operation')
++                self.cli('mrp domain modify operation disable')
++            else:
++                self.cli('mrp domain modify mode ' + mode)
++                if port_primary:
++                    self.cli(f'mrp domain modify port primary {port_primary}')
++                if port_secondary:
++                    self.cli(f'mrp domain modify port secondary {port_secondary}')
++                if vlan is not None:
++                    self.cli(f'mrp domain modify vlan {vlan}')
++                if recovery_delay:
++                    self.cli(f'mrp domain modify recovery-delay {recovery_delay}')
++                self.cli('mrp domain modify operation enable')
++                self.cli('mrp operation')
++        finally:
++            self._exit_config_mode()
++
++        return self.get_mrp()
++
++    def delete_mrp(self):
++        """Delete the MRP domain and disable MRP globally.
++
++        Returns the post-deletion MRP state (should show configured=False).
++        """
++        self._config_mode()
++        try:
++            self.cli('no mrp operation')
++            self.cli('mrp domain modify operation disable')
++            self.cli('mrp domain delete')
++        finally:
++            self._exit_config_mode()
++
++        return self.get_mrp()
++
++    def set_hidiscovery(self, status):
++        """Set HiDiscovery operating mode.
++
++        Args:
++            status: 'on', 'off', or 'ro' (read-only)
++
++        'on' enables HiDiscovery in read-write mode.
++        'off' disables HiDiscovery entirely.
++        'ro' enables HiDiscovery in read-only mode (recommended for production).
++
++        Enters enable mode to execute config commands, then exits.
++        """
++        status = status.lower().strip()
++        if status not in ('on', 'off', 'ro'):
++            raise ValueError(f"Invalid status '{status}': use 'on', 'off', or 'ro'")
++
++        self._enable()
++        try:
++            if status == 'off':
++                self.cli('no network hidiscovery operation')
++            elif status == 'on':
++                self.cli('network hidiscovery operation')
++                self.cli('network hidiscovery mode read-write')
++            elif status == 'ro':
++                self.cli('network hidiscovery operation')
++                self.cli('network hidiscovery mode read-only')
++        finally:
++            self._disable()
++
++        return self.get_hidiscovery()
++
+     def _parse_speed(self, speed_str):
+         speed_map = {
+             '10': 10,
+diff --git a/napalm_hios/version.py b/napalm_hios/version.py
+index 72f26f5..c68196d 100644
+--- a/napalm_hios/version.py
++++ b/napalm_hios/version.py
+@@ -1 +1 @@
+-__version__ = "1.1.2"
++__version__ = "1.2.0"
+diff --git a/setup.py b/setup.py
+index ee3198e..4a21fc0 100644
+--- a/setup.py
++++ b/setup.py
+@@ -7,7 +7,7 @@ long_description = (this_directory / "README.md").read_text()
+ 
+ setup(
+     name="napalm-hios",
+-    version="1.1.2",
++    version="1.2.0",
+     packages=find_packages(),
+     description="NAPALM driver for HiOS network switches by Belden",
+     long_description=long_description,
+diff --git a/tests/unit/test_parsers.py b/tests/unit/test_parsers.py
+index 429aa40..8b61cdc 100644
+--- a/tests/unit/test_parsers.py
++++ b/tests/unit/test_parsers.py
+@@ -425,5 +425,221 @@ class TestOpticsParser(unittest.TestCase):
+                     self.assertIn(stat, state[key])
+ 
+ 
++class TestInterfacesIpL2Fallback(unittest.TestCase):
++    """Test get_interfaces_ip L2 fallback to show network parms."""
++
++    def setUp(self):
++        self.ssh = SSHHIOS.__new__(SSHHIOS)
++        self.ssh.connection = None
++
++    def test_l2_returns_management_ip(self):
++        """L2 switch returns management IP from show network parms."""
++        net_parms = load_fixture('show_network_parms.txt')
++
++        def mock_cli(cmd):
++            if cmd == 'show ip interface':
++                return {cmd: "Error: Invalid command 'interface'"}
++            if cmd == 'show network parms':
++                return {cmd: net_parms}
++            return {cmd: ''}
++
++        self.ssh.cli = mock_cli
++        result = self.ssh.get_interfaces_ip()
++        self.assertIn('vlan/1', result)
++        self.assertEqual(result['vlan/1']['ipv4']['192.168.1.4']['prefix_length'], 24)
++
++    def test_l2_no_ip_returns_empty(self):
++        """L2 switch with 0.0.0.0 returns empty dict."""
++        no_ip = "Local IP address............................0.0.0.0\nSubnetmask..................................0.0.0.0\nManagement VLAN ID..........................1\n"
++
++        def mock_cli(cmd):
++            if cmd == 'show ip interface':
++                return {cmd: "Error: Invalid command 'interface'"}
++            if cmd == 'show network parms':
++                return {cmd: no_ip}
++            return {cmd: ''}
++
++        self.ssh.cli = mock_cli
++        result = self.ssh.get_interfaces_ip()
++        self.assertEqual(result, {})
++
++    def test_l3_still_uses_show_ip_interface(self):
++        """L3 switch ignores network parms, uses show ip interface."""
++        ip_intf = load_fixture('show_ip_arp_table.txt')  # just need non-Error output
++        # Simulate a minimal show ip interface
++        ip_intf = (
++            "Interface   IP Address       IP Mask\n"
++            "----------  ---------------- ----------\n"
++            "vlan/1      192.168.1.254    255.255.255.0\n"
++        )
++
++        def mock_cli(cmd):
++            if cmd == 'show ip interface':
++                return {cmd: ip_intf}
++            return {cmd: ''}
++
++        self.ssh.cli = mock_cli
++        result = self.ssh.get_interfaces_ip()
++        self.assertIn('vlan/1', result)
++        self.assertEqual(result['vlan/1']['ipv4']['192.168.1.254']['prefix_length'], 24)
++
++
++class TestHiDiscoveryParser(unittest.TestCase):
++    """Test HiDiscovery getter."""
++
++    def setUp(self):
++        self.ssh = SSHHIOS.__new__(SSHHIOS)
++        self.ssh.connection = None
++
++    def test_get_hidiscovery_l3(self):
++        """L3 switch with relay status."""
++        fixture = load_fixture('show_network_hidiscovery.txt')
++        self.ssh.cli = lambda cmd: {cmd: fixture}
++        result = self.ssh.get_hidiscovery()
++        self.assertTrue(result['enabled'])
++        self.assertEqual(result['mode'], 'read-only')
++        self.assertFalse(result['blinking'])
++        self.assertEqual(result['protocols'], ['v1', 'v2'])
++        self.assertTrue(result['relay'])
++
++    def test_get_hidiscovery_l2_no_relay(self):
++        """L2 switch without relay status field."""
++        fixture = (
++            "HiDiscovery settings\n"
++            "--------------------\n"
++            "Operating status............................enabled\n"
++            "Operating mode..............................read-write\n"
++            "Blinking status.............................disabled\n"
++            "Supported protocols.........................v1,v2\n"
++        )
++        self.ssh.cli = lambda cmd: {cmd: fixture}
++        result = self.ssh.get_hidiscovery()
++        self.assertTrue(result['enabled'])
++        self.assertEqual(result['mode'], 'read-write')
++        self.assertNotIn('relay', result)
++
++    def test_get_hidiscovery_disabled(self):
++        """Disabled HiDiscovery."""
++        fixture = (
++            "HiDiscovery settings\n"
++            "--------------------\n"
++            "Operating status............................disabled\n"
++            "Operating mode..............................read-only\n"
++            "Blinking status.............................disabled\n"
++            "Supported protocols.........................v1,v2\n"
++        )
++        self.ssh.cli = lambda cmd: {cmd: fixture}
++        result = self.ssh.get_hidiscovery()
++        self.assertFalse(result['enabled'])
++
++
++class TestMRPParser(unittest.TestCase):
++    """Test MRP getter/parser."""
++
++    def setUp(self):
++        self.ssh = SSHHIOS.__new__(SSHHIOS)
++        self.ssh.connection = None
++
++    def test_unconfigured(self):
++        """No MRP domain returns configured=False."""
++        fixture = load_fixture('show_mrp_unconfigured.txt')
++        self.ssh.cli = lambda cmd: {cmd: fixture}
++        result = self.ssh.get_mrp()
++        self.assertFalse(result['configured'])
++        self.assertEqual(len(result), 1)
++
++    def test_configured_client(self):
++        """Client mode returns all expected fields."""
++        fixture = load_fixture('show_mrp_configured.txt')
++        self.ssh.cli = lambda cmd: {cmd: fixture}
++        result = self.ssh.get_mrp()
++        self.assertTrue(result['configured'])
++        self.assertEqual(result['operation'], 'enabled')
++        self.assertEqual(result['mode'], 'client')
++        self.assertEqual(result['port_primary'], '1/2')
++        self.assertEqual(result['port_secondary'], '1/5')
++        self.assertEqual(result['port_primary_state'], 'not connected')
++        self.assertEqual(result['vlan'], 1)
++        self.assertEqual(result['recovery_delay'], '200ms')
++        self.assertEqual(result['recovery_delay_supported'], ['200ms', '500ms'])
++        self.assertTrue(result['advanced_mode'])
++        self.assertEqual(result['manager_priority'], 32768)
++        self.assertFalse(result['fixed_backup'])
++        self.assertFalse(result['fast_mrp'])
++        self.assertEqual(result['ring_state'], 'undefined')
++        self.assertFalse(result['redundancy'])
++        self.assertTrue(result['blocked_support'])
++
++    def test_manager_with_ring_state(self):
++        """Manager mode shows ring state and open count."""
++        fixture = load_fixture('show_mrp_manager.txt')
++        self.ssh.cli = lambda cmd: {cmd: fixture}
++        result = self.ssh.get_mrp()
++        self.assertTrue(result['configured'])
++        self.assertEqual(result['mode'], 'manager')
++        self.assertEqual(result['recovery_delay'], '500ms')
++        self.assertEqual(result['ring_state'], 'closed')
++        self.assertTrue(result['redundancy'])
++        self.assertEqual(result['ring_open_count'], 2)
++        self.assertEqual(result['port_primary_state'], 'forwarding')
++        self.assertEqual(result['port_secondary_state'], 'blocked')
++        self.assertEqual(result['info'], 'no error')
++
++    def test_set_mrp_rejects_link_up_port(self):
++        """set_mrp refuses to configure on link-up ports."""
++        self.ssh.get_interfaces = lambda: {
++            '1/1': {'is_up': True, 'is_enabled': True},
++            '1/2': {'is_up': False, 'is_enabled': True},
++        }
++        with self.assertRaises(ValueError) as ctx:
++            self.ssh.set_mrp(
++                operation='enable', mode='client',
++                port_primary='1/1', port_secondary='1/2'
++            )
++        self.assertIn('link-up', str(ctx.exception))
++        self.assertIn('1/1', str(ctx.exception))
++
++
++class TestConfigStatus(unittest.TestCase):
++    """Test config status getter."""
++
++    def setUp(self):
++        self.ssh = SSHHIOS.__new__(SSHHIOS)
++        self.ssh.connection = None
++
++    def test_synced(self):
++        """All in sync — saved is True."""
++        fixture = load_fixture('show_config_status_synced.txt')
++        self.ssh.cli = lambda cmd: {cmd: fixture}
++        result = self.ssh.get_config_status()
++        self.assertTrue(result['saved'])
++        self.assertEqual(result['nvm'], 'ok')
++        self.assertEqual(result['aca'], 'ok')
++        self.assertEqual(result['boot'], 'ok')
++
++    def test_unsaved(self):
++        """Running config differs from NVM — saved is False."""
++        fixture = load_fixture('show_config_status_unsaved.txt')
++        self.ssh.cli = lambda cmd: {cmd: fixture}
++        result = self.ssh.get_config_status()
++        self.assertFalse(result['saved'])
++        self.assertEqual(result['nvm'], 'out of sync')
++        self.assertEqual(result['aca'], 'absent')
++
++    def test_busy_is_not_saved(self):
++        """Busy NVM write counts as not saved."""
++        fixture = (
++            "Configuration storage sync state\n"
++            "--------------------------------\n"
++            "running-config to NVM.......................busy\n"
++            "NVM to ACA..................................absent\n"
++            "Boot parameters.............................ok\n"
++        )
++        self.ssh.cli = lambda cmd: {cmd: fixture}
++        result = self.ssh.get_config_status()
++        self.assertFalse(result['saved'])
++        self.assertEqual(result['nvm'], 'busy')
++
++
+ if __name__ == '__main__':
+     unittest.main()
+diff --git a/docs/vendor_specific.md b/docs/vendor_specific.md
+new file mode 100644
+index 0000000..852d968
+--- /dev/null
++++ b/docs/vendor_specific.md
+@@ -0,0 +1,251 @@
++# Vendor-Specific Methods
++
++These methods extend NAPALM with HiOS-specific functionality not covered
++by the standard NAPALM API.  They are accessed through the SSH driver's
++internal `ssh` object or via `device.cli()`.
++
++## Configuration Save
++
++HiOS has three config storage layers: **running-config** (RAM),
++**NVM** (internal flash — survives reboot), and **ACA** (external
++SD/USB — optional).  Changes live in running-config until explicitly
++saved.
++
++### get_config_status()
++
++Check if the running config has been saved to NVM.  Read-only, safe.
++
++```python
++status = device.ssh.get_config_status()
++```
++
++```python
++{
++    'saved': True,     # running-config == NVM
++    'nvm': 'ok',       # 'ok' | 'out of sync' | 'busy'
++    'aca': 'absent',   # 'ok' | 'out of sync' | 'absent'
++    'boot': 'ok',
++}
++```
++
++| State | Meaning |
++|-------|---------|
++| `nvm: ok` | Running config matches NVM (saved) |
++| `nvm: out of sync` | Unsaved changes exist |
++| `nvm: busy` | NVM write in progress (transient) |
++| `aca: ok` | External memory matches NVM |
++| `aca: absent` | No SD card / USB present |
++| `aca: out of sync` | External memory differs from NVM |
++
++### save_config()
++
++Save running config to NVM.  Waits for the NVM write to complete
++(up to 10s) before returning.
++
++```python
++status = device.ssh.save_config()
++# Returns: {'saved': True, 'nvm': 'ok', ...}
++```
++
++---
++
++## MRP — Media Redundancy Protocol
++
++MRP provides sub-second ring redundancy for industrial Ethernet.
++A ring consists of one **manager** and one or more **clients**.
++Each device contributes two **ring ports** (primary + secondary).
++
++### get_mrp()
++
++Returns the current MRP domain configuration and operating state.
++
++```python
++device.open()
++mrp = device.ssh.get_mrp()
++```
++
++**Returns** when MRP is configured:
++
++```python
++{
++    'configured': True,
++    'operation': 'enabled',             # 'enabled' | 'disabled'
++    'mode': 'client',                   # 'manager' | 'client'
++    'mode_actual': 'client',            # real operating mode
++    'port_primary': '1/3',
++    'port_secondary': '1/4',
++    'port_primary_state': 'forwarding', # 'forwarding' | 'blocked' | 'not connected'
++    'port_secondary_state': 'blocked',
++    'domain_id': '255.255...255 (Default)',
++    'domain_name': '',
++    'vlan': 1,                          # VLAN ID for MRP frames
++    'recovery_delay': '200ms',          # '200ms' | '500ms'
++    'recovery_delay_supported': ['200ms', '500ms'],
++    'advanced_mode': True,              # react on link change
++    'manager_priority': 32768,          # 0-65535
++    'fixed_backup': False,
++    'fast_mrp': False,                  # only present on some models
++    'info': 'no error',                 # general status message
++    'ring_state': 'closed',             # manager: 'closed' | 'open' | 'undefined'
++    'redundancy': True,                 # manager: ring is redundant
++    'ring_open_count': 2,               # manager: number of ring-open events
++    'blocked_support': True,            # client field
++}
++```
++
++**Returns** when no MRP domain exists:
++
++```python
++{'configured': False}
++```
++
++### set_mrp(operation, mode, port_primary, port_secondary, vlan, recovery_delay)
++
++Configure MRP on the default domain.
++
++**Safety**: Refuses to assign ring ports that are currently **link-up**.
++This prevents accidentally disrupting a live production network.
++Only disconnected ports can be assigned as ring ports.
++
++```python
++# Configure as MRP client on disconnected ports
++result = device.ssh.set_mrp(
++    operation='enable',
++    mode='client',
++    port_primary='1/3',
++    port_secondary='1/4',
++    vlan=1,
++    recovery_delay='200ms'
++)
++
++# Reconfigure to manager mode (ports already assigned)
++result = device.ssh.set_mrp(operation='enable', mode='manager')
++
++# Disable MRP (keeps domain config)
++result = device.ssh.set_mrp(operation='disable')
++```
++
++| Parameter | Values | Default | Description |
++|-----------|--------|---------|-------------|
++| `operation` | `'enable'`, `'disable'` | `'enable'` | Enable or disable MRP |
++| `mode` | `'manager'`, `'client'` | `'client'` | Ring role |
++| `port_primary` | interface name | `None` | Primary ring port (e.g. `'1/3'`) |
++| `port_secondary` | interface name | `None` | Secondary ring port (e.g. `'1/4'`) |
++| `vlan` | `0`–`4042` | `None` | VLAN for MRP frames |
++| `recovery_delay` | `'200ms'`, `'500ms'`, `'30ms'`, `'10ms'` | `None` | Max recovery time |
++
++**Raises** `ValueError` if a specified port is currently link-up.
++
++**Returns** the result of `get_mrp()` after configuration.
++
++### delete_mrp()
++
++Disable MRP globally and delete the MRP domain.
++
++```python
++result = device.ssh.delete_mrp()
++# Returns {'configured': False}
++```
++
++---
++
++## HiDiscovery Protocol
++
++HiDiscovery is Belden's proprietary device discovery and configuration
++protocol.  In **read-write** mode, devices can be remotely configured
++(IP address, name) from the HiDiscovery PC tool.  **Read-only** mode
++allows discovery without remote configuration.  Production devices should
++use read-only or disabled.
++
++### get_hidiscovery()
++
++Returns HiDiscovery protocol status.
++
++```python
++result = device.ssh.get_hidiscovery()
++```
++
++```python
++{
++    'enabled': True,
++    'mode': 'read-only',       # 'read-only' | 'read-write'
++    'blinking': False,
++    'protocols': ['v1', 'v2'],
++    'relay': True              # only on L3/managed switches
++}
++```
++
++### set_hidiscovery(status)
++
++Set HiDiscovery operating mode.
++
++```python
++# Disable HiDiscovery (recommended for secured networks)
++result = device.ssh.set_hidiscovery('off')
++
++# Enable read-only (recommended for production)
++result = device.ssh.set_hidiscovery('ro')
++
++# Enable read-write (commissioning only)
++result = device.ssh.set_hidiscovery('on')
++```
++
++| Status | Mode | Description |
++|--------|------|-------------|
++| `'off'` | disabled | HiDiscovery completely disabled |
++| `'ro'` | read-only | Device visible in HiDiscovery tool but not remotely configurable |
++| `'on'` | read-write | Full remote configuration via HiDiscovery tool |
++
++**Returns** the result of `get_hidiscovery()` after the change.
++
++---
++
++## Extended LLDP
++
++### get_lldp_neighbors_detail_extended(interface='')
++
++Returns all LLDP TLV fields from `show lldp remote-data`, including
++management addresses (IPv4 + IPv6), autonegotiation, VLAN membership,
++link aggregation, and MAU type — fields not available in the standard
++NAPALM `get_lldp_neighbors_detail()`.
++
++```python
++extended = device.ssh.get_lldp_neighbors_detail_extended()
++for port, neighbors in extended.items():
++    for n in neighbors:
++        print(f"{port}: {n['remote_system_name']}")
++        print(f"  Management IPs: {n['management_addresses']}")
++        print(f"  Capabilities: {n['remote_system_capab']}")
++```
++
++Key fields beyond standard NAPALM:
++- `management_addresses` — list of all IPv4 + IPv6 management addresses
++- `remote_management_ipv4` / `remote_management_ipv6` — first of each type
++- `autoneg_support` / `autoneg_enabled`
++- `port_oper_mau_type`
++- `port_vlan_id`
++- `vlan_membership` — list of VLAN IDs
++- `link_agg_status` / `link_agg_port_id`
++
++---
++
++## CLI Mode Helpers
++
++These are used internally by the vendor-specific methods but can also
++be called directly for custom configuration sequences.
++
++| Method | Description |
++|--------|-------------|
++| `_enable()` | Enter privileged (enable) mode — prompt changes from `>` to `#` |
++| `_disable()` | Exit enable mode back to user mode |
++| `_config_mode()` | Enter global config mode (`enable` → `configure`) |
++| `_exit_config_mode()` | Exit config mode back to user mode (`exit` → `disable`) |
++
++```python
++# Custom config sequence example
++device.ssh._config_mode()
++try:
++    device.ssh.cli('some-config-command arg1 arg2')
++finally:
++    device.ssh._exit_config_mode()
++```
+diff --git a/tests/fixtures/show_mrp_configured.txt b/tests/fixtures/show_mrp_configured.txt
+new file mode 100644
+index 0000000..31b19a4
+--- /dev/null
++++ b/tests/fixtures/show_mrp_configured.txt
+@@ -0,0 +1,33 @@
++MRP configuration settings
++--------------------------
++FastMRP supported...........................no
++Domain ID...................................255.255.255.255.255.255.255.255.255.255.255.255.255.255.255.255 (Default)
++Domain name.................................
++Port number, Primary........................1/2
++Port number, Secondary......................1/5
++Port oper state, Primary....................not connected
++Port oper state, Secondary..................not connected
++Fixed backup port (manager only)............disabled
++Mode (administrative setting)...............client
++Mode (real operating state).................client
++Recovery delay..............................200ms
++Recovery delay supported....................200ms,500ms
++Advanced mode (react on link change)........enabled
++Manager priority............................32768
++VLAN ID.....................................1
++Operation...................................enabled
++
++General operating states:
++Configuration info..........................ring port link error
++
++Manager-related operating states:
++Ring state..................................undefined
++Redundancy exists...........................no
++Ring open count.............................0
++Last ring open change.......................1970-01-01 00:00:00
++Round trip delay max........................0
++Round trip delay min........................0
++Non-blocking client support.................disabled
++
++Client-related operating states:
++Blocked support.............................enabled
+diff --git a/tests/fixtures/show_mrp_unconfigured.txt b/tests/fixtures/show_mrp_unconfigured.txt
+new file mode 100644
+index 0000000..ee6fcb3
+--- /dev/null
++++ b/tests/fixtures/show_mrp_unconfigured.txt
+@@ -0,0 +1,11 @@
++MRP configuration settings
++--------------------------
++(MRP not configured)
++Port number, Primary........................(unknown)
++Port number, Secondary......................(unknown)
++
++General operating states:
++
++Manager-related operating states:
++
++Client-related operating states:
+diff --git a/tests/fixtures/show_mrp_manager.txt b/tests/fixtures/show_mrp_manager.txt
+new file mode 100644
+index 0000000..8df0624
+--- /dev/null
++++ b/tests/fixtures/show_mrp_manager.txt
+@@ -0,0 +1,32 @@
++MRP configuration settings
++--------------------------
++Domain ID...................................255.255.255.255.255.255.255.255.255.255.255.255.255.255.255.255 (Default)
++Domain name.................................
++Port number, Primary........................1/3
++Port number, Secondary......................1/4
++Port oper state, Primary....................forwarding
++Port oper state, Secondary..................blocked
++Fixed backup port (manager only)............disabled
++Mode (administrative setting)...............manager
++Mode (real operating state).................manager
++Recovery delay..............................500ms
++Recovery delay supported....................200ms,500ms
++Advanced mode (react on link change)........enabled
++Manager priority............................32768
++VLAN ID.....................................1
++Operation...................................enabled
++
++General operating states:
++Configuration info..........................no error
++
++Manager-related operating states:
++Ring state..................................closed
++Redundancy exists...........................yes
++Ring open count.............................2
++Last ring open change.......................2026-02-21 10:30:15
++Round trip delay max........................1250
++Round trip delay min........................625
++Non-blocking client support.................enabled
++
++Client-related operating states:
++Blocked support.............................enabled
+diff --git a/tests/fixtures/show_config_status_synced.txt b/tests/fixtures/show_config_status_synced.txt
+new file mode 100644
+index 0000000..f639943
+--- /dev/null
++++ b/tests/fixtures/show_config_status_synced.txt
+@@ -0,0 +1,5 @@
++Configuration storage sync state
++--------------------------------
++running-config to NVM.......................ok
++NVM to ACA..................................ok
++Boot parameters.............................ok
+diff --git a/tests/fixtures/show_config_status_unsaved.txt b/tests/fixtures/show_config_status_unsaved.txt
+new file mode 100644
+index 0000000..320f401
+--- /dev/null
++++ b/tests/fixtures/show_config_status_unsaved.txt
+@@ -0,0 +1,5 @@
++Configuration storage sync state
++--------------------------------
++running-config to NVM.......................out of sync
++NVM to ACA..................................absent
++Boot parameters.............................ok
+diff --git a/tests/fixtures/show_network_hidiscovery.txt b/tests/fixtures/show_network_hidiscovery.txt
+new file mode 100644
+index 0000000..c14446d
+--- /dev/null
++++ b/tests/fixtures/show_network_hidiscovery.txt
+@@ -0,0 +1,7 @@
++HiDiscovery settings
++--------------------
++Operating status............................enabled
++Operating mode..............................read-only
++Blinking status.............................disabled
++Supported protocols.........................v1,v2
++Relay status................................enabled
+diff --git a/tests/fixtures/show_network_parms.txt b/tests/fixtures/show_network_parms.txt
+new file mode 100644
+index 0000000..6c91ca8
+--- /dev/null
++++ b/tests/fixtures/show_network_parms.txt
+@@ -0,0 +1,12 @@
++IPv4 Network
++------------
++Local IP address............................192.168.1.4
++Subnetmask..................................255.255.255.0
++Gateway address.............................192.168.1.254
++Burned in MAC address.......................64:60:38:3f:4a:a1
++Protocol....................................none
++Management VLAN ID..........................1
++Management VLAN priority....................0
++Management IP-DSCP value....................0
++DHCP/BOOTP client ID........................
++DHCP/BOOTP client config load...............enabled(options 4, 42, 66, 67)

@@ -425,5 +425,221 @@ class TestOpticsParser(unittest.TestCase):
                     self.assertIn(stat, state[key])
 
 
+class TestInterfacesIpL2Fallback(unittest.TestCase):
+    """Test get_interfaces_ip L2 fallback to show network parms."""
+
+    def setUp(self):
+        self.ssh = SSHHIOS.__new__(SSHHIOS)
+        self.ssh.connection = None
+
+    def test_l2_returns_management_ip(self):
+        """L2 switch returns management IP from show network parms."""
+        net_parms = load_fixture('show_network_parms.txt')
+
+        def mock_cli(cmd):
+            if cmd == 'show ip interface':
+                return {cmd: "Error: Invalid command 'interface'"}
+            if cmd == 'show network parms':
+                return {cmd: net_parms}
+            return {cmd: ''}
+
+        self.ssh.cli = mock_cli
+        result = self.ssh.get_interfaces_ip()
+        self.assertIn('vlan/1', result)
+        self.assertEqual(result['vlan/1']['ipv4']['192.168.1.4']['prefix_length'], 24)
+
+    def test_l2_no_ip_returns_empty(self):
+        """L2 switch with 0.0.0.0 returns empty dict."""
+        no_ip = "Local IP address............................0.0.0.0\nSubnetmask..................................0.0.0.0\nManagement VLAN ID..........................1\n"
+
+        def mock_cli(cmd):
+            if cmd == 'show ip interface':
+                return {cmd: "Error: Invalid command 'interface'"}
+            if cmd == 'show network parms':
+                return {cmd: no_ip}
+            return {cmd: ''}
+
+        self.ssh.cli = mock_cli
+        result = self.ssh.get_interfaces_ip()
+        self.assertEqual(result, {})
+
+    def test_l3_still_uses_show_ip_interface(self):
+        """L3 switch ignores network parms, uses show ip interface."""
+        ip_intf = load_fixture('show_ip_arp_table.txt')  # just need non-Error output
+        # Simulate a minimal show ip interface
+        ip_intf = (
+            "Interface   IP Address       IP Mask\n"
+            "----------  ---------------- ----------\n"
+            "vlan/1      192.168.1.254    255.255.255.0\n"
+        )
+
+        def mock_cli(cmd):
+            if cmd == 'show ip interface':
+                return {cmd: ip_intf}
+            return {cmd: ''}
+
+        self.ssh.cli = mock_cli
+        result = self.ssh.get_interfaces_ip()
+        self.assertIn('vlan/1', result)
+        self.assertEqual(result['vlan/1']['ipv4']['192.168.1.254']['prefix_length'], 24)
+
+
+class TestHiDiscoveryParser(unittest.TestCase):
+    """Test HiDiscovery getter."""
+
+    def setUp(self):
+        self.ssh = SSHHIOS.__new__(SSHHIOS)
+        self.ssh.connection = None
+
+    def test_get_hidiscovery_l3(self):
+        """L3 switch with relay status."""
+        fixture = load_fixture('show_network_hidiscovery.txt')
+        self.ssh.cli = lambda cmd: {cmd: fixture}
+        result = self.ssh.get_hidiscovery()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['mode'], 'read-only')
+        self.assertFalse(result['blinking'])
+        self.assertEqual(result['protocols'], ['v1', 'v2'])
+        self.assertTrue(result['relay'])
+
+    def test_get_hidiscovery_l2_no_relay(self):
+        """L2 switch without relay status field."""
+        fixture = (
+            "HiDiscovery settings\n"
+            "--------------------\n"
+            "Operating status............................enabled\n"
+            "Operating mode..............................read-write\n"
+            "Blinking status.............................disabled\n"
+            "Supported protocols.........................v1,v2\n"
+        )
+        self.ssh.cli = lambda cmd: {cmd: fixture}
+        result = self.ssh.get_hidiscovery()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['mode'], 'read-write')
+        self.assertNotIn('relay', result)
+
+    def test_get_hidiscovery_disabled(self):
+        """Disabled HiDiscovery."""
+        fixture = (
+            "HiDiscovery settings\n"
+            "--------------------\n"
+            "Operating status............................disabled\n"
+            "Operating mode..............................read-only\n"
+            "Blinking status.............................disabled\n"
+            "Supported protocols.........................v1,v2\n"
+        )
+        self.ssh.cli = lambda cmd: {cmd: fixture}
+        result = self.ssh.get_hidiscovery()
+        self.assertFalse(result['enabled'])
+
+
+class TestMRPParser(unittest.TestCase):
+    """Test MRP getter/parser."""
+
+    def setUp(self):
+        self.ssh = SSHHIOS.__new__(SSHHIOS)
+        self.ssh.connection = None
+
+    def test_unconfigured(self):
+        """No MRP domain returns configured=False."""
+        fixture = load_fixture('show_mrp_unconfigured.txt')
+        self.ssh.cli = lambda cmd: {cmd: fixture}
+        result = self.ssh.get_mrp()
+        self.assertFalse(result['configured'])
+        self.assertEqual(len(result), 1)
+
+    def test_configured_client(self):
+        """Client mode returns all expected fields."""
+        fixture = load_fixture('show_mrp_configured.txt')
+        self.ssh.cli = lambda cmd: {cmd: fixture}
+        result = self.ssh.get_mrp()
+        self.assertTrue(result['configured'])
+        self.assertEqual(result['operation'], 'enabled')
+        self.assertEqual(result['mode'], 'client')
+        self.assertEqual(result['port_primary'], '1/2')
+        self.assertEqual(result['port_secondary'], '1/5')
+        self.assertEqual(result['port_primary_state'], 'not connected')
+        self.assertEqual(result['vlan'], 1)
+        self.assertEqual(result['recovery_delay'], '200ms')
+        self.assertEqual(result['recovery_delay_supported'], ['200ms', '500ms'])
+        self.assertTrue(result['advanced_mode'])
+        self.assertEqual(result['manager_priority'], 32768)
+        self.assertFalse(result['fixed_backup'])
+        self.assertFalse(result['fast_mrp'])
+        self.assertEqual(result['ring_state'], 'undefined')
+        self.assertFalse(result['redundancy'])
+        self.assertTrue(result['blocked_support'])
+
+    def test_manager_with_ring_state(self):
+        """Manager mode shows ring state and open count."""
+        fixture = load_fixture('show_mrp_manager.txt')
+        self.ssh.cli = lambda cmd: {cmd: fixture}
+        result = self.ssh.get_mrp()
+        self.assertTrue(result['configured'])
+        self.assertEqual(result['mode'], 'manager')
+        self.assertEqual(result['recovery_delay'], '500ms')
+        self.assertEqual(result['ring_state'], 'closed')
+        self.assertTrue(result['redundancy'])
+        self.assertEqual(result['ring_open_count'], 2)
+        self.assertEqual(result['port_primary_state'], 'forwarding')
+        self.assertEqual(result['port_secondary_state'], 'blocked')
+        self.assertEqual(result['info'], 'no error')
+
+    def test_set_mrp_rejects_link_up_port(self):
+        """set_mrp refuses to configure on link-up ports."""
+        self.ssh.get_interfaces = lambda: {
+            '1/1': {'is_up': True, 'is_enabled': True},
+            '1/2': {'is_up': False, 'is_enabled': True},
+        }
+        with self.assertRaises(ValueError) as ctx:
+            self.ssh.set_mrp(
+                operation='enable', mode='client',
+                port_primary='1/1', port_secondary='1/2'
+            )
+        self.assertIn('link-up', str(ctx.exception))
+        self.assertIn('1/1', str(ctx.exception))
+
+
+class TestConfigStatus(unittest.TestCase):
+    """Test config status getter."""
+
+    def setUp(self):
+        self.ssh = SSHHIOS.__new__(SSHHIOS)
+        self.ssh.connection = None
+
+    def test_synced(self):
+        """All in sync — saved is True."""
+        fixture = load_fixture('show_config_status_synced.txt')
+        self.ssh.cli = lambda cmd: {cmd: fixture}
+        result = self.ssh.get_config_status()
+        self.assertTrue(result['saved'])
+        self.assertEqual(result['nvm'], 'ok')
+        self.assertEqual(result['aca'], 'ok')
+        self.assertEqual(result['boot'], 'ok')
+
+    def test_unsaved(self):
+        """Running config differs from NVM — saved is False."""
+        fixture = load_fixture('show_config_status_unsaved.txt')
+        self.ssh.cli = lambda cmd: {cmd: fixture}
+        result = self.ssh.get_config_status()
+        self.assertFalse(result['saved'])
+        self.assertEqual(result['nvm'], 'out of sync')
+        self.assertEqual(result['aca'], 'absent')
+
+    def test_busy_is_not_saved(self):
+        """Busy NVM write counts as not saved."""
+        fixture = (
+            "Configuration storage sync state\n"
+            "--------------------------------\n"
+            "running-config to NVM.......................busy\n"
+            "NVM to ACA..................................absent\n"
+            "Boot parameters.............................ok\n"
+        )
+        self.ssh.cli = lambda cmd: {cmd: fixture}
+        result = self.ssh.get_config_status()
+        self.assertFalse(result['saved'])
+        self.assertEqual(result['nvm'], 'busy')
+
+
 if __name__ == '__main__':
     unittest.main()

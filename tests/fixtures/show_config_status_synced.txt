@@ -1,0 +1,5 @@
+Configuration storage sync state
+--------------------------------
+running-config to NVM.......................ok
+NVM to ACA..................................ok
+Boot parameters.............................ok

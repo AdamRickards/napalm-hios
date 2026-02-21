@@ -18,6 +18,7 @@ class SSHHIOS:
         self.port = port
         self.connection = None
         self.pagination_disabled = False  # Track the pagination state
+        self._in_config_mode = False      # Track global config mode
 
     def open(self):
         try:
@@ -36,7 +37,18 @@ class SSHHIOS:
 
     def close(self):
         if self.connection:
+            try:
+                status = self.get_config_status()
+                if not status['saved']:
+                    logger.warning(
+                        "Closing with unsaved config (NVM: %s). "
+                        "Call save_config() before close() to persist changes.",
+                        status['nvm']
+                    )
+            except Exception:
+                pass  # best-effort check — don't block close
             self.connection.disconnect()
+            self._in_config_mode = False
 
     def cli(self, commands: list[str] | str, encoding: str = 'text') -> dict[str, str]:
         """Execute a command or list of commands and return the output in a dictionary format."""
@@ -53,7 +65,7 @@ class SSHHIOS:
             try:
                 output = self.connection.send_command(
                     command,
-                    expect_string=r'[>#]',
+                    expect_string=r'[>#]\s*$',
                     strip_prompt=True,
                     strip_command=True
                 )
@@ -557,18 +569,67 @@ class SSHHIOS:
             log_error(logger, f"Error retrieving configuration: {str(e)}")
 
         return config_dict
-    
+
+    def get_config_status(self):
+        """Check if running config is saved to NVM.
+
+        Returns::
+
+            {
+                'saved': True,            # running-config matches NVM
+                'nvm': 'ok',              # 'ok' | 'out of sync' | 'busy'
+                'aca': 'absent',          # 'ok' | 'out of sync' | 'absent'
+                'boot': 'ok',
+            }
+        """
+        output = self.cli('show config status')['show config status']
+        data = parse_dot_keys(output)
+
+        nvm = data.get('running-config to NVM', '').lower()
+        aca = data.get('NVM to ACA', '').lower()
+        boot = data.get('Boot parameters', '').lower()
+
+        return {
+            'saved': nvm == 'ok',
+            'nvm': nvm,
+            'aca': aca,
+            'boot': boot,
+        }
+
+    def save_config(self):
+        """Save running config to non-volatile memory.
+
+        Equivalent to ``copy config running-config nvm`` in enable mode.
+        Waits for the NVM write to complete (up to 10s) before returning.
+        Returns the post-save config status.
+        """
+        self._enable()
+        try:
+            self.cli('copy config running-config nvm')
+        finally:
+            self._disable()
+
+        # NVM write is async — poll until settled (not "busy")
+        for _ in range(10):
+            status = self.get_config_status()
+            if status['nvm'] != 'busy':
+                return status
+            time.sleep(1)
+
+        return self.get_config_status()
+
     def get_interfaces_ip(self):
         """Get IP addresses configured on interfaces.
 
-        Uses ``show ip interface`` — only available on L3 switches.
-        L2-only devices return an error which yields an empty dict.
+        Uses ``show ip interface`` on L3 switches.  Falls back to
+        ``show network parms`` on L2-only devices to return the
+        management IP.
         """
         output = self.cli('show ip interface')['show ip interface']
 
-        # L2 switches don't support this command
+        # L2 switches don't support this command — fall back to management IP
         if 'Error' in output:
-            return {}
+            return self._parse_network_parms()
 
         interfaces = {}
         for fields in parse_table(output, min_fields=3):
@@ -587,6 +648,26 @@ class SSHHIOS:
             }
 
         return interfaces
+
+    def _parse_network_parms(self):
+        """Parse ``show network parms`` for L2 management IP."""
+        output = self.cli('show network parms')['show network parms']
+        data = parse_dot_keys(output)
+        ip = data.get('Local IP address', '0.0.0.0')
+        mask = data.get('Subnetmask', '0.0.0.0')
+        vlan_id = data.get('Management VLAN ID', '1')
+
+        if ip == '0.0.0.0':
+            return {}
+
+        prefix_length = sum(bin(int(x)).count('1') for x in mask.split('.'))
+        return {
+            f'vlan/{vlan_id}': {
+                'ipv4': {
+                    ip: {'prefix_length': prefix_length}
+                }
+            }
+        }
 
     def _calculate_prefix_length(self, subnet_mask):
         """Helper method to calculate prefix length from subnet mask."""
@@ -1214,6 +1295,259 @@ class SSHHIOS:
             log_error(logger, f"Error retrieving SNMP information: {str(e)}")
 
         return snmp_info
+
+    def get_hidiscovery(self):
+        """Get HiDiscovery protocol status.
+
+        Returns::
+
+            {
+                'enabled': True,
+                'mode': 'read-only',      # 'read-only' | 'read-write'
+                'blinking': False,
+                'protocols': ['v1', 'v2'],
+                'relay': True              # only present on L3/managed switches
+            }
+        """
+        output = self.cli('show network hidiscovery')['show network hidiscovery']
+        data = parse_dot_keys(output)
+
+        result = {
+            'enabled': data.get('Operating status', '').lower() == 'enabled',
+            'mode': data.get('Operating mode', ''),
+            'blinking': data.get('Blinking status', '').lower() == 'enabled',
+            'protocols': [p.strip() for p in data.get('Supported protocols', '').split(',') if p.strip()],
+        }
+
+        if 'Relay status' in data:
+            result['relay'] = data['Relay status'].lower() == 'enabled'
+
+        return result
+
+    def _enable(self):
+        """Enter enable (privileged) mode.  Prompt changes from > to #."""
+        self.connection.send_command(
+            'enable', expect_string=r'[>#]\s*$',
+            strip_prompt=True, strip_command=True
+        )
+
+    def _disable(self):
+        """Exit enable mode back to user mode."""
+        self.connection.send_command(
+            'disable', expect_string=r'[>#]\s*$',
+            strip_prompt=True, strip_command=True
+        )
+
+    def _config_mode(self):
+        """Enter global config mode (enable → configure).
+
+        Safe to call multiple times — no-ops if already in config mode.
+        """
+        if self._in_config_mode:
+            return
+        self._enable()
+        self.cli('configure')
+        self._in_config_mode = True
+
+    def _exit_config_mode(self):
+        """Exit global config mode back to user mode.
+
+        Safe to call even if not in config mode.
+        """
+        if not self._in_config_mode:
+            return
+        self.cli('exit')
+        self._disable()
+        self._in_config_mode = False
+
+    def get_mrp(self):
+        """Get MRP (Media Redundancy Protocol) ring status.
+
+        Returns::
+
+            {
+                'configured': True,
+                'operation': 'enabled',
+                'mode': 'client',
+                'port_primary': '1/3',
+                'port_secondary': '1/4',
+                'port_primary_state': 'forwarding',
+                'port_secondary_state': 'blocked',
+                'domain_id': '255.255.255...255 (Default)',
+                'domain_name': '',
+                'vlan': 1,
+                'recovery_delay': '200ms',
+                'recovery_delay_supported': ['200ms', '500ms'],
+                'advanced_mode': True,
+                'manager_priority': 32768,
+                'fixed_backup': False,
+                'fast_mrp': False,          # only on some models
+                'info': 'ring port link error',
+                'ring_state': 'closed',     # manager only
+                'redundancy': True,         # manager only
+                'ring_open_count': 0,
+                'blocked_support': True,    # client field
+            }
+
+        Returns ``{'configured': False}`` when no MRP domain exists.
+        """
+        output = self.cli('show mrp')['show mrp']
+        data = parse_dot_keys(output)
+
+        if '(MRP not configured)' in output:
+            return {'configured': False}
+
+        result = {'configured': True}
+
+        result['operation'] = data.get('Operation', 'disabled')
+        result['mode'] = data.get('Mode (administrative setting)', '')
+        result['mode_actual'] = data.get('Mode (real operating state)', '')
+        result['port_primary'] = data.get('Port number, Primary', '')
+        result['port_secondary'] = data.get('Port number, Secondary', '')
+        result['port_primary_state'] = data.get('Port oper state, Primary', '')
+        result['port_secondary_state'] = data.get('Port oper state, Secondary', '')
+        result['domain_id'] = data.get('Domain ID', '')
+        result['domain_name'] = data.get('Domain name', '')
+
+        try:
+            result['vlan'] = int(data.get('VLAN ID', '0'))
+        except ValueError:
+            result['vlan'] = 0
+
+        result['recovery_delay'] = data.get('Recovery delay', '')
+        supported = data.get('Recovery delay supported', '')
+        result['recovery_delay_supported'] = [s.strip() for s in supported.split(',') if s.strip()]
+
+        result['advanced_mode'] = data.get('Advanced mode (react on link change)', '').lower() == 'enabled'
+
+        try:
+            result['manager_priority'] = int(data.get('Manager priority', '32768'))
+        except ValueError:
+            result['manager_priority'] = 32768
+
+        result['fixed_backup'] = data.get('Fixed backup port (manager only)', '').lower() == 'enabled'
+
+        if 'FastMRP supported' in data:
+            result['fast_mrp'] = data['FastMRP supported'].lower() == 'yes'
+
+        # General operating states
+        result['info'] = data.get('Configuration info', '')
+
+        # Manager states
+        result['ring_state'] = data.get('Ring state', '')
+        result['redundancy'] = data.get('Redundancy exists', '').lower() == 'yes'
+        try:
+            result['ring_open_count'] = int(data.get('Ring open count', '0'))
+        except ValueError:
+            result['ring_open_count'] = 0
+
+        # Client states
+        result['blocked_support'] = data.get('Blocked support', '').lower() == 'enabled'
+
+        return result
+
+    def set_mrp(self, operation='enable', mode='client', port_primary=None,
+                port_secondary=None, vlan=None, recovery_delay=None):
+        """Configure MRP ring on the default domain.
+
+        Args:
+            operation: 'enable' or 'disable'
+            mode: 'manager' or 'client'
+            port_primary: primary ring port (e.g. '1/3'). Must be link-down.
+            port_secondary: secondary ring port (e.g. '1/4'). Must be link-down.
+            vlan: VLAN ID for MRP domain (0-4042)
+            recovery_delay: '200ms', '500ms', '30ms', or '10ms'
+
+        Raises ValueError if specified ports are currently link-up.
+        Creates the default domain if none exists.
+        """
+        if operation not in ('enable', 'disable'):
+            raise ValueError(f"operation must be 'enable' or 'disable', got '{operation}'")
+        if mode not in ('manager', 'client'):
+            raise ValueError(f"mode must be 'manager' or 'client', got '{mode}'")
+
+        # Safety: verify ring ports are link-down before configuring
+        if operation == 'enable' and (port_primary or port_secondary):
+            interfaces = self.get_interfaces()
+            for port, label in [(port_primary, 'primary'), (port_secondary, 'secondary')]:
+                if port and port in interfaces and interfaces[port]['is_up']:
+                    raise ValueError(
+                        f"Refusing to configure MRP: {label} port {port} is currently link-up. "
+                        f"Only configure MRP on disconnected ports to avoid production impact."
+                    )
+
+        self._config_mode()
+        try:
+            # Ensure default domain exists (harmless if already present)
+            current = self.cli('show mrp')['show mrp']
+            if '(MRP not configured)' in current:
+                self.cli('mrp domain add default-domain')
+
+            if operation == 'disable':
+                self.cli('no mrp operation')
+                self.cli('mrp domain modify operation disable')
+            else:
+                self.cli('mrp domain modify mode ' + mode)
+                if port_primary:
+                    self.cli(f'mrp domain modify port primary {port_primary}')
+                if port_secondary:
+                    self.cli(f'mrp domain modify port secondary {port_secondary}')
+                if vlan is not None:
+                    self.cli(f'mrp domain modify vlan {vlan}')
+                if recovery_delay:
+                    self.cli(f'mrp domain modify recovery-delay {recovery_delay}')
+                self.cli('mrp domain modify operation enable')
+                self.cli('mrp operation')
+        finally:
+            self._exit_config_mode()
+
+        return self.get_mrp()
+
+    def delete_mrp(self):
+        """Delete the MRP domain and disable MRP globally.
+
+        Returns the post-deletion MRP state (should show configured=False).
+        """
+        self._config_mode()
+        try:
+            self.cli('no mrp operation')
+            self.cli('mrp domain modify operation disable')
+            self.cli('mrp domain delete')
+        finally:
+            self._exit_config_mode()
+
+        return self.get_mrp()
+
+    def set_hidiscovery(self, status):
+        """Set HiDiscovery operating mode.
+
+        Args:
+            status: 'on', 'off', or 'ro' (read-only)
+
+        'on' enables HiDiscovery in read-write mode.
+        'off' disables HiDiscovery entirely.
+        'ro' enables HiDiscovery in read-only mode (recommended for production).
+
+        Enters enable mode to execute config commands, then exits.
+        """
+        status = status.lower().strip()
+        if status not in ('on', 'off', 'ro'):
+            raise ValueError(f"Invalid status '{status}': use 'on', 'off', or 'ro'")
+
+        self._enable()
+        try:
+            if status == 'off':
+                self.cli('no network hidiscovery operation')
+            elif status == 'on':
+                self.cli('network hidiscovery operation')
+                self.cli('network hidiscovery mode read-write')
+            elif status == 'ro':
+                self.cli('network hidiscovery operation')
+                self.cli('network hidiscovery mode read-only')
+        finally:
+            self._disable()
+
+        return self.get_hidiscovery()
 
     def _parse_speed(self, speed_str):
         speed_map = {

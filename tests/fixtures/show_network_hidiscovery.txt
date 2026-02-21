@@ -1,0 +1,7 @@
+HiDiscovery settings
+--------------------
+Operating status............................enabled
+Operating mode..............................read-only
+Blinking status.............................disabled
+Supported protocols.........................v1,v2
+Relay status................................enabled

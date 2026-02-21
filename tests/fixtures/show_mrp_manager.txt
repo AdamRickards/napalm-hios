@@ -1,0 +1,32 @@
+MRP configuration settings
+--------------------------
+Domain ID...................................255.255.255.255.255.255.255.255.255.255.255.255.255.255.255.255 (Default)
+Domain name.................................
+Port number, Primary........................1/3
+Port number, Secondary......................1/4
+Port oper state, Primary....................forwarding
+Port oper state, Secondary..................blocked
+Fixed backup port (manager only)............disabled
+Mode (administrative setting)...............manager
+Mode (real operating state).................manager
+Recovery delay..............................500ms
+Recovery delay supported....................200ms,500ms
+Advanced mode (react on link change)........enabled
+Manager priority............................32768
+VLAN ID.....................................1
+Operation...................................enabled
+
+General operating states:
+Configuration info..........................no error
+
+Manager-related operating states:
+Ring state..................................closed
+Redundancy exists...........................yes
+Ring open count.............................2
+Last ring open change.......................2026-02-21 10:30:15
+Round trip delay max........................1250
+Round trip delay min........................625
+Non-blocking client support.................enabled
+
+Client-related operating states:
+Blocked support.............................enabled

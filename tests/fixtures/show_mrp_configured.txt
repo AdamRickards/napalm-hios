@@ -1,0 +1,33 @@
+MRP configuration settings
+--------------------------
+FastMRP supported...........................no
+Domain ID...................................255.255.255.255.255.255.255.255.255.255.255.255.255.255.255.255 (Default)
+Domain name.................................
+Port number, Primary........................1/2
+Port number, Secondary......................1/5
+Port oper state, Primary....................not connected
+Port oper state, Secondary..................not connected
+Fixed backup port (manager only)............disabled
+Mode (administrative setting)...............client
+Mode (real operating state).................client
+Recovery delay..............................200ms
+Recovery delay supported....................200ms,500ms
+Advanced mode (react on link change)........enabled
+Manager priority............................32768
+VLAN ID.....................................1
+Operation...................................enabled
+
+General operating states:
+Configuration info..........................ring port link error
+
+Manager-related operating states:
+Ring state..................................undefined
+Redundancy exists...........................no
+Ring open count.............................0
+Last ring open change.......................1970-01-01 00:00:00
+Round trip delay max........................0
+Round trip delay min........................0
+Non-blocking client support.................disabled
+
+Client-related operating states:
+Blocked support.............................enabled

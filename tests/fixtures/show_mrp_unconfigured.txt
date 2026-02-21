@@ -1,0 +1,11 @@
+MRP configuration settings
+--------------------------
+(MRP not configured)
+Port number, Primary........................(unknown)
+Port number, Secondary......................(unknown)
+
+General operating states:
+
+Manager-related operating states:
+
+Client-related operating states:

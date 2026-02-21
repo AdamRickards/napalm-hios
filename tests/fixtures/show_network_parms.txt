@@ -1,0 +1,12 @@
+IPv4 Network
+------------
+Local IP address............................192.168.1.4
+Subnetmask..................................255.255.255.0
+Gateway address.............................192.168.1.254
+Burned in MAC address.......................64:60:38:3f:4a:a1
+Protocol....................................none
+Management VLAN ID..........................1
+Management VLAN priority....................0
+Management IP-DSCP value....................0
+DHCP/BOOTP client ID........................
+DHCP/BOOTP client config load...............enabled(options 4, 42, 66, 67)
