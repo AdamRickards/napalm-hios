@@ -1,0 +1,40 @@
+System information
+------------------
+System Description..........................Hirschmann GREYHOUND Switch
+System name.................................GRS1042-CORE
+System location.............................Kitchen
+System contact..............................Adam Rickards 0472827169
+System uptime...............................43 days, 03:26:31
+Operating hours.............................3492 days, 15:15:50
+System date and time (local time zone)......2026-02-21 10:27:47
+
+Firmware software release (RAM).............HiOS-3A-09.4.04 2024-06-19 12:08
+Firmware software release (FLASH)...........HiOS-10.3.04 2025-12-08 17:00
+Firmware software release (BAK).............HiOS-09.4.04 2024-06-19 12:08
+Bootcode software release (FLASH)...........HiBOOT-GRS1040-10.3.00  2025-04-10 15:14
+
+Device hardware revision....................0202
+Device hardware description.................GRS1042-6T6ZTHH00V9HHSE3AMR
+Serial number...............................942135999000101022
+IP address (management).....................0.0.0.0
+MAC address (management)....................EC:74:BA:35:75:70
+Number of MAC Addresses (backplane).........256
+Out-of-band IP address......................192.168.199.2
+First active router IP address..............192.168.1.254
+Configuration state (running to NVM)........ok
+Configuration state (NV to ACA).............ok
+Auto Configuration Adapter, serial num......104d06ed
+
+Power Supply P1, state......................present
+Power Supply P2, state......................defective
+Current temperature.........................50 C
+
+Alarm Signal Contact 1......................None
+
+Admin state of service shell................enabled
+
+Slot  State              Description                     Serial number
+----  -----------------  ------------------------------  ------------------
+   1  fix           [x]  Fixed module                    n/a
+   2  physical      [x]  GMM40-TTTTTTTTTV9HHS999.9.99    942134999000001039
+   3  physical      [x]  GMM40-TTTTTTTTTV9HHS999.9.99    942134999000001041

@@ -1,5 +1,8 @@
 import asyncio
-from pysnmp.hlapi.v3arch.asyncio import *
+from pysnmp.hlapi.v3arch.asyncio import (
+    SnmpEngine, CommunityData, UdpTransportTarget, ContextData,
+    ObjectType, ObjectIdentity, get_cmd,
+)
 from napalm.base.exceptions import ConnectionException
 from napalm_hios.utils import log_error
 
@@ -35,7 +38,7 @@ class SNMPHIOS:
         data = {}
         for oid in oids:
             try:
-                iterator = getCmd(
+                iterator = get_cmd(
                     self.engine,
                     CommunityData(self.username, mpModel=0),
                     await UdpTransportTarget.create((self.hostname, self.port)),

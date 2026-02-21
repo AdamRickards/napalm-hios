@@ -1,0 +1,5 @@
+Temperature values and limits
+-----------------------------
+Current temperature.........................50 C
+Temperature upper limit.....................70 C
+Temperature lower limit.....................0 C

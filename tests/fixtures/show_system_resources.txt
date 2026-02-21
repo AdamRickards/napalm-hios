@@ -1,0 +1,22 @@
+System Resources
+----------------
+Resources measurement.......................enable
+
+CPU utilization.............................26%
+CPU utilization average.....................24%
+CPU running processes.......................193
+CPU maximum running processes...............213
+
+Allocated RAM...............................358548 kBytes
+Free RAM....................................148964 kBytes
+Average allocated RAM.......................358543 kBytes
+Average free RAM............................148968 kBytes
+
+Allocated flash memory (software image).....49355 kBytes
+Free flash memory (software image)..........32564 kBytes
+
+Allocated flash memory (file system)........172 kBytes
+Free flash memory (file system).............15880 kBytes
+
+Network CPU interface utilization...........0%
+Network CPU interface utilization average...0%

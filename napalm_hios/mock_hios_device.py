@@ -67,25 +67,32 @@ class MockHIOSDevice:
     def get_environment(self):
         self._check_protocol()
         return {
-            'fans': {
-                'Error': {
-                    'status': False
+            'fans': {},
+            'temperature': {
+                'chassis': {
+                    'temperature': 47.0,
+                    'is_alert': False,
+                    'is_critical': False
                 }
             },
-            'temperature': {
-                'temperature': 47.0,
-                'is_alert': False,
-                'is_critical': False
-            },
             'power': {
-                'status': True
+                'Power Supply P1': {
+                    'status': True,
+                    'capacity': -1.0,
+                    'output': -1.0
+                },
+                'Power Supply P2': {
+                    'status': False,
+                    'capacity': -1.0,
+                    'output': -1.0
+                }
             },
             'cpu': {
-                'usage': 23.0
+                '0': {'%usage': 23.0}
             },
             'memory': {
-                'available_ram': 150592,
-                'used_ram': 206328
+                'available_ram': 358548,
+                'used_ram': 209584
             }
         }
 
