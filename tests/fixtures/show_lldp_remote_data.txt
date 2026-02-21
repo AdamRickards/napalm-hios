@@ -57,6 +57,27 @@ Remote data, 3/3 - #74
              Link Agg. status...........agg. capable
              Link Agg. port ID..........0
 
+Remote data, 1/6 - #80
+             IPv4 Management address....192.168.1.254
+             IPv4 Management address....192.168.10.254
+             IPv4 Management address....192.168.20.254
+             IPv4 Management address....192.168.30.254
+             IPv4 Management address....192.168.99.254
+             IPv6 Management address....fe80::ee74:baff:fe35:7570
+             System name................GRS1042-CORE
+             System description.........Hirschmann GREYHOUND - SW: HiOS-3A-09.4.04
+             Port description...........Module: 1 Port: 6 - 2.5 Gbit
+             Chassis ID.................EC:74:BA:35:75:70 (subtype: macAddress)
+             Port ID....................EC:74:BA:35:75:76 (subtype: macAddress)
+             Autoneg. supp./enabled.....yes/yes
+             Autoneg. cap. bits.........6C:01
+                (10baseT, 10baseTFD, 100baseTX, 100baseTXFD, 1000baseTFD)
+             Port oper. MAU type........30 (1000BaseTFD)
+             Port VLAN ID...............1
+             VLAN membership............1,2,3,6,9
+             Link Agg. status...........agg. capable
+             Link Agg. port ID..........0
+
 Remote data, 1/8 - #75
              Chassis ID.................D8:CB:8A:C0:37:C8 (subtype: macAddress)
              Port ID....................D8:CB:8A:C0:37:C8 (subtype: macAddress)

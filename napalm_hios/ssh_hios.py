@@ -656,57 +656,57 @@ class SSHHIOS:
 
         return interfaces
     
-    def get_lldp_neighbors(self):
-        lldp_neighbors = {}
-        
-        # Get LLDP remote data
-        output = self.cli('show lldp remote-data')['show lldp remote-data']
-        
-        # Split the output into individual remote data sections
-        remote_data_sections = output.split('Remote data,')[1:]
-        
-        for section in remote_data_sections:
+    def _parse_lldp_remote_data(self, output):
+        """Parse 'show lldp remote-data' into structured neighbor data.
+
+        Returns dict[str, list[dict]] keyed by local port.  Each entry is
+        the full extended neighbor dict.  Handles continuation lines (lines
+        without ``....`` are appended to the previous key) and collects ALL
+        management addresses into lists.
+        """
+        result = {}
+        sections = output.split('Remote data,')[1:]
+
+        for section in sections:
             lines = section.strip().split('\n')
-            neighbor = {}
             local_port = None
-            
-            # Extract local port from the first line
+
             if lines:
-                port_info = lines[0].split('-')[0].strip()
-                local_port = port_info.split(',')[-1].strip()  # This will get '1/6' from ' 1/6 - #1'
-            
-            for line in lines[1:]:  # Skip the first line as we've already processed it
-                line = line.strip()
-                if '....' in line:
-                    key, value = [part.strip() for part in line.split('....', 1)]
-                    key = key.lower()
-                    value = value.lstrip('.')  # Remove leading dots
-                    
-                    if key == 'system name':
-                        neighbor['hostname'] = value
-                    elif key == 'port description':
-                        neighbor['port'] = value
-            
-            if local_port and 'hostname' in neighbor and 'port' in neighbor:
-                if local_port not in lldp_neighbors:
-                    lldp_neighbors[local_port] = []
-                lldp_neighbors[local_port].append(neighbor)
-        
-        return lldp_neighbors
-    
-    def get_lldp_neighbors_detail(self, interface: str = '') -> Dict[str, List[Dict[str, Any]]]:
-        lldp_neighbors_detail = {}
-        
-        # Get LLDP remote data
-        output = self.cli('show lldp remote-data')['show lldp remote-data']
-        
-        # Split the output into individual remote data sections
-        remote_data_sections = output.split('Remote data,')[1:]
-        
-        for section in remote_data_sections:
-            lines = section.strip().split('\n')
+                local_port = lines[0].split('-')[0].strip().split(',')[-1].strip()
+            if not local_port:
+                continue
+
+            # Parse dot-key lines with continuation line support
+            parsed = {}
+            last_key = None
+            mgmt_ipv4 = []
+            mgmt_ipv6 = []
+
+            for line in lines[1:]:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+
+                if '....' in stripped:
+                    key, value = [p.strip() for p in stripped.split('....', 1)]
+                    value = value.lstrip('.')
+                    key_lower = key.lower()
+                    last_key = key_lower
+
+                    if key_lower == 'ipv4 management address':
+                        mgmt_ipv4.append(value)
+                    elif key_lower == 'ipv6 management address':
+                        mgmt_ipv6.append(value)
+                    else:
+                        parsed[key_lower] = value
+                else:
+                    # Continuation line — append to previous key's value
+                    if last_key and last_key in parsed:
+                        parsed[last_key] += ' ' + stripped
+
+            # Build neighbor dict
             neighbor = {
-                'parent_interface': '',
+                'parent_interface': local_port,
                 'remote_port': '',
                 'remote_port_description': '',
                 'remote_chassis_id': '',
@@ -714,139 +714,99 @@ class SSHHIOS:
                 'remote_system_description': '',
                 'remote_system_capab': [],
                 'remote_system_enable_capab': [],
-                'remote_management_address': ''
-            }
-            local_port = None
-
-            # Extract local port from the first line
-            if lines:
-                port_info = lines[0].split('-')[0].strip()
-                local_port = port_info.split(',')[-1].strip()  # This will get '1/10' from ' 1/10 - #8'
-
-            for line in lines[1:]:  # Skip the first line as we've already processed it
-                line = line.strip()
-                if '....' in line:
-                    key, value = [part.strip() for part in line.split('....', 1)]
-                    key = key.lower()
-                    value = value.lstrip('.')  # Remove leading dots
-
-                    if key == 'ipv4 management address':
-                        neighbor['remote_management_address'] = value
-                    elif key == 'system name':
-                        neighbor['remote_system_name'] = value
-                    elif key == 'port description':
-                        neighbor['remote_port_description'] = value
-                    elif key == 'system description':
-                        neighbor['remote_system_description'] = value
-                    elif key == 'chassis id':
-                        neighbor['remote_chassis_id'] = value.split('(')[0].strip()  # Get the ID without the subtype
-                    elif key == 'port id':
-                        neighbor['remote_port'] = value.split('(')[0].strip()  # Get the ID without the subtype
-                    elif key == 'autoneg. cap. bits':
-                        if '(' in value:
-                            caps = value.split('(')[1].split(')')[0].split(',')
-                            neighbor['remote_system_capab'] = [self._map_capability(cap.strip()) for cap in caps if self._map_capability(cap.strip()) != 'other']
-                            neighbor['remote_system_enable_capab'] = neighbor['remote_system_capab'].copy()
-                        if not neighbor['remote_system_capab']:
-                            neighbor['remote_system_capab'] = []
-                            neighbor['remote_system_enable_capab'] = []
-            
-            if local_port:
-                neighbor['parent_interface'] = local_port
-                if local_port not in lldp_neighbors_detail:
-                    lldp_neighbors_detail[local_port] = []
-                lldp_neighbors_detail[local_port].append(neighbor)
-        
-        # If an interface is specified, filter the results
-        if interface:
-            return {interface: lldp_neighbors_detail.get(interface, [])}
-        
-        return lldp_neighbors_detail
-    
-    def get_lldp_neighbors_detail_extended(self, interface: str = '') -> Dict[str, List[Dict[str, Any]]]:
-        extended_lldp_details = {}
-        output = self.cli('show lldp remote-data')['show lldp remote-data']
-        remote_data_sections = output.split('Remote data,')[1:]
-        
-        for section in remote_data_sections:
-            lines = section.strip().split('\n')
-            neighbor = {
-                'parent_interface': '',
-                'remote_port': '',
-                'remote_port_description': '',
-                'remote_chassis_id': '',
-                'remote_system_name': '',
-                'remote_system_description': '',
-                'remote_system_capab': [],
-                'remote_system_enable_capab': [],
-                'remote_management_ipv4': '',
-                'remote_management_ipv6': '',
+                'remote_management_ipv4': mgmt_ipv4[0] if mgmt_ipv4 else '',
+                'remote_management_ipv6': mgmt_ipv6[0] if mgmt_ipv6 else '',
+                'management_addresses': mgmt_ipv4 + mgmt_ipv6,
                 'autoneg_support': '',
                 'autoneg_enabled': '',
                 'port_oper_mau_type': '',
                 'port_vlan_id': '',
                 'vlan_membership': [],
                 'link_agg_status': '',
-                'link_agg_port_id': ''
+                'link_agg_port_id': '',
             }
-            local_port = None
-            
-            if lines:
-                port_info = lines[0].split('-')[0].strip()
-                local_port = port_info.split(',')[-1].strip()
-            for line in lines[1:]:
-                line = line.strip()
-                if '....' in line:
-                    key, value = [part.strip() for part in line.split('....', 1)]
-                    key = key.lower()
-                    value = value.lstrip('.')
-                    if key == 'ipv4 management address':
-                        neighbor['remote_management_ipv4'] = value
-                    elif key == 'ipv6 management address':
-                        neighbor['remote_management_ipv6'] = value
-                    elif key == 'system name':
-                        neighbor['remote_system_name'] = value
-                    elif key == 'port description':
-                        neighbor['remote_port_description'] = value
-                    elif key == 'system description':
-                        neighbor['remote_system_description'] = value
-                    elif key == 'chassis id':
-                        neighbor['remote_chassis_id'] = value.split('(')[0].strip()
-                    elif key == 'port id':
-                        neighbor['remote_port'] = value.split('(')[0].strip()
-                    elif key == 'autoneg. supp./enabled':
-                        supp, enabled = value.split('/')
-                        neighbor['autoneg_support'] = supp.strip()
-                        neighbor['autoneg_enabled'] = enabled.strip()
-                    elif key == 'autoneg. cap. bits':
-                        if '(' in value:
-                            caps = value.split('(')[1].split(')')[0].split(',')
-                            neighbor['remote_system_capab'] = [self._map_capability(cap.strip()) for cap in caps if self._map_capability(cap.strip()) != 'other']
-                            neighbor['remote_system_enable_capab'] = neighbor['remote_system_capab'].copy()
-                        if not neighbor['remote_system_capab']:
-                            neighbor['remote_system_capab'] = []
-                            neighbor['remote_system_enable_capab'] = []
-                    elif key == 'port oper. mau type':
-                        neighbor['port_oper_mau_type'] = value.split('(')[-1].strip(')')
-                    elif key == 'port vlan id':
-                        neighbor['port_vlan_id'] = value
-                    elif key == 'vlan membership':
-                        neighbor['vlan_membership'] = self._parse_vlan_membership(value)
-                    elif key == 'link agg. status':
-                        neighbor['link_agg_status'] = value
-                    elif key == 'link agg. port id':
-                        neighbor['link_agg_port_id'] = value
-            
-            if local_port:
-                neighbor['parent_interface'] = local_port
-                if local_port not in extended_lldp_details:
-                    extended_lldp_details[local_port] = []
-                extended_lldp_details[local_port].append(neighbor)
-        
+
+            if 'chassis id' in parsed:
+                neighbor['remote_chassis_id'] = parsed['chassis id'].split('(')[0].strip()
+            if 'port id' in parsed:
+                neighbor['remote_port'] = parsed['port id'].split('(')[0].strip()
+            if 'system name' in parsed:
+                neighbor['remote_system_name'] = parsed['system name']
+            if 'port description' in parsed:
+                neighbor['remote_port_description'] = parsed['port description']
+            if 'system description' in parsed:
+                neighbor['remote_system_description'] = parsed['system description']
+            if 'autoneg. supp./enabled' in parsed:
+                parts = parsed['autoneg. supp./enabled'].split('/')
+                if len(parts) == 2:
+                    neighbor['autoneg_support'] = parts[0].strip()
+                    neighbor['autoneg_enabled'] = parts[1].strip()
+            if 'autoneg. cap. bits' in parsed:
+                cap_val = parsed['autoneg. cap. bits']
+                if '(' in cap_val:
+                    cap_text = cap_val.split('(', 1)[1].rsplit(')', 1)[0]
+                    caps = [c.strip() for c in cap_text.split(',') if c.strip()]
+                    neighbor['remote_system_capab'] = caps
+                    neighbor['remote_system_enable_capab'] = caps.copy()
+            if 'port oper. mau type' in parsed:
+                val = parsed['port oper. mau type']
+                neighbor['port_oper_mau_type'] = val.split('(')[-1].strip(')') if '(' in val else val
+            if 'port vlan id' in parsed:
+                neighbor['port_vlan_id'] = parsed['port vlan id']
+            if 'vlan membership' in parsed:
+                neighbor['vlan_membership'] = self._parse_vlan_membership(parsed['vlan membership'])
+            if 'link agg. status' in parsed:
+                neighbor['link_agg_status'] = parsed['link agg. status']
+            if 'link agg. port id' in parsed:
+                neighbor['link_agg_port_id'] = parsed['link agg. port id']
+
+            if local_port not in result:
+                result[local_port] = []
+            result[local_port].append(neighbor)
+
+        return result
+
+    def get_lldp_neighbors(self):
+        output = self.cli('show lldp remote-data')['show lldp remote-data']
+        parsed = self._parse_lldp_remote_data(output)
+        result = {}
+        for port, neighbors in parsed.items():
+            for n in neighbors:
+                hostname = n['remote_system_name'] or n['remote_chassis_id']
+                port_name = n['remote_port_description'] or n['remote_port']
+                if not hostname:
+                    continue
+                if port not in result:
+                    result[port] = []
+                result[port].append({'hostname': hostname, 'port': port_name})
+        return result
+
+    def get_lldp_neighbors_detail(self, interface: str = '') -> Dict[str, List[Dict[str, Any]]]:
+        output = self.cli('show lldp remote-data')['show lldp remote-data']
+        parsed = self._parse_lldp_remote_data(output)
+        result = {}
+        for port, neighbors in parsed.items():
+            result[port] = [{
+                'parent_interface': n['parent_interface'],
+                'remote_port': n['remote_port'],
+                'remote_port_description': n['remote_port_description'],
+                'remote_chassis_id': n['remote_chassis_id'],
+                'remote_system_name': n['remote_system_name'],
+                'remote_system_description': n['remote_system_description'],
+                'remote_system_capab': n['remote_system_capab'],
+                'remote_system_enable_capab': n['remote_system_enable_capab'],
+                'remote_management_address': n['remote_management_ipv4'],
+            } for n in neighbors]
         if interface:
-            return {interface: extended_lldp_details.get(interface, [])}
-        
-        return extended_lldp_details
+            return {interface: result.get(interface, [])}
+        return result
+
+    def get_lldp_neighbors_detail_extended(self, interface: str = '') -> Dict[str, List[Dict[str, Any]]]:
+        output = self.cli('show lldp remote-data')['show lldp remote-data']
+        parsed = self._parse_lldp_remote_data(output)
+        if interface:
+            return {interface: parsed.get(interface, [])}
+        return parsed
 
     def _parse_vlan_membership(self, value: str) -> List[int]:
         if value == '<n/a>' or not value:

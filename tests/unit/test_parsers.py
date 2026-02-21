@@ -198,20 +198,35 @@ class TestLldpParser(unittest.TestCase):
 
     def test_basic_neighbors_count(self):
         neighbors = self._call_parser('get_lldp_neighbors')
-        # 6 remote entries but only 4 have system name + port description
-        # (1/3 and 1/8 lack system name)
-        self.assertGreaterEqual(len(neighbors), 3)
+        # All 7 entries should appear — chassis_id fallback for FDB-only neighbors
+        self.assertEqual(len(neighbors), 7)
         self.assertIn('1/7', neighbors)
         self.assertIn('1/1', neighbors)
         self.assertIn('3/3', neighbors)
+        self.assertIn('1/3', neighbors)
+        self.assertIn('2/7', neighbors)
+        self.assertIn('1/8', neighbors)
+        self.assertIn('1/6', neighbors)
+
+    def test_basic_neighbors_fallback(self):
+        """Chassis_id used as hostname when system_name is missing."""
+        neighbors = self._call_parser('get_lldp_neighbors')
+        # 1/3 has no system name — should fall back to chassis_id
+        entry = neighbors['1/3'][0]
+        self.assertEqual(entry['hostname'], '90:EC:77:1B:6C:2B')
+        self.assertEqual(entry['port'], 'FDB')
+        # 1/8 has no system name — chassis_id fallback, port_id fallback
+        entry = neighbors['1/8'][0]
+        self.assertEqual(entry['hostname'], 'D8:CB:8A:C0:37:C8')
 
     def test_detail_gets_all_entries(self):
         detail = self._call_parser('get_lldp_neighbors_detail')
-        # All 6 entries should appear in detail (including chassis-id-only ones)
-        self.assertEqual(len(detail), 6)
+        # All 7 entries should appear in detail (including chassis-id-only ones)
+        self.assertEqual(len(detail), 7)
         self.assertIn('1/3', detail)
         self.assertIn('1/8', detail)
         self.assertIn('2/7', detail)
+        self.assertIn('1/6', detail)
 
     def test_detail_parent_interface_set(self):
         detail = self._call_parser('get_lldp_neighbors_detail')
@@ -219,12 +234,39 @@ class TestLldpParser(unittest.TestCase):
             for entry in entries:
                 self.assertEqual(entry['parent_interface'], port)
 
+    def test_detail_management_address_first(self):
+        """First IPv4 management address stored, not last."""
+        detail = self._call_parser('get_lldp_neighbors_detail')
+        # GRS1042-CORE has 5 IPv4 mgmt addresses — first should be stored
+        grs = detail['1/6'][0]
+        self.assertEqual(grs['remote_management_address'], '192.168.1.254')
+
     def test_extended_management_addresses(self):
         extended = self._call_parser('get_lldp_neighbors_detail_extended')
         # BRS50-Office has both IPv4 and IPv6 management
         office = extended['1/1'][0]
         self.assertEqual(office['remote_management_ipv4'], '192.168.1.4')
         self.assertEqual(office['remote_management_ipv6'], 'fe80::6660:38ff:fe3f:4aa1')
+        self.assertEqual(office['management_addresses'], ['192.168.1.4', 'fe80::6660:38ff:fe3f:4aa1'])
+        # GRS1042-CORE has 5 IPv4 + 1 IPv6 — all collected
+        grs = extended['1/6'][0]
+        self.assertEqual(grs['remote_management_ipv4'], '192.168.1.254')
+        self.assertEqual(len(grs['management_addresses']), 6)
+        self.assertEqual(grs['management_addresses'][0], '192.168.1.254')
+        self.assertEqual(grs['management_addresses'][4], '192.168.99.254')
+        self.assertEqual(grs['management_addresses'][5], 'fe80::ee74:baff:fe35:7570')
+
+    def test_capabilities_parsed(self):
+        """Autoneg capabilities parsed from continuation line."""
+        extended = self._call_parser('get_lldp_neighbors_detail_extended')
+        # BRS50-LOUNGE has autoneg cap bits with continuation line
+        lounge = extended['1/7'][0]
+        self.assertGreater(len(lounge['remote_system_capab']), 0)
+        self.assertIn('1000baseTFD', lounge['remote_system_capab'])
+        self.assertIn('10baseT', lounge['remote_system_capab'])
+        # 1/8 has single-cap continuation: (1000baseTFD)
+        entry = extended['1/8'][0]
+        self.assertEqual(entry['remote_system_capab'], ['1000baseTFD'])
 
     def test_extended_vlan_membership(self):
         extended = self._call_parser('get_lldp_neighbors_detail_extended')

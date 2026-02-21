@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.1.2 — 2026-02-21
+
+LLDP parser refactor — replaced three independent parsers with a single
+shared `_parse_lldp_remote_data()` method. Fixes 4 bugs found during
+live testing against GRS1042, BRS50, and GRS106.
+
+### Bug fixes
+- **Multiple management addresses lost**: GRS1042 advertises 5 IPv4 management IPs (one per VRI). Both detail methods used `=` assignment, storing only the last one. Now collects all into a list; `remote_management_address`/`remote_management_ipv4` returns the first.
+- **`get_lldp_neighbors()` drops valid entries**: previously required both `system_name` AND `port_description`, silently dropping FDB-only neighbors. Now falls back to `chassis_id` for hostname and `port_id` for port.
+- **Detail and extended duplicate parsing logic**: ~100 lines of near-identical code consolidated into shared `_parse_lldp_remote_data()`.
+- **Capabilities never parsed**: `Autoneg. cap. bits` continuation line `(10baseT, ...)` was never processed because it lacks `....`. Continuation lines are now appended to the previous key's value.
+
+### New fields
+- `management_addresses` list on extended detail — contains all IPv4 + IPv6 management addresses
+
+### Test additions
+- `test_basic_neighbors_fallback` — verifies chassis_id used as hostname when system_name missing
+- `test_detail_management_address_first` — verifies first IPv4 stored, not last
+- `test_capabilities_parsed` — verifies `remote_system_capab` populated from continuation line
+- Updated `test_basic_neighbors_count` and `test_extended_management_addresses` for new behavior
+
 ## 1.1.1 — 2026-02-21
 
 NAPALM compliance audit — tested all getters against 4 live devices

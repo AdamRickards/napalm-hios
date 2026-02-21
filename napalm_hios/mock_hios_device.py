@@ -150,10 +150,28 @@ class MockHIOSDevice:
     def get_lldp_neighbors(self):
         self._check_protocol()
         return {
+            '1/3': [
+                {
+                    'hostname': '90:EC:77:1B:6C:2B',
+                    'port': 'FDB'
+                }
+            ],
+            '2/7': [
+                {
+                    'hostname': '00:0C:42:04:7C:74',
+                    'port': 'FDB'
+                }
+            ],
             '1/7': [
                 {
                     'hostname': 'BRS50-LOUNGE',
                     'port': 'Module: 1 Port: 5 - 1 Gbit'
+                }
+            ],
+            '1/1': [
+                {
+                    'hostname': 'BRS50-Office',
+                    'port': 'Module: 1 Port: 1 - 2.5 Gbit'
                 }
             ],
             '3/3': [
@@ -162,10 +180,16 @@ class MockHIOSDevice:
                     'port': 'eth1'
                 }
             ],
-            '1/1': [
+            '1/6': [
                 {
-                    'hostname': 'BRS50-Office',
-                    'port': 'Module: 1 Port: 1 - 2.5 Gbit'
+                    'hostname': 'GRS1042-CORE',
+                    'port': 'Module: 1 Port: 6 - 2.5 Gbit'
+                }
+            ],
+            '1/8': [
+                {
+                    'hostname': 'D8:CB:8A:C0:37:C8',
+                    'port': 'D8:CB:8A:C0:37:C8'
                 }
             ]
         }
