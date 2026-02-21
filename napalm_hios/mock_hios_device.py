@@ -50,7 +50,7 @@ class MockHIOSDevice:
                 'last_flapped': -1.0,
                 'speed': 2500000000,
                 'mtu': 1518,
-                'mac_address': ''
+                'mac_address': 'EC:74:BA:35:75:70'
             },
             '1/2': {
                 'is_up': False,
@@ -59,7 +59,7 @@ class MockHIOSDevice:
                 'last_flapped': -1.0,
                 'speed': 2500000000,
                 'mtu': 1518,
-                'mac_address': ''
+                'mac_address': 'EC:74:BA:35:75:70'
             },
             # ... (add more interfaces as needed)
         }
@@ -182,7 +182,8 @@ class MockHIOSDevice:
                     'remote_system_name': 'BRS50-Office',
                     'remote_system_description': 'Hirschmann BOBCAT - SW: HiOS-2A-10.0.00',
                     'remote_system_capab': [],
-                    'remote_system_enable_capab': []
+                    'remote_system_enable_capab': [],
+                    'remote_management_address': '192.168.1.4'
                 }
             ],
             # ... (add more interfaces as needed)
@@ -335,8 +336,8 @@ class MockHIOSDevice:
             'contact': 'admin@example.com',
             'location': 'SSH Lab',
             'community': {
-                'public': 'read-only',
-                'private': 'read-write'
+                'public': {'acl': '', 'mode': 'ro'},
+                'private': {'acl': '', 'mode': 'rw'}
             }
         }
 

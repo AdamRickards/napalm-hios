@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.1 — 2026-02-21
+
+NAPALM compliance audit — tested all getters against 4 live devices
+(GRS1042, 2× BRS50, GRS106-ALPHA with 10G SFP+).
+
+### Bug fixes
+- **Speed parser**: `10G full` format now handled correctly (was returning speed=0 on 10G SFP+ ports). `parse_show_port` now uses `_parse_speed()` which handles `10G`, `2500`, `100G`, etc.
+- **LLDP management address**: `get_lldp_neighbors_detail()` now parses and returns `remote_management_address` from `IPv4 Management address` LLDP TLV
+- **SNMP community format**: now returns NAPALM-standard `{name: {acl: "", mode: "ro"}}` instead of non-standard `{name: "ro"}`
+- **Interface MAC address**: `get_interfaces()` now populates `mac_address` with the device base MAC from `show system info`
+
+### Test additions
+- Added `test_speed_10g` — validates 10G/2500/1000 speed parsing in simulated show port output
+- Added `test_mac_address_populated` — verifies base MAC propagation to all interfaces
+
 ## 1.1.0 — 2026-02-21
 
 Refactored all CLI parsers to use shared infrastructure. Tested against

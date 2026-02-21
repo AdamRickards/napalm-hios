@@ -110,6 +110,33 @@ class TestShowPortParser(unittest.TestCase):
         # 2/7 has auto mode but "100 full" phys stat
         self.assertEqual(interfaces['2/7']['speed'], 100000000)
 
+    def test_speed_10g(self):
+        """10G format (e.g. GRS106) must be handled by _parse_speed."""
+        # Simulated show port line with 10G speed format
+        output = (
+            "Interface   Role   Admin mode  Phys. mode   Cross  Phys. stat  Link  STP state\n"
+            "Name\n"
+            "----------  -----  ----------  -----------  -----  ----------  ----  ----------\n"
+            " 1/1        none   Enabled     10G full     mdi    10G full    up    forwarding\n"
+            "            -\n"
+            " 1/2        none   Enabled     2500 full    mdi    2500 full   up    forwarding\n"
+            "            -\n"
+            " 1/3        none   Enabled     auto         mdix   1000 full   up    forwarding\n"
+            "            -\n"
+        )
+        interfaces = self.ssh.parse_show_port(output)
+        self.assertEqual(interfaces['1/1']['speed'], 10000000000)
+        self.assertEqual(interfaces['1/2']['speed'], 2500000000)
+        self.assertEqual(interfaces['1/3']['speed'], 1000000000)
+
+    def test_mac_address_populated(self):
+        """Base MAC should be passed through to all interfaces."""
+        output = load_fixture('show_port.txt')
+        mac = 'EC:74:BA:35:75:70'
+        interfaces = self.ssh.parse_show_port(output, base_mac=mac)
+        for name, data in interfaces.items():
+            self.assertEqual(data['mac_address'], mac, f'{name} missing mac_address')
+
     def test_no_dash_interfaces(self):
         """Continuation lines should not create spurious interfaces."""
         output = load_fixture('show_port.txt')

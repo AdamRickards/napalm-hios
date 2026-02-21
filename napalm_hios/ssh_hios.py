@@ -69,6 +69,11 @@ class SSHHIOS:
         port_output = self.cli('show port')['show port']
         mtu_output = self.cli('show mtu')['show mtu']
 
+        # Get base MAC for interface mac_address field
+        sys_output = self.cli('show system info')['show system info']
+        sys_data = parse_dot_keys(sys_output)
+        base_mac = sys_data.get('MAC address (management)', '')
+
         # Parse MTU table — format: Interface  MTU (with ---- separator)
         mtu_dict = {}
         for fields in parse_table(mtu_output, min_fields=2):
@@ -77,9 +82,9 @@ class SSHHIOS:
             except (ValueError, IndexError):
                 continue
 
-        return self.parse_show_port(port_output, mtu_dict)
+        return self.parse_show_port(port_output, mtu_dict, base_mac)
 
-    def parse_show_port(self, output, mtu_dict=None):
+    def parse_show_port(self, output, mtu_dict=None, base_mac=''):
         """Parse the 'show port' command output from HIOS device.
 
         HiOS show port has 2 lines per interface.  The first line has:
@@ -107,19 +112,18 @@ class SSHHIOS:
             link_status = fields[-2]
             admin_mode = fields[2]
 
-            # Speed: look for a numeric value anywhere after admin_mode.
+            # Speed: look for a speed value anywhere after admin_mode.
             # Prefer Phys. Stat (actual negotiated) over Phys. Mode (configured).
             # Phys. Stat sits between Cross and Link — scan right-to-left for
-            # the first integer that looks like a speed.
+            # the first value that looks like a speed (handles 10G, 2500, etc.).
             speed = 0
             for f in reversed(fields[3:-2]):
-                if f == '-':
+                if f in ('-', 'full', 'half'):
                     continue
-                try:
-                    speed = int(f)
+                parsed = self._parse_speed(f)
+                if parsed > 0:
+                    speed = parsed
                     break
-                except ValueError:
-                    continue
 
             mtu = mtu_dict.get(name, 1500) if mtu_dict else 1500
 
@@ -130,7 +134,7 @@ class SSHHIOS:
                 "last_flapped": -1.0,
                 "speed": speed * 1000000,
                 "mtu": mtu,
-                "mac_address": ""
+                "mac_address": base_mac
             }
 
         return interfaces
@@ -709,23 +713,26 @@ class SSHHIOS:
                 'remote_system_name': '',
                 'remote_system_description': '',
                 'remote_system_capab': [],
-                'remote_system_enable_capab': []
+                'remote_system_enable_capab': [],
+                'remote_management_address': ''
             }
             local_port = None
-            
+
             # Extract local port from the first line
             if lines:
                 port_info = lines[0].split('-')[0].strip()
                 local_port = port_info.split(',')[-1].strip()  # This will get '1/10' from ' 1/10 - #8'
-            
+
             for line in lines[1:]:  # Skip the first line as we've already processed it
                 line = line.strip()
                 if '....' in line:
                     key, value = [part.strip() for part in line.split('....', 1)]
                     key = key.lower()
                     value = value.lstrip('.')  # Remove leading dots
-                    
-                    if key == 'system name':
+
+                    if key == 'ipv4 management address':
+                        neighbor['remote_management_address'] = value
+                    elif key == 'system name':
                         neighbor['remote_system_name'] = value
                     elif key == 'port description':
                         neighbor['remote_port_description'] = value
@@ -1231,14 +1238,17 @@ class SSHHIOS:
             snmp_info['contact'] = sys_data.get('System contact', '')
             snmp_info['location'] = sys_data.get('System location', '')
 
-            # Get community strings
+            # Get community strings — NAPALM standard: {name: {acl: str, mode: str}}
             comm_output = self.cli('show snmp community')['show snmp community']
             if 'Error' not in comm_output:
                 rows = parse_table(comm_output, min_fields=2)
                 for fields in rows:
                     community = fields[0]
-                    access = 'ro' if 'read-only' in ' '.join(fields[1:]).lower() else 'rw'
-                    snmp_info['community'][community] = access
+                    mode = 'ro' if 'read-only' in ' '.join(fields[1:]).lower() else 'rw'
+                    snmp_info['community'][community] = {
+                        'acl': '',
+                        'mode': mode
+                    }
 
         except Exception as e:
             log_error(logger, f"Error retrieving SNMP information: {str(e)}")
