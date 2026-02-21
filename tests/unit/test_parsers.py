@@ -257,16 +257,16 @@ class TestLldpParser(unittest.TestCase):
         self.assertEqual(grs['management_addresses'][5], 'fe80::ee74:baff:fe35:7570')
 
     def test_capabilities_parsed(self):
-        """Autoneg capabilities parsed from continuation line."""
+        """System capabilities should be empty — HiOS CLI doesn't expose them.
+
+        The 'autoneg. cap. bits' field contains 802.3 MAU types (10baseT, etc.),
+        NOT LLDP system capabilities (bridge, router, etc.).
+        """
         extended = self._call_parser('get_lldp_neighbors_detail_extended')
-        # BRS50-LOUNGE has autoneg cap bits with continuation line
         lounge = extended['1/7'][0]
-        self.assertGreater(len(lounge['remote_system_capab']), 0)
-        self.assertIn('1000baseTFD', lounge['remote_system_capab'])
-        self.assertIn('10baseT', lounge['remote_system_capab'])
-        # 1/8 has single-cap continuation: (1000baseTFD)
+        self.assertEqual(lounge['remote_system_capab'], [])
         entry = extended['1/8'][0]
-        self.assertEqual(entry['remote_system_capab'], ['1000baseTFD'])
+        self.assertEqual(entry['remote_system_capab'], [])
 
     def test_extended_vlan_membership(self):
         extended = self._call_parser('get_lldp_neighbors_detail_extended')

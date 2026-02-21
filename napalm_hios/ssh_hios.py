@@ -822,13 +822,10 @@ class SSHHIOS:
                 if len(parts) == 2:
                     neighbor['autoneg_support'] = parts[0].strip()
                     neighbor['autoneg_enabled'] = parts[1].strip()
-            if 'autoneg. cap. bits' in parsed:
-                cap_val = parsed['autoneg. cap. bits']
-                if '(' in cap_val:
-                    cap_text = cap_val.split('(', 1)[1].rsplit(')', 1)[0]
-                    caps = [c.strip() for c in cap_text.split(',') if c.strip()]
-                    neighbor['remote_system_capab'] = caps
-                    neighbor['remote_system_enable_capab'] = caps.copy()
+            # Note: 'autoneg. cap. bits' contains 802.3 PHY-level MAU types
+            # (e.g. 10baseT, 1000baseTFD), NOT LLDP system capabilities
+            # (bridge, router, etc.).  HiOS CLI does not expose the system
+            # capabilities TLV, so remote_system_capab stays empty.
             if 'port oper. mau type' in parsed:
                 val = parsed['port oper. mau type']
                 neighbor['port_oper_mau_type'] = val.split('(')[-1].strip(')') if '(' in val else val
@@ -933,8 +930,8 @@ class SSHHIOS:
                     'vlan': int(fields[0]),
                     'static': fields[4].lower() != 'learned',
                     'active': True,
-                    'moves': None,
-                    'last_move': None
+                    'moves': 0,
+                    'last_move': 0.0
                 })
             except (ValueError, IndexError):
                 continue

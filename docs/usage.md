@@ -65,7 +65,7 @@ device.close()
 
 ## Available Methods
 
-The NAPALM HiOS driver supports the following methods:
+### Standard NAPALM getters (SSH + SNMP)
 
 - `get_facts()`
 - `get_interfaces()`
@@ -73,34 +73,39 @@ The NAPALM HiOS driver supports the following methods:
 - `get_interfaces_counters()`
 - `get_lldp_neighbors()`
 - `get_lldp_neighbors_detail()`
-- `get_lldp_neighbors_detail_extended()` This is a custom HiOS method
 - `get_mac_address_table()`
 - `get_arp_table()`
 - `get_ntp_servers()`
 - `get_ntp_stats()`
 - `get_users()`
 - `get_optics()`
-- `get_config()`
 - `get_environment()`
 - `get_snmp_information()`
-- `ping()`
 - `get_vlans()`
-- `cli()`
 
-Note: Configuration-related methods like `load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, and `rollback()` are not implemented for this device.
+### SSH-only standard methods
 
-## Custom Method(s)
+- `get_config()` — CLI scraping
+- `ping()` — device-originated ping
+- `cli()` — raw command execution
 
-### get_lldp_neighbors_detail_extended(interface="")
+### Vendor-specific methods (SSH + SNMP)
 
-Retrives extended LLDP data beyond the scope of the NAPALM driver, but in a seperate method so as to not conflict with compatability.
-We accept a single argument to filter results by an interface, otherwise all interfaces are iterated through and returned.
-We return all values supported by HiOS when executing the cli command 'show lldp remote-data' and the purpose of this method is to get the IPv4 or IPv6 management address.
+- `get_mrp()` — MRP ring redundancy status
+- `get_hidiscovery()` — HiDiscovery protocol status
+- `get_lldp_neighbors_detail_extended()` — LLDP with 802.1/802.3 extensions
+- `get_config_status()` — check if running config is saved to NVM
+- `save_config()` — save running config to NVM
 
-**Arguments:**
-- `interface` (str): The interface as it appears in the device, can you review the returned values from get_lldp_neighbors(), get_lldp_neighbors_detail() or get_lldp_neighbors_detail_extended() for the interface name.
+### Vendor-specific write operations (SSH-only)
 
-**Arguments:** 
+- `set_mrp()` — configure MRP ring on default domain
+- `delete_mrp()` — disable and delete MRP domain
+- `set_hidiscovery()` — set HiDiscovery mode (on/off/read-only)
+
+Note: Configuration-related methods (`load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, `rollback()`) are not implemented — HiOS does not support candidate configurations.
+
+For vendor-specific method details, see [vendor_specific.md](vendor_specific.md).
 
 ## Method Details
 
@@ -205,13 +210,24 @@ Note: This method is only available when using the SSH protocol.
 
 The NAPALM HiOS driver supports multiple protocols for device communication:
 
-1. **SSH**: The primary and recommended protocol. It supports all implemented methods and provides the most comprehensive functionality.
+1. **SSH**: Supports all 23 methods (20 getters + 3 write operations) plus `get_config`, `ping`, and `cli`. Uses Netmiko for CLI interaction.
 
-2. **SNMP**: Supports a subset of read-only operations. It's useful for basic monitoring and information gathering without requiring CLI access.
+2. **SNMPv3**: Supports all 20 read getters plus `save_config` (via SNMP SET). Uses authPriv (MD5/DES) matching HiOS factory defaults. Lower overhead than SSH, no session state, doesn't consume SSH session slots. Short passwords (< 8 chars, including the default `private`) are supported via pre-computed master keys.
 
-3. **NETCONF**: Currently implemented but with limited functionality. It may be expanded in future versions for more robust XML-based interactions.
+3. **NETCONF**: Stub implementation only — not usable for production.
 
-You can specify the protocol preference in the `optional_args` when initializing the driver. The driver will attempt to connect using the protocols in the order specified.
+You can specify the protocol preference in the `optional_args` when initializing the driver. The driver tries each protocol in order and uses the first one that connects successfully.
+
+```python
+# SNMP-only (recommended for monitoring)
+device = driver(hostname, user, pw, optional_args={'protocol_preference': ['snmp']})
+
+# SSH-only (needed for write operations, get_config, ping, cli)
+device = driver(hostname, user, pw, optional_args={'protocol_preference': ['ssh']})
+
+# Default: SSH first, SNMP fallback
+device = driver(hostname, user, pw)
+```
 
 ## Error Handling
 
@@ -255,7 +271,7 @@ with driver(hostname, username, password) as device:
 
 ## Best Practices
 
-1. **Use SSH when possible**: SSH provides the most comprehensive functionality and is the recommended protocol for interacting with HiOS devices.
+1. **Use SNMP for monitoring, SSH for configuration**: SNMP supports all 20 read getters with lower overhead. Use SSH when you need `get_config`, `ping`, `cli`, or write operations (`set_mrp`, `set_hidiscovery`).
 
 2. **Handle exceptions**: Always wrap your code in try-except blocks to handle potential exceptions gracefully.
 

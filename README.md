@@ -1,13 +1,14 @@
 # NAPALM HiOS Driver
 
-This is a NAPALM driver for HiOS network switches by Belden. It currently supports SSH protocol for interacting with HiOS devices.
+NAPALM driver for Hirschmann HiOS industrial switches by Belden. Supports SSH and SNMPv3 protocols with full getter parity across both.
 
 ## Features
 
-- Supports SSH protocol
-- Implements standard NAPALM methods
-- Includes comprehensive unit and integration tests
-- Offers a mock device for testing and development
+- **Dual protocol**: SSH and SNMPv3 with automatic failover
+- **SNMPv3 authPriv** (MD5/DES) — works with HiOS factory defaults including short passwords
+- **20 getters** on both SSH + SNMP, plus 3 SSH-only methods and 3 SSH-only write operations
+- Vendor-specific: MRP ring redundancy, HiDiscovery, extended LLDP, config save/status
+- Comprehensive unit tests (146+) and live device validation
 
 ## Installation
 
@@ -54,7 +55,7 @@ This docuemntation was written by Claude from Anthropic so if anything is wrong 
 
 ## Supported Methods
 
-The NAPALM HiOS driver supports the following standard NAPALM methods:
+### Standard NAPALM getters (SSH + SNMP)
 
 - `get_facts()`
 - `get_interfaces()`
@@ -68,17 +69,33 @@ The NAPALM HiOS driver supports the following standard NAPALM methods:
 - `get_ntp_stats()`
 - `get_users()`
 - `get_optics()`
-- `get_config()`
 - `get_environment()`
 - `get_snmp_information()`
-- `ping()`
 - `get_vlans()`
 
-Note: Configuration-related methods like `load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, and `rollback()` are not currently implemented.
+### SSH-only standard methods
 
-For vendor-specific methods (MRP ring redundancy, HiDiscovery, extended LLDP), see [docs/vendor_specific.md](docs/vendor_specific.md).
+- `get_config()` — CLI scraping
+- `ping()` — device-originated ping
+- `cli()` — raw command execution
 
-For a complete list and detailed explanations of standard methods, see the [documentation](docs/usage.md).
+### Vendor-specific methods (SSH + SNMP)
+
+- `get_mrp()` — MRP ring redundancy status
+- `get_hidiscovery()` — HiDiscovery protocol status
+- `get_lldp_neighbors_detail_extended()` — LLDP with 802.1/802.3 extensions
+- `get_config_status()` — check if running config is saved to NVM
+- `save_config()` — save running config to NVM
+
+### Vendor-specific write operations (SSH-only)
+
+- `set_mrp()` — configure MRP ring on default domain
+- `delete_mrp()` — disable and delete MRP domain
+- `set_hidiscovery()` — set HiDiscovery mode (on/off/read-only)
+
+Note: Configuration-related methods (`load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, `rollback()`) are not implemented — HiOS does not support candidate configurations.
+
+For vendor-specific method details, see [docs/vendor_specific.md](docs/vendor_specific.md). For standard method details, see [docs/usage.md](docs/usage.md).
 
 ## Example
 
@@ -116,9 +133,86 @@ Note: The mock device functionality is still in development
 
 Some musings about what to do for next release, [Wishlist](TODO.md), feel free to make suggestions if you have a specific need.
 
+## Protocol Support
+
+The driver supports SSH and SNMPv3 protocols, selected via `protocol_preference` in `optional_args`. Default order: SSH → SNMP → NETCONF.
+
+### SNMP Configuration
+
+SNMPv3 authPriv (MD5/DES) is used when a password is provided — this matches HiOS factory defaults where SNMPv1/v2c are disabled. HiOS CLI users are the SNMPv3 users (same username/password). Falls back to SNMPv2c when password is empty (community-only mode).
+
+```python
+device = driver(
+    hostname='192.168.1.4',
+    username='admin',
+    password='private',
+    optional_args={'protocol_preference': ['snmp']}
+)
+```
+
+Short passwords (< 8 chars, including the HiOS default `private`) are handled by pre-computing the MD5 master key, bypassing pysnmp's RFC 3414 minimum length enforcement.
+
+### SSH vs SNMP — Known Differences
+
+Both protocols implement the same NAPALM getters, but there are inherent differences in the data returned:
+
+| # | Area | SSH | SNMP | Impact |
+|---|------|-----|------|--------|
+| 1 | **cpu/1 interface** | Not exposed | Exposed via IF-MIB | SNMP returns +1 interface in `get_facts`, `get_interfaces`, `get_interfaces_counters`, `get_interfaces_ip` |
+| 2 | **MAC addresses** | Base MAC (same for all ports, uppercase) | Per-port incrementing MAC (lowercase) | `get_interfaces` mac_address field differs |
+| 3 | **Speed on down ports** | Shows configured speed | ifHighSpeed=0 when link is down | `get_interfaces` speed field differs for down ports |
+| 4 | **Counters** | 32-bit counters | 64-bit HC counters (more accurate) | SNMP counters wrap at 2^64 instead of 2^32 |
+| 5 | **VLANs** | Configured membership only | Egress bitmap (superset) | SNMP `get_vlans` may show extra ports |
+| 6 | **ARP on L2 devices** | Fails gracefully (empty list) | Returns empty (no error) | Both return `[]`, but SSH may log a warning |
+| 7 | **SNMP communities** | Readable via CLI | Cannot query via SNMP (security) | SNMP `get_snmp_information` always has empty `community` dict |
+| 8 | **ARP age** | Calculated from CLI output (seconds) | Always 0.0 (not in standard MIB) | `get_arp_table` age field differs on L3 devices |
+| 9 | **LLDP system capabilities** | Not exposed by HiOS CLI | Decoded from LLDP-MIB bitmap | SSH `remote_system_capab` is always `[]`, SNMP returns actual capabilities |
+| 10 | **Management interface name** | `vlan/N` (from CLI) | `cpu/1` (from IF-MIB) | `get_interfaces_ip` key name differs |
+| 11 | **HiDiscovery relay** | Omitted on L2 devices (CLI doesn't output it) | Always present (MIB returns a value) | SNMP `get_hidiscovery` may include `relay` field when SSH doesn't |
+
+### Implementation Priority
+
+When implementing getters, this priority order is followed:
+
+1. **NAPALM spec compliance** — match the standard return format
+2. **SSH/SNMP alignment** — same keys, same structure, minimal surprises
+3. **Raw OID accuracy** — use the most precise MIB data available
+4. **Error handling** — graceful degradation, never crash on missing data
+
+### Getter Availability by Protocol
+
+| Method | SSH | SNMP | Notes |
+|--------|-----|------|-------|
+| `get_facts` | Yes | Yes | |
+| `get_interfaces` | Yes | Yes | |
+| `get_interfaces_ip` | Yes | Yes | |
+| `get_interfaces_counters` | Yes | Yes | |
+| `get_lldp_neighbors` | Yes | Yes | |
+| `get_lldp_neighbors_detail` | Yes | Yes | |
+| `get_lldp_neighbors_detail_extended` | Yes | Yes | Vendor; SNMP adds 802.1/802.3 data |
+| `get_mac_address_table` | Yes | Yes | |
+| `get_arp_table` | Yes | Yes | |
+| `get_vlans` | Yes | Yes | |
+| `get_snmp_information` | Yes | Yes | |
+| `get_environment` | Yes | Yes | |
+| `get_optics` | Yes | Yes | |
+| `get_users` | Yes | Yes | |
+| `get_ntp_servers` | Yes | Yes | |
+| `get_ntp_stats` | Yes | Yes | |
+| `get_mrp` | Yes | Yes | Vendor (MRP ring redundancy) |
+| `get_hidiscovery` | Yes | Yes | Vendor (HiDiscovery protocol) |
+| `get_config_status` | Yes | Yes | Vendor (NVM/ACA/boot sync state) |
+| `save_config` | Yes | Yes | Vendor (save running-config to NVM) |
+| `get_config` | Yes | No | SSH-only (CLI scraping) |
+| `ping` | Yes | No | SSH-only |
+| `cli` | Yes | No | SSH-only |
+| `set_mrp` / `delete_mrp` | Yes | No | SSH-only write operations |
+| `set_hidiscovery` | Yes | No | SSH-only write operation |
+
 ## Known Issues
 
-Since we have focused on SSH driver with fallback methods saying "Protocol Not Implemented" for the other protocols we plan to support, if SSH connection fails you might get a response of "Protocol Not Implemented".
+- If a method is only available on SSH (e.g. `get_config`, `ping`, `cli`, write operations) and the active connection is SNMP, calling it raises `NotImplementedError`.
+- NETCONF support is stub-only — not usable for production.
 
 ## Contributing
 

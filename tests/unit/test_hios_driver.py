@@ -197,7 +197,7 @@ class TestHIOSDriver(unittest.TestCase):
     def test_get_mac_address_table(self):
         self.mock_connection.get_mac_address_table.return_value = [
             {"mac": "12:dd:6e:60:34:4b", "interface": "1/7", "vlan": 1,
-             "static": False, "active": True, "moves": None, "last_move": None}
+             "static": False, "active": True, "moves": 0, "last_move": 0.0}
         ]
         mac_table = self.device.get_mac_address_table()
         self.assertEqual(len(mac_table), 1)

@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.2.1 — 2026-02-21
+
+### SNMP Phase 2 complete — full SSH/SNMP getter parity
+
+All 20 read getters now work on both SSH and SNMP. The driver provides
+identical return formats regardless of protocol, with 11 documented
+inherent differences (see README).
+
+### New SNMP methods
+- **`get_config_status()`** via SNMP: reads HM2-FILEMGMT-MIB scalars (hm2FMNvmState, hm2FMEnvmState, hm2FMBootParamState). Maps SNMP integer values to SSH-matching strings (`'out of sync'`, not `'outOfSync'`).
+- **`save_config()`** via SNMP: uses HM2-FILEMGMT-MIB action table — GETs advisory lock key, SETs hm2FMActionActivate to trigger copy(running-config → NVM), polls NVM state until not busy.
+- SNMP SET support added (`_set_scalar()` method) — same auth stack as read operations (SNMPv3 authPriv MD5/DES).
+
+### Dispatch fixes
+- **`get_config_status()`** and **`save_config()`** now dispatched through `HIOSDriver` for both SSH and SNMP.
+- **`set_mrp()`**, **`delete_mrp()`**, **`set_hidiscovery()`** now dispatched through `HIOSDriver` (SSH-only). Previously only accessible via `device.ssh.set_mrp()`.
+
+### Documentation
+- README: updated supported methods list, getter availability table, known issues
+- vendor_specific.md: updated access patterns to use `device.get_xxx()` dispatch
+- usage.md: updated method list, protocol information
+- Comprehensive SSH vs SNMP method audit documented
+
+### Test additions
+- `test_get_config_status_saved` — all 3 MIB scalars return ok → saved=True
+- `test_get_config_status_unsaved` — NVM out of sync, ExtNVM absent → saved=False
+- `test_save_config` — mock GET key + SET action + poll → verify correct OID and key value
+
+
 ## 1.2.0 — 2026-02-21
 
 ### Bug fixes
