@@ -1,0 +1,7 @@
+Part ID           Module type Temp [C/F] TxPower [dBm/mW] RxPower [dBm/mW]
+Intf Serial number     Connector
+---- ----------------- ----------- ---------- ---------------- ----------------
+ 1/1 M-SFP-2.5-MM EEC  SFP         46/115     -4.2 /0.3763     -4.4 /0.3606
+     N16A1H6           LC
+ 1/2 M-SFP-2.5-MM EEC  SFP         42/108     -4.2 /0.3770     -4.8 /0.3429
+     N16A2TK           LC

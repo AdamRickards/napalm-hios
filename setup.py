@@ -7,14 +7,14 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="napalm-hios",
-    version="1.0.1",
+    version="1.1.0",
     packages=find_packages(),
     description="NAPALM driver for HiOS network switches by Belden",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    author="Your Name",
-    author_email="your.email@example.com",
-    url="https://github.com/yourusername/napalm-hios",
+    author="Adam Rickards",
+    author_email="adam_rickards@hotmail.com",
+    url="https://github.com/AdamRickards/napalm-hios",
     install_requires=[
         "napalm>=3.0.0",
         "ncclient>=0.6.9",

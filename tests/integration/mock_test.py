@@ -28,7 +28,9 @@ class TestMockHIOSDevice(unittest.TestCase):
         env = self.driver.get_environment()
         self.assertIn('cpu', env)
         self.assertIn('memory', env)
-        self.assertEqual(env['temperature']['temperature'], 47.0)
+        self.assertEqual(env['temperature']['chassis']['temperature'], 47.0)
+        self.assertIn('%usage', env['cpu']['0'])
+        self.assertGreater(env['memory']['available_ram'], env['memory']['used_ram'])
 
     def test_get_interfaces_ip(self):
         interfaces_ip = self.driver.get_interfaces_ip()
