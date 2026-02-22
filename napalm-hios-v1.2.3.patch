@@ -1,0 +1,201 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index b786028..cce511c 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -1,5 +1,14 @@
+ # Changelog
+ 
++## 1.2.3 — 2026-02-22
++
++### Bugfix: remove link-up safety check from set_mrp()
++
++Removed the link-up port rejection from `set_mrp()` on both SSH and SNMP.
++This was a lab testing guardrail that prevented configuring MRP on ports
++with active links — not appropriate for production use where MRP is always
++configured on connected uplink ports.
++
+ ## 1.2.2 — 2026-02-21
+ 
+ ### SNMP write operations — set_mrp, delete_mrp, set_hidiscovery
+@@ -9,7 +18,7 @@ The driver is now fully protocol-agnostic for all 23 methods except
+ `get_config`, `ping`, and `cli` (which are inherently CLI-based).
+ 
+ ### New SNMP write methods
+-- **`set_mrp()`** via SNMP: RowStatus pattern on HM2-L2REDUNDANCY-MIB — createAndWait → SET columns → activate. Default domain UUID (all-FF). Same link-up safety check as SSH.
++- **`set_mrp()`** via SNMP: RowStatus pattern on HM2-L2REDUNDANCY-MIB — createAndWait → SET columns → activate. Default domain UUID (all-FF).
+ - **`delete_mrp()`** via SNMP: SET RowStatus to notInService then destroy.
+ - **`set_hidiscovery()`** via SNMP: SET hm2NetHiDiscoveryOperation + hm2NetHiDiscoveryMode scalars.
+ 
+@@ -25,7 +34,6 @@ The driver is now fully protocol-agnostic for all 23 methods except
+ ### Test additions
+ - `test_set_hidiscovery_off/on/ro/invalid` — mode cycling and validation
+ - `test_set_mrp_create_enable` — domain creation via RowStatus pattern
+-- `test_set_mrp_safety_rejects_linkup` — link-up port rejection
+ - `test_set_mrp_unsupported_recovery_delay` — hardware capability check
+ - `test_delete_mrp` — notInService + destroy sequence
+ - Live validated: full MRP cycle (create/reconfigure/disable/delete) on GRS1042
+diff --git a/napalm_hios/snmp_hios.py b/napalm_hios/snmp_hios.py
+index 9a49560..56de239 100644
+--- a/napalm_hios/snmp_hios.py
++++ b/napalm_hios/snmp_hios.py
+@@ -1658,12 +1658,11 @@ class SNMPHIOS:
+         Args:
+             operation: 'enable' or 'disable'
+             mode: 'manager' or 'client'
+-            port_primary: primary ring port (e.g. '1/3'). Must be link-down.
+-            port_secondary: secondary ring port (e.g. '1/4'). Must be link-down.
++            port_primary: primary ring port (e.g. '1/3')
++            port_secondary: secondary ring port (e.g. '1/4')
+             vlan: VLAN ID for MRP domain (0-4042)
+             recovery_delay: '200ms', '500ms', '30ms', or '10ms'
+ 
+-        Raises ValueError if specified ports are currently link-up.
+         Creates the default domain if none exists.
+         """
+         if operation not in ('enable', 'disable'):
+@@ -1679,16 +1678,6 @@ class SNMPHIOS:
+         engine = SnmpEngine()
+         sfx = MRP_DEFAULT_DOMAIN_SUFFIX
+ 
+-        # Safety: verify ring ports are link-down before configuring
+-        if operation == 'enable' and (port_primary or port_secondary):
+-            interfaces = await self._get_interfaces_async()
+-            for port, label in [(port_primary, 'primary'), (port_secondary, 'secondary')]:
+-                if port and port in interfaces and interfaces[port]['is_up']:
+-                    raise ValueError(
+-                        f"Refusing to configure MRP: {label} port {port} is currently link-up. "
+-                        f"Only configure MRP on disconnected ports to avoid production impact."
+-                    )
+-
+         # Build reverse ifName → ifIndex map for port resolution
+         ifmap = await self._build_ifindex_map(engine)
+         name_to_idx = {name: int(idx) for idx, name in ifmap.items()}
+diff --git a/napalm_hios/ssh_hios.py b/napalm_hios/ssh_hios.py
+index 4653b7f..febe68f 100644
+--- a/napalm_hios/ssh_hios.py
++++ b/napalm_hios/ssh_hios.py
+@@ -1450,12 +1450,11 @@ class SSHHIOS:
+         Args:
+             operation: 'enable' or 'disable'
+             mode: 'manager' or 'client'
+-            port_primary: primary ring port (e.g. '1/3'). Must be link-down.
+-            port_secondary: secondary ring port (e.g. '1/4'). Must be link-down.
++            port_primary: primary ring port (e.g. '1/3')
++            port_secondary: secondary ring port (e.g. '1/4')
+             vlan: VLAN ID for MRP domain (0-4042)
+             recovery_delay: '200ms', '500ms', '30ms', or '10ms'
+ 
+-        Raises ValueError if specified ports are currently link-up.
+         Creates the default domain if none exists.
+         """
+         if operation not in ('enable', 'disable'):
+@@ -1463,16 +1462,6 @@ class SSHHIOS:
+         if mode not in ('manager', 'client'):
+             raise ValueError(f"mode must be 'manager' or 'client', got '{mode}'")
+ 
+-        # Safety: verify ring ports are link-down before configuring
+-        if operation == 'enable' and (port_primary or port_secondary):
+-            interfaces = self.get_interfaces()
+-            for port, label in [(port_primary, 'primary'), (port_secondary, 'secondary')]:
+-                if port and port in interfaces and interfaces[port]['is_up']:
+-                    raise ValueError(
+-                        f"Refusing to configure MRP: {label} port {port} is currently link-up. "
+-                        f"Only configure MRP on disconnected ports to avoid production impact."
+-                    )
+-
+         self._config_mode()
+         try:
+             # Ensure default domain exists (harmless if already present)
+diff --git a/napalm_hios/version.py b/napalm_hios/version.py
+index bc86c94..10aa336 100644
+--- a/napalm_hios/version.py
++++ b/napalm_hios/version.py
+@@ -1 +1 @@
+-__version__ = "1.2.2"
++__version__ = "1.2.3"
+diff --git a/setup.py b/setup.py
+index c4fbb87..70b2c6e 100644
+--- a/setup.py
++++ b/setup.py
+@@ -7,7 +7,7 @@ long_description = (this_directory / "README.md").read_text()
+ 
+ setup(
+     name="napalm-hios",
+-    version="1.2.2",
++    version="1.2.3",
+     packages=find_packages(),
+     description="NAPALM driver for HiOS network switches by Belden",
+     long_description=long_description,
+diff --git a/tests/unit/test_parsers.py b/tests/unit/test_parsers.py
+index f4e93ed..effa235 100644
+--- a/tests/unit/test_parsers.py
++++ b/tests/unit/test_parsers.py
+@@ -585,21 +585,6 @@ class TestMRPParser(unittest.TestCase):
+         self.assertEqual(result['port_secondary_state'], 'blocked')
+         self.assertEqual(result['info'], 'no error')
+ 
+-    def test_set_mrp_rejects_link_up_port(self):
+-        """set_mrp refuses to configure on link-up ports."""
+-        self.ssh.get_interfaces = lambda: {
+-            '1/1': {'is_up': True, 'is_enabled': True},
+-            '1/2': {'is_up': False, 'is_enabled': True},
+-        }
+-        with self.assertRaises(ValueError) as ctx:
+-            self.ssh.set_mrp(
+-                operation='enable', mode='client',
+-                port_primary='1/1', port_secondary='1/2'
+-            )
+-        self.assertIn('link-up', str(ctx.exception))
+-        self.assertIn('1/1', str(ctx.exception))
+-
+-
+ class TestConfigStatus(unittest.TestCase):
+     """Test config status getter."""
+ 
+diff --git a/tests/unit/test_snmp_hios.py b/tests/unit/test_snmp_hios.py
+index 0c23af1..c3ce4d5 100644
+--- a/tests/unit/test_snmp_hios.py
++++ b/tests/unit/test_snmp_hios.py
+@@ -1282,12 +1282,6 @@ class TestSNMPHIOS(unittest.TestCase):
+             return {'1': '1/1', '2': '1/2', '3': '1/3', '4': '1/4',
+                     '5': '1/5', '6': '1/6'}
+ 
+-        # Mock _get_interfaces_async for safety check (ports down)
+-        async def mock_ifaces():
+-            return {
+-                '1/3': {'is_up': False, 'is_enabled': True},
+-                '1/4': {'is_up': False, 'is_enabled': True},
+-            }
+         # Mock _get_mrp_async for return value
+         async def mock_mrp():
+             return {'configured': True, 'mode': 'client'}
+@@ -1295,7 +1289,6 @@ class TestSNMPHIOS(unittest.TestCase):
+         with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+              patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+              patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+-             patch.object(self.snmp, '_get_interfaces_async', side_effect=mock_ifaces), \
+              patch.object(self.snmp, '_get_mrp_async', side_effect=mock_mrp):
+             result = self.snmp.set_mrp(
+                 operation='enable', mode='client',
+@@ -1315,21 +1308,6 @@ class TestSNMPHIOS(unittest.TestCase):
+             self.assertIn(OID_hm2MrpRowStatus + sfx, oid_suffixes[-1])
+             self.assertEqual(set_calls[-1][1], 1)
+ 
+-    def test_set_mrp_safety_rejects_linkup(self):
+-        """Refuses to configure MRP on link-up ports."""
+-        async def mock_ifaces():
+-            return {
+-                '1/3': {'is_up': True, 'is_enabled': True},
+-                '1/4': {'is_up': False, 'is_enabled': True},
+-            }
+-        with patch.object(self.snmp, '_get_interfaces_async', side_effect=mock_ifaces):
+-            with self.assertRaises(ValueError) as ctx:
+-                self.snmp.set_mrp(
+-                    operation='enable', mode='client',
+-                    port_primary='1/3', port_secondary='1/4',
+-                )
+-            self.assertIn('link-up', str(ctx.exception))
+-
+     def test_set_mrp_unsupported_recovery_delay(self):
+         """Rejects 30ms/10ms recovery delay on devices that only support 200/500."""
+         async def mock_walk_columns(oid_map, engine=None):

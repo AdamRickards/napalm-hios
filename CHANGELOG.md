@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.3 — 2026-02-22
+
+### Bugfix: remove link-up safety check from set_mrp()
+
+Removed the link-up port rejection from `set_mrp()` on both SSH and SNMP.
+This was a lab testing guardrail that prevented configuring MRP on ports
+with active links — not appropriate for production use where MRP is always
+configured on connected uplink ports.
+
 ## 1.2.2 — 2026-02-21
 
 ### SNMP write operations — set_mrp, delete_mrp, set_hidiscovery
@@ -9,7 +18,7 @@ The driver is now fully protocol-agnostic for all 23 methods except
 `get_config`, `ping`, and `cli` (which are inherently CLI-based).
 
 ### New SNMP write methods
-- **`set_mrp()`** via SNMP: RowStatus pattern on HM2-L2REDUNDANCY-MIB — createAndWait → SET columns → activate. Default domain UUID (all-FF). Same link-up safety check as SSH.
+- **`set_mrp()`** via SNMP: RowStatus pattern on HM2-L2REDUNDANCY-MIB — createAndWait → SET columns → activate. Default domain UUID (all-FF).
 - **`delete_mrp()`** via SNMP: SET RowStatus to notInService then destroy.
 - **`set_hidiscovery()`** via SNMP: SET hm2NetHiDiscoveryOperation + hm2NetHiDiscoveryMode scalars.
 
@@ -25,7 +34,6 @@ The driver is now fully protocol-agnostic for all 23 methods except
 ### Test additions
 - `test_set_hidiscovery_off/on/ro/invalid` — mode cycling and validation
 - `test_set_mrp_create_enable` — domain creation via RowStatus pattern
-- `test_set_mrp_safety_rejects_linkup` — link-up port rejection
 - `test_set_mrp_unsupported_recovery_delay` — hardware capability check
 - `test_delete_mrp` — notInService + destroy sequence
 - Live validated: full MRP cycle (create/reconfigure/disable/delete) on GRS1042

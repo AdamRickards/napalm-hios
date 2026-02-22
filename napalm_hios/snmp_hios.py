@@ -1658,12 +1658,11 @@ class SNMPHIOS:
         Args:
             operation: 'enable' or 'disable'
             mode: 'manager' or 'client'
-            port_primary: primary ring port (e.g. '1/3'). Must be link-down.
-            port_secondary: secondary ring port (e.g. '1/4'). Must be link-down.
+            port_primary: primary ring port (e.g. '1/3')
+            port_secondary: secondary ring port (e.g. '1/4')
             vlan: VLAN ID for MRP domain (0-4042)
             recovery_delay: '200ms', '500ms', '30ms', or '10ms'
 
-        Raises ValueError if specified ports are currently link-up.
         Creates the default domain if none exists.
         """
         if operation not in ('enable', 'disable'):
@@ -1678,16 +1677,6 @@ class SNMPHIOS:
                              vlan, recovery_delay):
         engine = SnmpEngine()
         sfx = MRP_DEFAULT_DOMAIN_SUFFIX
-
-        # Safety: verify ring ports are link-down before configuring
-        if operation == 'enable' and (port_primary or port_secondary):
-            interfaces = await self._get_interfaces_async()
-            for port, label in [(port_primary, 'primary'), (port_secondary, 'secondary')]:
-                if port and port in interfaces and interfaces[port]['is_up']:
-                    raise ValueError(
-                        f"Refusing to configure MRP: {label} port {port} is currently link-up. "
-                        f"Only configure MRP on disconnected ports to avoid production impact."
-                    )
 
         # Build reverse ifName → ifIndex map for port resolution
         ifmap = await self._build_ifindex_map(engine)

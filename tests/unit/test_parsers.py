@@ -585,21 +585,6 @@ class TestMRPParser(unittest.TestCase):
         self.assertEqual(result['port_secondary_state'], 'blocked')
         self.assertEqual(result['info'], 'no error')
 
-    def test_set_mrp_rejects_link_up_port(self):
-        """set_mrp refuses to configure on link-up ports."""
-        self.ssh.get_interfaces = lambda: {
-            '1/1': {'is_up': True, 'is_enabled': True},
-            '1/2': {'is_up': False, 'is_enabled': True},
-        }
-        with self.assertRaises(ValueError) as ctx:
-            self.ssh.set_mrp(
-                operation='enable', mode='client',
-                port_primary='1/1', port_secondary='1/2'
-            )
-        self.assertIn('link-up', str(ctx.exception))
-        self.assertIn('1/1', str(ctx.exception))
-
-
 class TestConfigStatus(unittest.TestCase):
     """Test config status getter."""
 

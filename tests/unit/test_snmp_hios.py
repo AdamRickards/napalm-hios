@@ -1282,12 +1282,6 @@ class TestSNMPHIOS(unittest.TestCase):
             return {'1': '1/1', '2': '1/2', '3': '1/3', '4': '1/4',
                     '5': '1/5', '6': '1/6'}
 
-        # Mock _get_interfaces_async for safety check (ports down)
-        async def mock_ifaces():
-            return {
-                '1/3': {'is_up': False, 'is_enabled': True},
-                '1/4': {'is_up': False, 'is_enabled': True},
-            }
         # Mock _get_mrp_async for return value
         async def mock_mrp():
             return {'configured': True, 'mode': 'client'}
@@ -1295,7 +1289,6 @@ class TestSNMPHIOS(unittest.TestCase):
         with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
              patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
              patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
-             patch.object(self.snmp, '_get_interfaces_async', side_effect=mock_ifaces), \
              patch.object(self.snmp, '_get_mrp_async', side_effect=mock_mrp):
             result = self.snmp.set_mrp(
                 operation='enable', mode='client',
@@ -1314,21 +1307,6 @@ class TestSNMPHIOS(unittest.TestCase):
             # Last call: active(1)
             self.assertIn(OID_hm2MrpRowStatus + sfx, oid_suffixes[-1])
             self.assertEqual(set_calls[-1][1], 1)
-
-    def test_set_mrp_safety_rejects_linkup(self):
-        """Refuses to configure MRP on link-up ports."""
-        async def mock_ifaces():
-            return {
-                '1/3': {'is_up': True, 'is_enabled': True},
-                '1/4': {'is_up': False, 'is_enabled': True},
-            }
-        with patch.object(self.snmp, '_get_interfaces_async', side_effect=mock_ifaces):
-            with self.assertRaises(ValueError) as ctx:
-                self.snmp.set_mrp(
-                    operation='enable', mode='client',
-                    port_primary='1/3', port_secondary='1/4',
-                )
-            self.assertIn('link-up', str(ctx.exception))
 
     def test_set_mrp_unsupported_recovery_delay(self):
         """Rejects 30ms/10ms recovery delay on devices that only support 200/500."""
