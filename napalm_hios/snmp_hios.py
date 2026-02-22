@@ -175,6 +175,7 @@ OID_hm2MrpRedundancyOperState = '1.3.6.1.4.1.248.11.40.1.1.1.1.24'
 OID_hm2MrpConfigOperState     = '1.3.6.1.4.1.248.11.40.1.1.1.1.25'
 OID_hm2MrpRowStatus           = '1.3.6.1.4.1.248.11.40.1.1.1.1.26'
 OID_hm2MrpRingport2FixedBackup = '1.3.6.1.4.1.248.11.40.1.1.1.1.27'
+OID_hm2MrpRecoveryDelaySupported = '1.3.6.1.4.1.248.11.40.1.1.1.1.12'
 OID_hm2MrpFastMrp             = '1.3.6.1.4.1.248.11.40.1.1.3'
 
 # HIRSCHMANN-DISCOVERY-MGMT-MIB  1.3.6.1.4.1.248.16.100.*
@@ -353,6 +354,11 @@ _MRP_RECOVERY_DELAY = {1: '500ms', 2: '200ms', 3: '30ms', 4: '10ms'}
 _MRP_RING_OPER_STATE = {1: 'open', 2: 'closed', 3: 'undefined'}
 _MRP_CONFIG_OPER_STATE = {1: 'noError', 2: 'linkError', 3: 'multipleMRM'}
 _MRP_CONFIG_INFO = {1: 'no error', 2: 'ring port link error', 3: 'multiple MRM detected'}
+_MRP_RECOVERY_DELAY_REV = {'500ms': 1, '200ms': 2, '30ms': 3, '10ms': 4}
+_MRP_ROLE_REV = {'client': 1, 'manager': 2}
+
+# Default MRP domain UUID (all 0xFF) — used as table index suffix
+MRP_DEFAULT_DOMAIN_SUFFIX = '.255.255.255.255.255.255.255.255.255.255.255.255.255.255.255.255'
 
 # MAU type OID suffix → human-readable string
 _MAU_TYPES = {
@@ -1362,6 +1368,7 @@ class SNMPHIOS:
             'role_admin': OID_hm2MrpRoleAdminState,
             'role_oper': OID_hm2MrpRoleOperState,
             'recovery_delay': OID_hm2MrpRecoveryDelay,
+            'delay_supported': OID_hm2MrpRecoveryDelaySupported,
             'vlan': OID_hm2MrpVlanID,
             'priority': OID_hm2MrpMRMPriority,
             'react_on_link': OID_hm2MrpMRMReactOnLinkChange,
@@ -1426,7 +1433,11 @@ class SNMPHIOS:
             'domain_name': str(active_cols.get('domain_name', '')),
             'vlan': int(active_cols.get('vlan', 0)),
             'recovery_delay': _MRP_RECOVERY_DELAY.get(recovery, f'{recovery}'),
-            'recovery_delay_supported': list(_MRP_RECOVERY_DELAY.values()),
+            'recovery_delay_supported': (
+                list(_MRP_RECOVERY_DELAY.values())
+                if int(active_cols.get('delay_supported', 2)) == 1
+                else ['500ms', '200ms']
+            ),
             'advanced_mode': int(active_cols.get('react_on_link', 0)) == 1,
             'manager_priority': int(active_cols.get('priority', 0)),
             'fixed_backup': int(active_cols.get('fixed_backup', 0)) == 1,
@@ -1580,6 +1591,202 @@ class SNMPHIOS:
                 f"SNMP SET error: {errorStatus.prettyPrint()} at "
                 f"{varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
             )
+
+    async def _set_oids(self, *oid_value_pairs):
+        """SET multiple OID/value pairs in a single SNMP PDU.
+
+        Each argument is a (oid_string, value) tuple.  OIDs are used
+        as-is (no .0 appended) — caller must supply fully qualified OIDs.
+        """
+        engine = SnmpEngine()
+        transport = await UdpTransportTarget.create(
+            (self.hostname, self.port), timeout=self.timeout, retries=1,
+        )
+        auth = self._build_auth()
+        object_types = [
+            ObjectType(ObjectIdentity(oid), val) for oid, val in oid_value_pairs
+        ]
+        errorIndication, errorStatus, errorIndex, varBinds = await set_cmd(
+            engine, auth, transport, ContextData(), *object_types,
+        )
+        if errorIndication:
+            raise ConnectionException(f"SNMP SET error: {errorIndication}")
+        if errorStatus:
+            raise ConnectionException(
+                f"SNMP SET error: {errorStatus.prettyPrint()} at "
+                f"{varBinds[int(errorIndex) - 1][0] if errorIndex else '?'}"
+            )
+
+    # ------------------------------------------------------------------
+    # Write operations — vendor-specific (MRP, HiDiscovery)
+    # ------------------------------------------------------------------
+
+    def set_hidiscovery(self, status, blinking=None):
+        """Set HiDiscovery operating mode via SNMP.
+
+        Args:
+            status: 'on' (read-write), 'off' (disabled), or 'ro' (read-only)
+            blinking: True to enable, False to disable, 'toggle' to flip,
+                      or None to leave unchanged
+        """
+        status = status.lower().strip()
+        if status not in ('on', 'off', 'ro'):
+            raise ValueError(f"Invalid status '{status}': use 'on', 'off', or 'ro'")
+        return asyncio.run(self._set_hidiscovery_async(status, blinking))
+
+    async def _set_hidiscovery_async(self, status, blinking=None):
+        if status == 'off':
+            await self._set_scalar(OID_hm2HiDiscOper, Integer32(2))  # disable
+        elif status == 'on':
+            await self._set_scalar(OID_hm2HiDiscOper, Integer32(1))  # enable
+            await self._set_scalar(OID_hm2HiDiscMode, Integer32(1))  # readWrite
+        elif status == 'ro':
+            await self._set_scalar(OID_hm2HiDiscOper, Integer32(1))  # enable
+            await self._set_scalar(OID_hm2HiDiscMode, Integer32(2))  # readOnly
+        if blinking is not None:
+            if blinking == 'toggle':
+                current = await self._get_hidiscovery_async()
+                blinking = not current.get('blinking', False)
+            await self._set_scalar(OID_hm2HiDiscBlinking,
+                                   Integer32(1 if blinking else 2))
+        return await self._get_hidiscovery_async()
+
+    def set_mrp(self, operation='enable', mode='client', port_primary=None,
+                port_secondary=None, vlan=None, recovery_delay=None):
+        """Configure MRP ring on the default domain via SNMP.
+
+        Args:
+            operation: 'enable' or 'disable'
+            mode: 'manager' or 'client'
+            port_primary: primary ring port (e.g. '1/3'). Must be link-down.
+            port_secondary: secondary ring port (e.g. '1/4'). Must be link-down.
+            vlan: VLAN ID for MRP domain (0-4042)
+            recovery_delay: '200ms', '500ms', '30ms', or '10ms'
+
+        Raises ValueError if specified ports are currently link-up.
+        Creates the default domain if none exists.
+        """
+        if operation not in ('enable', 'disable'):
+            raise ValueError(f"operation must be 'enable' or 'disable', got '{operation}'")
+        if mode not in ('manager', 'client'):
+            raise ValueError(f"mode must be 'manager' or 'client', got '{mode}'")
+        return asyncio.run(self._set_mrp_async(
+            operation, mode, port_primary, port_secondary, vlan, recovery_delay,
+        ))
+
+    async def _set_mrp_async(self, operation, mode, port_primary, port_secondary,
+                             vlan, recovery_delay):
+        engine = SnmpEngine()
+        sfx = MRP_DEFAULT_DOMAIN_SUFFIX
+
+        # Safety: verify ring ports are link-down before configuring
+        if operation == 'enable' and (port_primary or port_secondary):
+            interfaces = await self._get_interfaces_async()
+            for port, label in [(port_primary, 'primary'), (port_secondary, 'secondary')]:
+                if port and port in interfaces and interfaces[port]['is_up']:
+                    raise ValueError(
+                        f"Refusing to configure MRP: {label} port {port} is currently link-up. "
+                        f"Only configure MRP on disconnected ports to avoid production impact."
+                    )
+
+        # Build reverse ifName → ifIndex map for port resolution
+        ifmap = await self._build_ifindex_map(engine)
+        name_to_idx = {name: int(idx) for idx, name in ifmap.items()}
+
+        # Check if domain already exists
+        existing = await self._walk_columns({
+            'row_status': OID_hm2MrpRowStatus,
+            'delay_supported': OID_hm2MrpRecoveryDelaySupported,
+        }, engine)
+        sfx_key = sfx.lstrip('.')
+        domain_exists = sfx_key in existing
+
+        # Validate recovery delay against device capability
+        if recovery_delay and recovery_delay in ('30ms', '10ms'):
+            if domain_exists:
+                supported = int(existing[sfx_key].get('delay_supported', 2))
+            else:
+                supported = 2  # assume 200/500 only until we can check
+            if supported != 1:  # supportedAll(1)
+                raise ValueError(
+                    f"Recovery delay '{recovery_delay}' not supported by this device "
+                    f"(only 200ms and 500ms available)"
+                )
+
+        if not domain_exists:
+            # Create domain in notInService state
+            await self._set_oids(
+                (OID_hm2MrpRowStatus + sfx, Integer32(5)),  # createAndWait
+            )
+
+        if operation == 'disable':
+            # Set row to notInService (keeps config but disables)
+            await self._set_oids(
+                (OID_hm2MrpRowStatus + sfx, Integer32(2)),  # notInService
+            )
+        else:
+            # Ensure row is notInService for modification
+            if domain_exists:
+                await self._set_oids(
+                    (OID_hm2MrpRowStatus + sfx, Integer32(2)),  # notInService
+                )
+
+            # Build SET pairs for requested parameters
+            sets = []
+            sets.append((OID_hm2MrpRoleAdminState + sfx,
+                         Integer32(_MRP_ROLE_REV[mode])))
+            if port_primary:
+                idx = name_to_idx.get(port_primary)
+                if idx is None:
+                    raise ValueError(f"Unknown port '{port_primary}'")
+                sets.append((OID_hm2MrpRingport1IfIndex + sfx, Integer32(idx)))
+            if port_secondary:
+                idx = name_to_idx.get(port_secondary)
+                if idx is None:
+                    raise ValueError(f"Unknown port '{port_secondary}'")
+                sets.append((OID_hm2MrpRingport2IfIndex + sfx, Integer32(idx)))
+            if vlan is not None:
+                sets.append((OID_hm2MrpVlanID + sfx, Integer32(int(vlan))))
+            if recovery_delay:
+                delay_val = _MRP_RECOVERY_DELAY_REV.get(recovery_delay)
+                if delay_val is None:
+                    raise ValueError(f"Invalid recovery_delay '{recovery_delay}'")
+                sets.append((OID_hm2MrpRecoveryDelay + sfx, Integer32(delay_val)))
+
+            # SET all parameters
+            for oid, val in sets:
+                await self._set_oids((oid, val))
+
+            # Activate
+            await self._set_oids(
+                (OID_hm2MrpRowStatus + sfx, Integer32(1)),  # active
+            )
+
+        return await self._get_mrp_async()
+
+    def delete_mrp(self):
+        """Delete the MRP default domain via SNMP.
+
+        Returns the post-deletion MRP state (should show configured=False).
+        """
+        return asyncio.run(self._delete_mrp_async())
+
+    async def _delete_mrp_async(self):
+        sfx = MRP_DEFAULT_DOMAIN_SUFFIX
+        # First try to set notInService, then destroy
+        try:
+            await self._set_oids(
+                (OID_hm2MrpRowStatus + sfx, Integer32(2)),  # notInService
+            )
+        except ConnectionException:
+            pass  # Row might already be notInService or not exist
+        try:
+            await self._set_oids(
+                (OID_hm2MrpRowStatus + sfx, Integer32(6)),  # destroy
+            )
+        except ConnectionException:
+            pass  # Row might not exist
+        return await self._get_mrp_async()
 
     def get_lldp_neighbors_detail_extended(self, interface=''):
         """Return extended LLDP detail with 802.1/802.3 extension data."""

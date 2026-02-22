@@ -46,7 +46,8 @@ from napalm_hios.snmp_hios import (
     OID_hm2MrpMRCBlockedSupported, OID_hm2MrpRingOperState,
     OID_hm2MrpRedundancyOperState, OID_hm2MrpConfigOperState,
     OID_hm2MrpRowStatus, OID_hm2MrpRingport2FixedBackup,
-    OID_hm2MrpFastMrp,
+    OID_hm2MrpRecoveryDelaySupported, OID_hm2MrpFastMrp,
+    MRP_DEFAULT_DOMAIN_SUFFIX, _MRP_ROLE_REV, _MRP_RECOVERY_DELAY_REV,
     OID_hm2HiDiscOper, OID_hm2HiDiscMode, OID_hm2HiDiscBlinking,
     OID_hm2HiDiscProtocol, OID_hm2HiDiscRelay,
     OID_lldpXdot3RemPortAutoNegSupported, OID_lldpXdot3RemPortAutoNegEnabled,
@@ -1195,6 +1196,177 @@ class TestSNMPHIOS(unittest.TestCase):
             self.snmp._connected = False
             with self.assertRaises(ConnectionException):
                 self.snmp.open()
+
+
+    # ------------------------------------------------------------------
+    # Write operations — set_hidiscovery, set_mrp, delete_mrp
+    # ------------------------------------------------------------------
+
+    def test_set_hidiscovery_off(self):
+        """SET hm2HiDiscOper=2 (disable) when status='off'."""
+        set_calls = []
+        async def mock_set(oid, value):
+            set_calls.append((oid, int(value)))
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2HiDiscOper: 2,
+                OID_hm2HiDiscMode: 2,
+                OID_hm2HiDiscBlinking: 2,
+                OID_hm2HiDiscProtocol: 6,
+                OID_hm2HiDiscRelay: 1,
+            }
+        with patch.object(self.snmp, '_set_scalar', side_effect=mock_set), \
+             patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.set_hidiscovery('off')
+            self.assertFalse(result['enabled'])
+            # Should have SET operation=disable(2)
+            self.assertEqual(len(set_calls), 1)
+            self.assertIn(OID_hm2HiDiscOper, set_calls[0][0])
+            self.assertEqual(set_calls[0][1], 2)
+
+    def test_set_hidiscovery_on(self):
+        """SET hm2HiDiscOper=1 + hm2HiDiscMode=1 when status='on'."""
+        set_calls = []
+        async def mock_set(oid, value):
+            set_calls.append((oid, int(value)))
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2HiDiscOper: 1,
+                OID_hm2HiDiscMode: 1,
+                OID_hm2HiDiscBlinking: 2,
+                OID_hm2HiDiscProtocol: 6,
+                OID_hm2HiDiscRelay: 1,
+            }
+        with patch.object(self.snmp, '_set_scalar', side_effect=mock_set), \
+             patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.set_hidiscovery('on')
+            self.assertTrue(result['enabled'])
+            self.assertEqual(result['mode'], 'read-write')
+            # Should have SET operation=enable(1) then mode=readWrite(1)
+            self.assertEqual(len(set_calls), 2)
+
+    def test_set_hidiscovery_ro(self):
+        """SET hm2HiDiscOper=1 + hm2HiDiscMode=2 when status='ro'."""
+        set_calls = []
+        async def mock_set(oid, value):
+            set_calls.append((oid, int(value)))
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2HiDiscOper: 1,
+                OID_hm2HiDiscMode: 2,
+                OID_hm2HiDiscBlinking: 2,
+                OID_hm2HiDiscProtocol: 6,
+                OID_hm2HiDiscRelay: 1,
+            }
+        with patch.object(self.snmp, '_set_scalar', side_effect=mock_set), \
+             patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.set_hidiscovery('ro')
+            self.assertTrue(result['enabled'])
+            self.assertEqual(result['mode'], 'read-only')
+            self.assertEqual(len(set_calls), 2)
+
+    def test_set_hidiscovery_invalid(self):
+        """Invalid status raises ValueError."""
+        with self.assertRaises(ValueError):
+            self.snmp.set_hidiscovery('banana')
+
+    def test_set_mrp_create_enable(self):
+        """Create new MRP domain via SNMP and enable as client."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, int(val)))
+        async def mock_walk_columns(oid_map, engine=None):
+            return {}  # no existing domain
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2', '3': '1/3', '4': '1/4',
+                    '5': '1/5', '6': '1/6'}
+
+        # Mock _get_interfaces_async for safety check (ports down)
+        async def mock_ifaces():
+            return {
+                '1/3': {'is_up': False, 'is_enabled': True},
+                '1/4': {'is_up': False, 'is_enabled': True},
+            }
+        # Mock _get_mrp_async for return value
+        async def mock_mrp():
+            return {'configured': True, 'mode': 'client'}
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_get_interfaces_async', side_effect=mock_ifaces), \
+             patch.object(self.snmp, '_get_mrp_async', side_effect=mock_mrp):
+            result = self.snmp.set_mrp(
+                operation='enable', mode='client',
+                port_primary='1/3', port_secondary='1/4',
+                vlan=1, recovery_delay='200ms',
+            )
+            self.assertTrue(result['configured'])
+
+            # Should: createAndWait, set role, set port1, set port2, set vlan,
+            #         set recovery, activate
+            oid_suffixes = [oid for oid, _ in set_calls]
+            sfx = MRP_DEFAULT_DOMAIN_SUFFIX
+            # First call: createAndWait(5)
+            self.assertIn(OID_hm2MrpRowStatus + sfx, oid_suffixes[0])
+            self.assertEqual(set_calls[0][1], 5)
+            # Last call: active(1)
+            self.assertIn(OID_hm2MrpRowStatus + sfx, oid_suffixes[-1])
+            self.assertEqual(set_calls[-1][1], 1)
+
+    def test_set_mrp_safety_rejects_linkup(self):
+        """Refuses to configure MRP on link-up ports."""
+        async def mock_ifaces():
+            return {
+                '1/3': {'is_up': True, 'is_enabled': True},
+                '1/4': {'is_up': False, 'is_enabled': True},
+            }
+        with patch.object(self.snmp, '_get_interfaces_async', side_effect=mock_ifaces):
+            with self.assertRaises(ValueError) as ctx:
+                self.snmp.set_mrp(
+                    operation='enable', mode='client',
+                    port_primary='1/3', port_secondary='1/4',
+                )
+            self.assertIn('link-up', str(ctx.exception))
+
+    def test_set_mrp_unsupported_recovery_delay(self):
+        """Rejects 30ms/10ms recovery delay on devices that only support 200/500."""
+        async def mock_walk_columns(oid_map, engine=None):
+            sfx = MRP_DEFAULT_DOMAIN_SUFFIX.lstrip('.')
+            return {sfx: {'row_status': 1, 'delay_supported': 2}}  # supported200500
+        async def mock_ifmap(engine=None):
+            return {'3': '1/3', '4': '1/4'}
+        mock_interfaces = {'1/3': {'is_up': False}, '1/4': {'is_up': False}}
+
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, 'get_interfaces', return_value=mock_interfaces):
+            with self.assertRaises(ValueError) as ctx:
+                self.snmp.set_mrp(
+                    operation='enable', mode='client',
+                    port_primary='1/3', port_secondary='1/4',
+                    recovery_delay='30ms',
+                )
+            self.assertIn('not supported', str(ctx.exception))
+
+    def test_delete_mrp(self):
+        """Delete MRP domain: notInService(2) then destroy(6)."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, int(val)))
+
+        async def mock_mrp():
+            return {'configured': False}
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_get_mrp_async', side_effect=mock_mrp):
+            result = self.snmp.delete_mrp()
+            self.assertFalse(result['configured'])
+            # Should: notInService(2) then destroy(6)
+            self.assertEqual(len(set_calls), 2)
+            self.assertEqual(set_calls[0][1], 2)  # notInService
+            self.assertEqual(set_calls[1][1], 6)  # destroy
 
 
 if __name__ == '__main__':

@@ -407,21 +407,21 @@ class HIOSDriver(NetworkDriver):
 
     def set_mrp(self, operation='enable', mode='client', port_primary=None,
                 port_secondary=None, vlan=None, recovery_delay=None):
-        if self.active_protocol == 'ssh':
+        if self.active_protocol in ('ssh', 'snmp'):
             return self._get_active_connection().set_mrp(
                 operation, mode, port_primary, port_secondary, vlan, recovery_delay,
             )
-        raise NotImplementedError("set_mrp is only available via SSH")
+        raise NotImplementedError("set_mrp is not implemented for this protocol")
 
     def delete_mrp(self):
-        if self.active_protocol == 'ssh':
+        if self.active_protocol in ('ssh', 'snmp'):
             return self._get_active_connection().delete_mrp()
-        raise NotImplementedError("delete_mrp is only available via SSH")
+        raise NotImplementedError("delete_mrp is not implemented for this protocol")
 
-    def set_hidiscovery(self, status):
-        if self.active_protocol == 'ssh':
-            return self._get_active_connection().set_hidiscovery(status)
-        raise NotImplementedError("set_hidiscovery is only available via SSH")
+    def set_hidiscovery(self, status, blinking=None):
+        if self.active_protocol in ('ssh', 'snmp'):
+            return self._get_active_connection().set_hidiscovery(status, blinking=blinking)
+        raise NotImplementedError("set_hidiscovery is not implemented for this protocol")
 
     def get_snmp_information(self):
         if self.active_protocol in ('ssh', 'snmp'):

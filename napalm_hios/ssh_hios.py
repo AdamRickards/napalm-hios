@@ -1515,11 +1515,13 @@ class SSHHIOS:
 
         return self.get_mrp()
 
-    def set_hidiscovery(self, status):
+    def set_hidiscovery(self, status, blinking=None):
         """Set HiDiscovery operating mode.
 
         Args:
             status: 'on', 'off', or 'ro' (read-only)
+            blinking: True to enable, False to disable, 'toggle' to flip,
+                      or None to leave unchanged
 
         'on' enables HiDiscovery in read-write mode.
         'off' disables HiDiscovery entirely.
@@ -1531,6 +1533,10 @@ class SSHHIOS:
         if status not in ('on', 'off', 'ro'):
             raise ValueError(f"Invalid status '{status}': use 'on', 'off', or 'ro'")
 
+        if blinking == 'toggle':
+            current = self.get_hidiscovery()
+            blinking = not current.get('blinking', False)
+
         self._enable()
         try:
             if status == 'off':
@@ -1541,6 +1547,11 @@ class SSHHIOS:
             elif status == 'ro':
                 self.cli('network hidiscovery operation')
                 self.cli('network hidiscovery mode read-only')
+            if blinking is not None:
+                if blinking:
+                    self.cli('network hidiscovery blinking')
+                else:
+                    self.cli('no network hidiscovery blinking')
         finally:
             self._disable()
 

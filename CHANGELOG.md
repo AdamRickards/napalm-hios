@@ -1,5 +1,36 @@
 # Changelog
 
+## 1.2.2 — 2026-02-21
+
+### SNMP write operations — set_mrp, delete_mrp, set_hidiscovery
+
+All three vendor-specific write operations now work on both SSH and SNMP.
+The driver is now fully protocol-agnostic for all 23 methods except
+`get_config`, `ping`, and `cli` (which are inherently CLI-based).
+
+### New SNMP write methods
+- **`set_mrp()`** via SNMP: RowStatus pattern on HM2-L2REDUNDANCY-MIB — createAndWait → SET columns → activate. Default domain UUID (all-FF). Same link-up safety check as SSH.
+- **`delete_mrp()`** via SNMP: SET RowStatus to notInService then destroy.
+- **`set_hidiscovery()`** via SNMP: SET hm2NetHiDiscoveryOperation + hm2NetHiDiscoveryMode scalars.
+
+### New features
+- **`set_hidiscovery()` blinking**: new optional `blinking` parameter (True/False/'toggle') on both SSH and SNMP. `'toggle'` reads current state and flips it.
+- **`_set_oids()`**: multi-value SNMP SET method for batch operations in a single PDU.
+- **Recovery delay validation**: `set_mrp()` reads `hm2MrpRecoveryDelaySupported` from the device and rejects 30ms/10ms on hardware that only supports 200ms/500ms.
+- **`get_mrp()` accuracy**: `recovery_delay_supported` now returns actual device capability instead of hardcoding all 4 values.
+
+### Dispatch changes
+- `set_mrp()`, `delete_mrp()`, `set_hidiscovery()` now dispatch to both SSH and SNMP (previously SSH-only).
+
+### Test additions
+- `test_set_hidiscovery_off/on/ro/invalid` — mode cycling and validation
+- `test_set_mrp_create_enable` — domain creation via RowStatus pattern
+- `test_set_mrp_safety_rejects_linkup` — link-up port rejection
+- `test_set_mrp_unsupported_recovery_delay` — hardware capability check
+- `test_delete_mrp` — notInService + destroy sequence
+- Live validated: full MRP cycle (create/reconfigure/disable/delete) on GRS1042
+- Live validated: HiDiscovery toggle cycle (on/off/ro + blinking) on GRS1042
+
 ## 1.2.1 — 2026-02-21
 
 ### SNMP Phase 2 complete — full SSH/SNMP getter parity

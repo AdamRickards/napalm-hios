@@ -87,11 +87,11 @@ This docuemntation was written by Claude from Anthropic so if anything is wrong 
 - `get_config_status()` — check if running config is saved to NVM
 - `save_config()` — save running config to NVM
 
-### Vendor-specific write operations (SSH-only)
+### Vendor-specific write operations (SSH + SNMP)
 
 - `set_mrp()` — configure MRP ring on default domain
 - `delete_mrp()` — disable and delete MRP domain
-- `set_hidiscovery()` — set HiDiscovery mode (on/off/read-only)
+- `set_hidiscovery()` — set HiDiscovery mode (on/off/read-only) + LED blinking
 
 Note: Configuration-related methods (`load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, `rollback()`) are not implemented — HiOS does not support candidate configurations.
 
@@ -206,12 +206,12 @@ When implementing getters, this priority order is followed:
 | `get_config` | Yes | No | SSH-only (CLI scraping) |
 | `ping` | Yes | No | SSH-only |
 | `cli` | Yes | No | SSH-only |
-| `set_mrp` / `delete_mrp` | Yes | No | SSH-only write operations |
-| `set_hidiscovery` | Yes | No | SSH-only write operation |
+| `set_mrp` / `delete_mrp` | Yes | Yes | Vendor write (MRP ring config) |
+| `set_hidiscovery` | Yes | Yes | Vendor write (mode + blinking) |
 
 ## Known Issues
 
-- If a method is only available on SSH (e.g. `get_config`, `ping`, `cli`, write operations) and the active connection is SNMP, calling it raises `NotImplementedError`.
+- If a method is only available on SSH (e.g. `get_config`, `ping`, `cli`) and the active connection is SNMP, calling it raises `NotImplementedError`.
 - NETCONF support is stub-only — not usable for production.
 
 ## Contributing
