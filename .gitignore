@@ -66,3 +66,9 @@ target/
 # Virtual environments
 .venv/
 venv/
+
+# Local dev docs (CLI manuals, release notes, not for repo)
+local/
+
+# Patch files
+*.patch

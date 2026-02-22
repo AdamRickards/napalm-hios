@@ -8,13 +8,11 @@ NAPALM driver for Hirschmann HiOS industrial switches by Belden. Supports SSH an
 - **SNMPv3 authPriv** (MD5/DES) — works with HiOS factory defaults including short passwords
 - **20 getters** on both SSH + SNMP, plus 3 SSH-only methods
 - **Candidate config workflow**: `load_merge_candidate` → `compare_config` → `commit_config` with NVM sync safety checks and optional config watchdog auto-revert
-- **Profile management**: list, fingerprint, activate, delete config profiles via SNMP
-- Vendor-specific: MRP ring redundancy, HiDiscovery, extended LLDP, config save/status
+- **Profile management**: list, fingerprint, activate, delete config profiles (SSH + SNMP)
+- **Vendor-specific**: MRP ring redundancy, HiDiscovery, extended LLDP, config save/status
 - Comprehensive unit tests (193+) and live device validation
 
 ## Installation
-
-To install the NAPALM HiOS driver, run:
 
 ```
 pip install napalm-hios
@@ -22,38 +20,45 @@ pip install napalm-hios
 
 ## Quick Start
 
-Here's a basic example of how to use the NAPALM HiOS driver:
-
 ```python
 from napalm import get_network_driver
 
-# Initialize the driver
 driver = get_network_driver('hios')
+
+# Default: SNMP first (lower overhead, stateless)
 device = driver(
-    hostname='your_device_ip',
-    username='your_username',
-    password='your_password',
-    optional_args={'ssh_port': 22}  # Optional: specify SSH port if different from default
+    hostname='192.168.1.4',
+    username='admin',
+    password='private',
 )
 
-# Open the connection
+# Or force SSH-only:
+# device = driver(hostname='...', username='...', password='...',
+#                 optional_args={'protocol_preference': ['ssh']})
+
 device.open()
 
-# Use NAPALM methods
 facts = device.get_facts()
 interfaces = device.get_interfaces()
+config = device.get_config()  # auto-connects SSH if on SNMP
 
-# Close the connection
 device.close()
 ```
-If you want to see it in action without a specific purpose or use case, simply create your virtual environment, install with the pip command above and then execute the test_hios.py file found in examples/test_all_commands.py
-This command takes <hostname> <username> <password> [ip address for ping] [count] (with the later two being optional)
-it will log the json returned dicts into the current folder in a file called test_live_device.md
+
+### Live testing
+
+`examples/test_all_commands.py` runs all getters against a live device:
+
+```
+python examples/test_all_commands.py <hostname> <username> <password> [ping_ip] [count]
+```
+
+Results are written to `test_live_device.md`.
 
 ## Documentation
 
-For detailed information about the NAPALM HiOS driver, including supported methods, advanced usage, and error handling, please refer to the [comprehensive documentation](docs/usage.md).
-This docuemntation was written by Claude from Anthropic so if anything is wrong I take no responsibility.
+- [docs/usage.md](docs/usage.md) — standard NAPALM method details
+- [docs/vendor_specific.md](docs/vendor_specific.md) — vendor-specific method details
 
 ## Supported Methods
 
@@ -85,7 +90,7 @@ This docuemntation was written by Claude from Anthropic so if anything is wrong 
 
 - `load_merge_candidate()` — stage CLI commands for later commit
 - `compare_config()` — return staged commands
-- `commit_config()` — execute staged commands via SSH, save to NVM (with optional watchdog auto-revert)
+- `commit_config()` — execute staged commands via SSH in configure mode, save to NVM (with optional watchdog auto-revert via `revert_in` parameter)
 - `discard_config()` — clear staged commands
 - `rollback()` — not supported (use `activate_profile()` for atomic profile switching)
 
@@ -96,53 +101,28 @@ This docuemntation was written by Claude from Anthropic so if anything is wrong 
 - `get_lldp_neighbors_detail_extended()` — LLDP with 802.1/802.3 extensions
 - `get_config_status()` — check if running config is saved to NVM
 - `save_config()` — save running config to NVM
-- `get_profiles()` — list config profiles (SSH + SNMP)
-- `get_config_fingerprint()` — SHA1 fingerprint of active profile (SSH + SNMP)
+- `get_profiles()` — list config profiles with fingerprint, firmware version, encryption status
+- `get_config_fingerprint()` — SHA1 fingerprint of active profile (content hash — changes on NVM save)
 - `activate_profile()` — activate a config profile (causes warm restart)
 - `delete_profile()` — delete an inactive profile
 
 ### Vendor-specific write operations (SSH + SNMP)
 
-- `set_mrp()` — configure MRP ring on default domain
+- `set_mrp()` — configure MRP ring on default domain (with recovery delay hardware validation)
 - `delete_mrp()` — disable and delete MRP domain
 - `set_hidiscovery()` — set HiDiscovery mode (on/off/read-only) + LED blinking
 
 For vendor-specific method details, see [docs/vendor_specific.md](docs/vendor_specific.md). For standard method details, see [docs/usage.md](docs/usage.md).
 
-## Example
-
-```
-python -m examples/ssh_examply.py
-```
-Note: the example runs with user permissions against an online application lab provided by Hirschmann in Germany, this limits which commands you can execute.
-
-For more details about the application lab, see http://applicationlab.hirschmann.de/remoteaccess
-
 ## Testing
 
-To run the unit tests:
+```bash
+# Unit tests (193+ tests)
+pytest tests/unit/ -v
 
+# Live device test (all getters + vendor methods)
+python examples/test_all_commands.py <hostname> <user> <password>
 ```
-python -m unittest discover tests/unit
-```
-
-To run the integration tests (requires a real HiOS device or a properly configured mock):
-
-```
-python -m unittest discover tests/integration
-```
-
-Note: I've been using example/test_all_commands.py against real devices by calling it with <hostname> <user> <password> <ping ip> <count>, the ping ip and count are optional and will default to 8.8.8.8 if not specified. This writes results to test_live_device.md and i've included an example output from a live device
-
-## Mock Device
-
-The driver includes a mock HiOS device for testing and development purposes. To use the mock device, set the hostname to 'localhost' when initializing the driver.
-
-Note: The mock device functionality is still in development
-
-## To-do
-
-Some musings about what to do for next release, [Wishlist](TODO.md), feel free to make suggestions if you have a specific need.
 
 ## Protocol Support
 
@@ -234,7 +214,12 @@ When implementing getters, this priority order is followed:
 
 - SSH-only methods (`get_config`, `ping`, `cli`, `commit_config`) auto-connect SSH when the active protocol is SNMP. If SSH credentials are incorrect or the SSH port is blocked, these methods raise `NotImplementedError`.
 - `activate_profile()` triggers a warm restart — the SSH connection will drop. Reconnect after the device reboots.
+- `commit_config()` executes commands in configure mode. CLI errors are detected and raised as `CommitError`. NVM busy state is polled through (up to 5s) to handle back-to-back commits.
 - NETCONF support is stub-only — not usable for production.
+
+## Roadmap
+
+See [TODO.md](TODO.md) for planned features. Next: factory-fresh device onboarding (HiOS 10.3+ first-login password change handling).
 
 ## Contributing
 

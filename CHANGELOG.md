@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.1 — 2026-02-22
+
+### Documentation refresh
+
+- **README.md rewritten**: cleaned up stale Quick Start example (removed old `ssh_port` optional arg, shows SNMP-default pattern), fixed typos (`docuemntation`, `ssh_examply.py`), replaced outdated `unittest discover` with `pytest`, removed stale mock device section, added Roadmap section, updated profile management to show SSH + SNMP (was SNMP-only), added `commit_config` error checking and NVM busy polling to known issues
+- **`.gitignore`**: added `local/` (dev-only docs) and `*.patch` (release artifacts)
+
 ## 1.3.0 — 2026-02-22
 
 ### Candidate config workflow
