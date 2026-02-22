@@ -1,5 +1,5 @@
 from napalm.base.base import NetworkDriver
-from napalm.base.exceptions import ConnectionException
+from napalm.base.exceptions import ConnectionException, MergeConfigException, CommitError
 
 from napalm_hios.netconf_hios import NetconfHIOS
 from napalm_hios.ssh_hios import SSHHIOS
@@ -8,6 +8,7 @@ from napalm_hios.mock_hios_device import MockHIOSDevice
 from napalm_hios.utils import log_error
 
 import logging
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -47,13 +48,18 @@ class HIOSDriver(NetworkDriver):
         self._is_alive = False
         self.active_protocol = None
 
+        # Candidate config state (in-memory staging)
+        self._merge_candidate = ''
+        self._loaded = False
+        self._changed = False
+
     def open(self):
         """
         Open a connection to the device using the preferred protocol.
         
         If hostname is 'localhost', uses a mock device for testing.
         Otherwise attempts to connect using protocols in the order specified
-        in protocol_preference (defaults to ['ssh', 'snmp', 'netconf']).
+        in protocol_preference (defaults to ['snmp', 'ssh', 'netconf']).
         
         Raises:
             ConnectionException: If unable to connect using any protocol
@@ -68,7 +74,7 @@ class HIOSDriver(NetworkDriver):
                 return
 
             # Get protocol preference from optional args or use default
-            protocol_preference = self.optional_args.get('protocol_preference', ['ssh', 'snmp','netconf'])
+            protocol_preference = self.optional_args.get('protocol_preference', ['snmp', 'ssh', 'netconf'])
             
             # Try each protocol in order of preference
             for protocol in protocol_preference:
@@ -155,6 +161,18 @@ class HIOSDriver(NetworkDriver):
             return self.snmp
         else:
             raise ConnectionException("No active connection")
+
+    def _ensure_ssh(self):
+        """Lazy-connect SSH when active protocol is SNMP but SSH is needed.
+
+        Returns True if SSH is available, False otherwise.
+        """
+        if self.ssh:
+            return True
+        if self._try_connect('ssh'):
+            logger.info(f"Lazy-connected SSH to {self.hostname} for SSH-only method")
+            return True
+        return False
 
     def get_facts(self):
         if self.active_protocol in ('ssh', 'snmp'):
@@ -303,25 +321,23 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_vlans is not implemented for this protocol")
 
     def ping(self, destination, source='', ttl=255, timeout=2, size=100, count=5, vrf='', source_interface=''):
-        if self.active_protocol == 'ssh':
-            result = self._get_active_connection().ping(destination, source, ttl, timeout, size, count, vrf, source_interface)
+        if self.active_protocol == 'ssh' or self._ensure_ssh():
+            result = self.ssh.ping(destination, source, ttl, timeout, size, count, vrf, source_interface)
             if 'success' in result:
                 required_keys = ['probes_sent', 'packet_loss', 'rtt_min', 'rtt_max', 'rtt_avg', 'rtt_stddev', 'results']
                 for key in required_keys:
                     if key not in result['success']:
                         result['success'][key] = [] if key == 'results' else 0
             return result
-        raise NotImplementedError("ping is not implemented for this protocol")
+        raise NotImplementedError("ping requires SSH but SSH connection unavailable")
 
     
         
     def cli(self, commands: list[str], encoding: str = 'text') -> dict[str, str]:
-        """ Execute a list of commands and return the output in a dictionary format. """
-        if self.active_protocol == 'ssh':
-            # Call the SSHHIOS cli method
-            return self._get_active_connection().cli(commands, encoding)
-        else:
-            raise NotImplementedError(f"Protocol {self.active_protocol} not supported for CLI.")
+        """Execute a list of commands and return the output in a dictionary format."""
+        if self.active_protocol == 'ssh' or self._ensure_ssh():
+            return self.ssh.cli(commands, encoding)
+        raise NotImplementedError("cli requires SSH but SSH connection unavailable")
         
     def get_environment(self):
         if self.active_protocol in ('ssh', 'snmp'):
@@ -346,14 +362,14 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_arp_table is not implemented for this protocol")
     
     def get_config(self, retrieve='all', full=False, sanitized=False, format='text'):
-        if self.active_protocol == 'ssh':
-            config = self._get_active_connection().get_config(retrieve, full, sanitized, format)
+        if self.active_protocol == 'ssh' or self._ensure_ssh():
+            config = self.ssh.get_config(retrieve, full, sanitized, format)
             # Ensure all config types are present
             for config_type in ['running', 'startup', 'candidate']:
                 if config_type not in config:
                     config[config_type] = ''
             return config
-        raise NotImplementedError("get_config is not implemented for this protocol")
+        raise NotImplementedError("get_config requires SSH but SSH connection unavailable")
     
     def get_interfaces(self):
         if self.active_protocol in ('ssh', 'snmp'):
@@ -368,22 +384,141 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_interfaces is not implemented for this protocol")
         
     def load_merge_candidate(self, filename=None, config=None):
-        raise NotImplementedError("load_merge_candidate is not implemented for this device")
-    
+        """Stage CLI commands for later commit.
+
+        HiOS has no native candidate config — commands apply immediately.
+        We stage them in Python and execute via SSH on commit.
+
+        Args:
+            filename: path to file containing CLI commands (one per line)
+            config: string of CLI commands (newline-separated)
+        """
+        if filename:
+            with open(filename, 'r') as f:
+                self._merge_candidate = f.read()
+        elif config:
+            self._merge_candidate = config
+        else:
+            raise MergeConfigException("filename or config must be provided")
+        self._loaded = True
+
     def load_replace_candidate(self, filename=None, config=None):
-        raise NotImplementedError("load_replace_candidate is not implemented for this device")
-    
+        raise NotImplementedError(
+            "HiOS does not support config replacement. Use load_merge_candidate() instead."
+        )
+
     def compare_config(self):
-        raise NotImplementedError("compare_config is not implemented for this device")
-    
-    def commit_config(self):
-        raise NotImplementedError("commit_config is not implemented for this device")
-    
+        """Return the staged candidate commands.
+
+        No real diff is possible — HiOS applies commands immediately.
+        Returns the commands that will be sent on commit.
+        """
+        return self._merge_candidate
+
+    def commit_config(self, message='', revert_in=None):
+        """Execute staged commands via SSH, then save to NVM.
+
+        Safety workflow:
+        1. Verify nothing loaded raises error
+        2. Check NVM is in sync (no one else has unsaved changes)
+        3. Optionally start config watchdog for auto-revert
+        4. Execute commands in enable mode
+        5. Save to NVM
+        6. Stop watchdog on successful save
+
+        Args:
+            message: commit message (logged, not stored on device)
+            revert_in: seconds for auto-revert timer (30-600, requires SNMP)
+        """
+        if not self._loaded:
+            raise CommitError("No config loaded. Call load_merge_candidate() first.")
+
+        # Ensure SSH is available
+        if self.active_protocol != 'ssh' and not self._ensure_ssh():
+            raise CommitError("commit_config requires SSH but SSH connection unavailable")
+
+        # Check NVM sync — refuse if someone else has unsaved changes
+        # Poll through transient "busy" state (NVM write from a recent save)
+        try:
+            for _attempt in range(5):
+                status = self.get_config_status()
+                if status['nvm'] != 'busy':
+                    break
+                time.sleep(1)
+            if not status['saved']:
+                raise CommitError(
+                    f"Running config not saved to NVM (nvm: {status['nvm']}). "
+                    "Another user may have unsaved changes. Save or discard first."
+                )
+        except NotImplementedError:
+            pass  # No config status available, proceed anyway
+
+        # Start watchdog if requested
+        watchdog_started = False
+        if revert_in and self.snmp:
+            try:
+                self.snmp.start_watchdog(revert_in)
+                watchdog_started = True
+                logger.info(f"Config watchdog started: {revert_in}s auto-revert")
+            except Exception as e:
+                logger.warning(f"Failed to start config watchdog: {e}")
+
+        # Execute commands via SSH in configure mode
+        try:
+            self.ssh._config_mode()
+            lines = [l.strip() for l in self._merge_candidate.splitlines() if l.strip()]
+            errors = []
+            for line in lines:
+                result = self.ssh.cli(line)
+                output = list(result.values())[0]
+                if output.startswith('Error:'):
+                    errors.append(f"{line}: {output}")
+            self.ssh._exit_config_mode()
+            if errors:
+                raise CommitError(
+                    f"Command errors during commit:\n" + "\n".join(errors)
+                )
+        except CommitError:
+            raise
+        except Exception as e:
+            if watchdog_started:
+                logger.info("Commit failed — watchdog will auto-revert on timer expiry")
+            raise CommitError(f"Failed to execute commands: {e}")
+
+        # Save to NVM
+        try:
+            self.ssh.save_config()
+        except Exception as e:
+            if watchdog_started:
+                logger.info("Save failed — watchdog will auto-revert on timer expiry")
+            raise CommitError(f"Commands executed but save failed: {e}")
+
+        # Stop watchdog on successful save
+        if watchdog_started:
+            try:
+                self.snmp.stop_watchdog()
+                logger.info("Config watchdog stopped (save succeeded)")
+            except Exception as e:
+                logger.warning(f"Failed to stop config watchdog: {e}")
+
+        # Clear state
+        self._changed = True
+        self._merge_candidate = ''
+        self._loaded = False
+
+        if message:
+            logger.info(f"Config committed: {message}")
+
     def discard_config(self):
-        raise NotImplementedError("discard_config is not implemented for this device")
-    
+        """Clear staged candidate commands."""
+        self._merge_candidate = ''
+        self._loaded = False
+
     def rollback(self):
-        raise NotImplementedError("rollback is not implemented for this device")
+        raise NotImplementedError(
+            "HiOS has no non-disruptive rollback. "
+            "Use activate_profile() for atomic profile switching (causes warm restart)."
+        )
 
     def get_mrp(self):
         if self.active_protocol in ('ssh', 'snmp'):
@@ -433,5 +568,22 @@ class HIOSDriver(NetworkDriver):
             return snmp_info
         raise NotImplementedError("get_snmp_information is not implemented for this protocol")
 
-    # Additional NAPALM methods can be implemented here
-    # Each should use _get_active_connection() to delegate to the appropriate protocol handler
+    def get_profiles(self, storage='nvm'):
+        if self.active_protocol in ('ssh', 'snmp'):
+            return self._get_active_connection().get_profiles(storage)
+        raise NotImplementedError("get_profiles is not implemented for this protocol")
+
+    def get_config_fingerprint(self):
+        if self.active_protocol in ('ssh', 'snmp'):
+            return self._get_active_connection().get_config_fingerprint()
+        raise NotImplementedError("get_config_fingerprint is not implemented for this protocol")
+
+    def activate_profile(self, storage='nvm', index=1):
+        if self.active_protocol in ('ssh', 'snmp'):
+            return self._get_active_connection().activate_profile(storage, index)
+        raise NotImplementedError("activate_profile is not implemented for this protocol")
+
+    def delete_profile(self, storage='nvm', index=1):
+        if self.active_protocol in ('ssh', 'snmp'):
+            return self._get_active_connection().delete_profile(storage, index)
+        raise NotImplementedError("delete_profile is not implemented for this protocol")

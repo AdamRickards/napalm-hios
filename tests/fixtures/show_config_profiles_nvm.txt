@@ -1,0 +1,7 @@
+Index   Name                                      Date & Time (UTC)    SW-Rel.
+Active  Fingerprint                               FP verified
+        Encrypted    Key verified
+------  -----------  ---------------------------  -------------------  ---------
+  1     config                                    2026-02-13 13:25:16  09.4.4
+ [x]    9244C58FEA7549A1E2C80DB7608B8D75CF068A66  yes
+        no           no

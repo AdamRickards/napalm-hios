@@ -1546,6 +1546,160 @@ class SSHHIOS:
 
         return self.get_hidiscovery()
 
+    def get_profiles(self, storage='nvm'):
+        """List config profiles from 'show config profiles {nvm|envm}'.
+
+        Output format (3 lines per profile):
+            Index   Name           Date & Time (UTC)    SW-Rel.
+            Active  Fingerprint    FP verified
+                    Encrypted      Key verified
+            ------  ...
+              1     config         2026-02-13 13:25:16  09.4.4
+             [x]    9244C58F...    yes
+                    no             no
+        """
+        if storage not in ('nvm', 'envm'):
+            raise ValueError(f"Invalid storage type '{storage}'. Use 'nvm' or 'envm'.")
+
+        output = self._send_command(f'show config profiles {storage}')
+        profiles = []
+
+        # Find the separator line, then parse 3-line groups after it
+        lines = output.strip().splitlines()
+        sep_idx = None
+        for i, line in enumerate(lines):
+            if line.startswith('------'):
+                sep_idx = i
+                break
+
+        if sep_idx is None:
+            return profiles
+
+        data_lines = lines[sep_idx + 1:]
+        i = 0
+        while i + 2 < len(data_lines):
+            line1 = data_lines[i]      # Index, Name, DateTime, SW-Rel
+            line2 = data_lines[i + 1]  # Active, Fingerprint, FP verified
+            line3 = data_lines[i + 2]  # Encrypted, Key verified
+            i += 3
+
+            # Skip blank lines
+            if not line1.strip():
+                i -= 2
+                continue
+
+            # Line 1: parse index, name, datetime, firmware
+            # Format: "  1     config                                    2026-02-13 13:25:16  09.4.4"
+            m1 = re.match(r'\s*(\d+)\s+(\S+)\s+([\d-]+\s+[\d:]+)\s+(\S+)', line1)
+            if not m1:
+                continue
+
+            index = int(m1.group(1))
+            name = m1.group(2)
+            datetime_str = m1.group(3)
+            firmware = m1.group(4)
+
+            # Line 2: parse active marker, fingerprint, fp verified
+            # Format: " [x]    9244C58F...  yes" or " [ ]    ABCDEF...  no"
+            active = '[x]' in line2
+            m2 = re.match(r'\s*\[.\]\s+([A-F0-9]+)\s+(\S+)', line2)
+            fingerprint = m2.group(1) if m2 else ''
+            fp_verified = (m2.group(2).lower() == 'yes') if m2 else False
+
+            # Line 3: parse encrypted, key verified
+            # Format: "        no           no"
+            parts3 = line3.split()
+            encrypted = (parts3[0].lower() == 'yes') if len(parts3) >= 1 else False
+            key_verified = (parts3[1].lower() == 'yes') if len(parts3) >= 2 else False
+
+            profiles.append({
+                'index': index,
+                'name': name,
+                'active': active,
+                'datetime': datetime_str,
+                'firmware': firmware,
+                'fingerprint': fingerprint,
+                'fingerprint_verified': fp_verified,
+                'encrypted': encrypted,
+                'encryption_verified': key_verified,
+            })
+
+        return profiles
+
+    def get_config_fingerprint(self):
+        """Return SHA1 fingerprint of the active NVM profile."""
+        profiles = self.get_profiles('nvm')
+        for p in profiles:
+            if p['active']:
+                return {'fingerprint': p['fingerprint'], 'verified': p['fingerprint_verified']}
+        return {'fingerprint': '', 'verified': False}
+
+    def activate_profile(self, storage='nvm', index=1):
+        """Activate a config profile (causes warm restart).
+
+        CLI: ``config profile select nvm <index>`` in configure mode.
+        Only NVM storage is supported by HiOS for profile selection.
+
+        Warning: this triggers a warm restart — the SSH connection will drop.
+        """
+        if storage != 'nvm':
+            raise ValueError("HiOS only supports 'config profile select nvm'. "
+                             "Cannot select from envm.")
+
+        # Verify profile exists and is not already active
+        profiles = self.get_profiles(storage)
+        target = None
+        for p in profiles:
+            if p['index'] == index:
+                target = p
+                break
+        if target is None:
+            raise ValueError(f"Profile index {index} not found in {storage}.")
+        if target['active']:
+            raise ValueError(f"Profile {index} ('{target['name']}') is already active.")
+
+        self._config_mode()
+        try:
+            result = self.cli(f'config profile select nvm {index}')
+            output = list(result.values())[0]
+            if output.startswith('Error:'):
+                raise RuntimeError(f"Failed to activate profile: {output}")
+        finally:
+            try:
+                self._exit_config_mode()
+            except Exception:
+                pass  # Connection may drop due to warm restart
+
+    def delete_profile(self, storage='nvm', index=1):
+        """Delete an inactive config profile.
+
+        CLI: ``config profile delete {nvm|envm} num <index>`` in configure mode.
+        Refuses to delete the active profile.
+        """
+        if storage not in ('nvm', 'envm'):
+            raise ValueError(f"Invalid storage type '{storage}'. Use 'nvm' or 'envm'.")
+
+        # Verify profile exists and is not active
+        profiles = self.get_profiles(storage)
+        target = None
+        for p in profiles:
+            if p['index'] == index:
+                target = p
+                break
+        if target is None:
+            raise ValueError(f"Profile index {index} not found in {storage}.")
+        if target['active']:
+            raise ValueError(f"Cannot delete active profile {index} ('{target['name']}').")
+
+        self._config_mode()
+        try:
+            result = self.cli(f'config profile delete {storage} num {index}')
+            output = list(result.values())[0]
+            if output.startswith('Error:'):
+                raise RuntimeError(f"Failed to delete profile: {output}")
+        finally:
+            self._exit_config_mode()
+
     def _parse_speed(self, speed_str):
         speed_map = {
             '10': 10,

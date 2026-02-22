@@ -4,11 +4,13 @@ NAPALM driver for Hirschmann HiOS industrial switches by Belden. Supports SSH an
 
 ## Features
 
-- **Dual protocol**: SSH and SNMPv3 with automatic failover
+- **Dual protocol**: SNMPv3 (default) and SSH with lazy auto-connect
 - **SNMPv3 authPriv** (MD5/DES) — works with HiOS factory defaults including short passwords
-- **20 getters** on both SSH + SNMP, plus 3 SSH-only methods and 3 SSH-only write operations
+- **20 getters** on both SSH + SNMP, plus 3 SSH-only methods
+- **Candidate config workflow**: `load_merge_candidate` → `compare_config` → `commit_config` with NVM sync safety checks and optional config watchdog auto-revert
+- **Profile management**: list, fingerprint, activate, delete config profiles via SNMP
 - Vendor-specific: MRP ring redundancy, HiDiscovery, extended LLDP, config save/status
-- Comprehensive unit tests (146+) and live device validation
+- Comprehensive unit tests (193+) and live device validation
 
 ## Installation
 
@@ -75,9 +77,17 @@ This docuemntation was written by Claude from Anthropic so if anything is wrong 
 
 ### SSH-only standard methods
 
-- `get_config()` — CLI scraping
-- `ping()` — device-originated ping
-- `cli()` — raw command execution
+- `get_config()` — CLI scraping (auto-connects SSH if active protocol is SNMP)
+- `ping()` — device-originated ping (auto-connects SSH)
+- `cli()` — raw command execution (auto-connects SSH)
+
+### Configuration workflow
+
+- `load_merge_candidate()` — stage CLI commands for later commit
+- `compare_config()` — return staged commands
+- `commit_config()` — execute staged commands via SSH, save to NVM (with optional watchdog auto-revert)
+- `discard_config()` — clear staged commands
+- `rollback()` — not supported (use `activate_profile()` for atomic profile switching)
 
 ### Vendor-specific methods (SSH + SNMP)
 
@@ -86,14 +96,16 @@ This docuemntation was written by Claude from Anthropic so if anything is wrong 
 - `get_lldp_neighbors_detail_extended()` — LLDP with 802.1/802.3 extensions
 - `get_config_status()` — check if running config is saved to NVM
 - `save_config()` — save running config to NVM
+- `get_profiles()` — list config profiles (SSH + SNMP)
+- `get_config_fingerprint()` — SHA1 fingerprint of active profile (SSH + SNMP)
+- `activate_profile()` — activate a config profile (causes warm restart)
+- `delete_profile()` — delete an inactive profile
 
 ### Vendor-specific write operations (SSH + SNMP)
 
 - `set_mrp()` — configure MRP ring on default domain
 - `delete_mrp()` — disable and delete MRP domain
 - `set_hidiscovery()` — set HiDiscovery mode (on/off/read-only) + LED blinking
-
-Note: Configuration-related methods (`load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, `rollback()`) are not implemented — HiOS does not support candidate configurations.
 
 For vendor-specific method details, see [docs/vendor_specific.md](docs/vendor_specific.md). For standard method details, see [docs/usage.md](docs/usage.md).
 
@@ -113,7 +125,6 @@ To run the unit tests:
 ```
 python -m unittest discover tests/unit
 ```
-Note: tests are still a work in progress...
 
 To run the integration tests (requires a real HiOS device or a properly configured mock):
 
@@ -135,7 +146,9 @@ Some musings about what to do for next release, [Wishlist](TODO.md), feel free t
 
 ## Protocol Support
 
-The driver supports SSH and SNMPv3 protocols, selected via `protocol_preference` in `optional_args`. Default order: SSH → SNMP → NETCONF.
+The driver supports SSH and SNMPv3 protocols, selected via `protocol_preference` in `optional_args`. Default order: SNMP → SSH → NETCONF.
+
+SNMP is the default protocol (lower overhead, stateless). SSH is lazy-connected on demand when SSH-only methods are called (`get_config`, `ping`, `cli`, `commit_config`). To use SSH as the primary protocol, set `protocol_preference: ['ssh']`.
 
 ### SNMP Configuration
 
@@ -203,15 +216,24 @@ When implementing getters, this priority order is followed:
 | `get_hidiscovery` | Yes | Yes | Vendor (HiDiscovery protocol) |
 | `get_config_status` | Yes | Yes | Vendor (NVM/ACA/boot sync state) |
 | `save_config` | Yes | Yes | Vendor (save running-config to NVM) |
-| `get_config` | Yes | No | SSH-only (CLI scraping) |
-| `ping` | Yes | No | SSH-only |
-| `cli` | Yes | No | SSH-only |
+| `get_config` | Yes | No | SSH-only (lazy-connects SSH) |
+| `ping` | Yes | No | SSH-only (lazy-connects SSH) |
+| `cli` | Yes | No | SSH-only (lazy-connects SSH) |
+| `load_merge_candidate` | Yes | Yes | In-memory staging |
+| `compare_config` | Yes | Yes | Returns staged commands |
+| `commit_config` | Yes | Yes | SSH execution + NVM save |
+| `discard_config` | Yes | Yes | Clears staged commands |
+| `get_profiles` | Yes | Yes | Vendor (config profile list) |
+| `get_config_fingerprint` | Yes | Yes | Vendor (active profile SHA1) |
+| `activate_profile` | Yes | Yes | Vendor write (warm restart) |
+| `delete_profile` | Yes | Yes | Vendor write |
 | `set_mrp` / `delete_mrp` | Yes | Yes | Vendor write (MRP ring config) |
 | `set_hidiscovery` | Yes | Yes | Vendor write (mode + blinking) |
 
 ## Known Issues
 
-- If a method is only available on SSH (e.g. `get_config`, `ping`, `cli`) and the active connection is SNMP, calling it raises `NotImplementedError`.
+- SSH-only methods (`get_config`, `ping`, `cli`, `commit_config`) auto-connect SSH when the active protocol is SNMP. If SSH credentials are incorrect or the SSH port is blocked, these methods raise `NotImplementedError`.
+- `activate_profile()` triggers a warm restart — the SSH connection will drop. Reconnect after the device reboots.
 - NETCONF support is stub-only — not usable for production.
 
 ## Contributing

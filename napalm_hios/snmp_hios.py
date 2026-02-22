@@ -194,6 +194,28 @@ OID_hm2FMActionActivateKey = '1.3.6.1.4.1.248.11.21.1.2.18'
 # Table entry: copy(2).config(10).runningConfig(10).nvm(2) — fully indexed, >=14 parts
 OID_hm2FMActionActivate_save = '1.3.6.1.4.1.248.11.21.1.2.1.1.5.2.10.10.2'
 
+# HM2-FILEMGMT-MIB — profile table  1.3.6.1.4.1.248.11.21.1.1.1.1.*
+# Indexed by (storageType, profileIndex): nvm=1, envm=2
+OID_hm2FMProfileStorageType      = '1.3.6.1.4.1.248.11.21.1.1.1.1.1'
+OID_hm2FMProfileIndex            = '1.3.6.1.4.1.248.11.21.1.1.1.1.2'
+OID_hm2FMProfileName             = '1.3.6.1.4.1.248.11.21.1.1.1.1.3'
+OID_hm2FMProfileDateTime         = '1.3.6.1.4.1.248.11.21.1.1.1.1.4'
+OID_hm2FMProfileActive           = '1.3.6.1.4.1.248.11.21.1.1.1.1.5'
+OID_hm2FMProfileAction           = '1.3.6.1.4.1.248.11.21.1.1.1.1.6'
+OID_hm2FMProfileEncryptionActive = '1.3.6.1.4.1.248.11.21.1.1.1.1.8'
+OID_hm2FMProfileEncryptionVerified = '1.3.6.1.4.1.248.11.21.1.1.1.1.9'
+OID_hm2FMProfileSwMajorRelNum    = '1.3.6.1.4.1.248.11.21.1.1.1.1.10'
+OID_hm2FMProfileSwMinorRelNum    = '1.3.6.1.4.1.248.11.21.1.1.1.1.11'
+OID_hm2FMProfileSwBugfixRelNum   = '1.3.6.1.4.1.248.11.21.1.1.1.1.12'
+OID_hm2FMProfileFingerprint      = '1.3.6.1.4.1.248.11.21.1.1.1.1.13'
+OID_hm2FMProfileFingerprintVerified = '1.3.6.1.4.1.248.11.21.1.1.1.1.14'
+
+# HM2-FILEMGMT-MIB — config watchdog  1.3.6.1.4.1.248.11.21.1.4.1.*
+OID_hm2ConfigWatchdogAdminStatus  = '1.3.6.1.4.1.248.11.21.1.4.1.1'
+OID_hm2ConfigWatchdogOperStatus   = '1.3.6.1.4.1.248.11.21.1.4.1.2'
+OID_hm2ConfigWatchdogTimeInterval = '1.3.6.1.4.1.248.11.21.1.4.1.3'
+OID_hm2ConfigWatchdogTimerValue   = '1.3.6.1.4.1.248.11.21.1.4.1.4'
+
 # HM2-TIMESYNC-MIB — SNTP client  1.3.6.1.4.1.248.11.50.1.2.3.*
 OID_hm2SntpRequestInterval = '1.3.6.1.4.1.248.11.50.1.2.3.4'
 OID_hm2SntpClientStatus    = '1.3.6.1.4.1.248.11.50.1.2.3.5'
@@ -1985,3 +2007,207 @@ class SNMPHIOS:
             }
             neighbors.setdefault(local_iface, []).append(detail)
         return neighbors
+
+    # ------------------------------------------------------------------
+    # Profile management (HM2-FILEMGMT-MIB profile table)
+    # ------------------------------------------------------------------
+
+    _STORAGE_TYPE = {'nvm': 1, 'envm': 2}
+
+    def get_profiles(self, storage='nvm'):
+        """List config profiles on the device.
+
+        Args:
+            storage: 'nvm' (internal flash) or 'envm' (external memory card)
+
+        Returns list of dicts::
+
+            [{
+                'index': 1,
+                'name': 'config',
+                'active': True,
+                'datetime': '2026-02-13 13:25:16',
+                'firmware': '09.4.04',
+                'fingerprint': '9244C58F...',
+                'fingerprint_verified': True,
+                'encrypted': False,
+                'encryption_verified': False,
+            }]
+        """
+        storage_int = self._STORAGE_TYPE.get(storage)
+        if storage_int is None:
+            raise ValueError(f"Invalid storage '{storage}': use 'nvm' or 'envm'")
+        return asyncio.run(self._get_profiles_async(storage_int))
+
+    async def _get_profiles_async(self, storage_filter):
+        from datetime import datetime, timezone
+        rows = await self._walk_columns({
+            'storage': OID_hm2FMProfileStorageType,
+            'index': OID_hm2FMProfileIndex,
+            'name': OID_hm2FMProfileName,
+            'datetime': OID_hm2FMProfileDateTime,
+            'active': OID_hm2FMProfileActive,
+            'enc_active': OID_hm2FMProfileEncryptionActive,
+            'enc_verified': OID_hm2FMProfileEncryptionVerified,
+            'sw_major': OID_hm2FMProfileSwMajorRelNum,
+            'sw_minor': OID_hm2FMProfileSwMinorRelNum,
+            'sw_bugfix': OID_hm2FMProfileSwBugfixRelNum,
+            'fingerprint': OID_hm2FMProfileFingerprint,
+            'fp_verified': OID_hm2FMProfileFingerprintVerified,
+        })
+
+        profiles = []
+        for suffix, cols in rows.items():
+            storage_type = _snmp_int(cols.get('storage', 0))
+            if storage_type != storage_filter:
+                continue
+
+            # Parse epoch timestamp
+            epoch = _snmp_int(cols.get('datetime', 0))
+            if epoch > 0:
+                dt_str = datetime.fromtimestamp(epoch, tz=timezone.utc).strftime(
+                    '%Y-%m-%d %H:%M:%S'
+                )
+            else:
+                dt_str = ''
+
+            # Build firmware version string
+            major = _snmp_int(cols.get('sw_major', 0))
+            minor = _snmp_int(cols.get('sw_minor', 0))
+            bugfix = _snmp_int(cols.get('sw_bugfix', 0))
+            fw = f'{major:02d}.{minor}.{bugfix:02d}' if major else ''
+
+            fp_raw = str(cols.get('fingerprint', '')).strip()
+            # Clean up hex prefixes
+            if fp_raw.startswith('0x'):
+                fp_raw = fp_raw[2:]
+
+            profiles.append({
+                'index': _snmp_int(cols.get('index', 0)),
+                'name': str(cols.get('name', '')).strip(),
+                'active': _snmp_int(cols.get('active', 2)) == 1,
+                'datetime': dt_str,
+                'firmware': fw,
+                'fingerprint': fp_raw.upper(),
+                'fingerprint_verified': _snmp_int(cols.get('fp_verified', 2)) == 1,
+                'encrypted': _snmp_int(cols.get('enc_active', 2)) == 1,
+                'encryption_verified': _snmp_int(cols.get('enc_verified', 2)) == 1,
+            })
+
+        profiles.sort(key=lambda p: p['index'])
+        return profiles
+
+    def get_config_fingerprint(self):
+        """Return the SHA1 fingerprint of the active NVM profile.
+
+        Returns::
+
+            {'fingerprint': '9244C58FEA7549A1...', 'verified': True}
+        """
+        profiles = self.get_profiles('nvm')
+        for p in profiles:
+            if p['active']:
+                return {
+                    'fingerprint': p['fingerprint'],
+                    'verified': p['fingerprint_verified'],
+                }
+        return {'fingerprint': '', 'verified': False}
+
+    def activate_profile(self, storage='nvm', index=1):
+        """Activate a config profile. Note: causes a warm restart.
+
+        Args:
+            storage: 'nvm' or 'envm'
+            index: profile index (1-100)
+
+        Returns the updated profile list.
+        """
+        storage_int = self._STORAGE_TYPE.get(storage)
+        if storage_int is None:
+            raise ValueError(f"Invalid storage '{storage}': use 'nvm' or 'envm'")
+        return asyncio.run(self._activate_profile_async(storage_int, index))
+
+    async def _activate_profile_async(self, storage_int, index):
+        oid = f'{OID_hm2FMProfileActive}.{storage_int}.{index}'
+        await self._set_oids((oid, Integer32(1)))
+        return await self._get_profiles_async(storage_int)
+
+    def delete_profile(self, storage='nvm', index=1):
+        """Delete a config profile. Cannot delete the active profile.
+
+        Args:
+            storage: 'nvm' or 'envm'
+            index: profile index (1-100)
+
+        Returns the updated profile list.
+        """
+        storage_int = self._STORAGE_TYPE.get(storage)
+        if storage_int is None:
+            raise ValueError(f"Invalid storage '{storage}': use 'nvm' or 'envm'")
+        # Check the profile is not active
+        profiles = self.get_profiles(storage)
+        for p in profiles:
+            if p['index'] == index and p['active']:
+                raise ValueError(f"Cannot delete active profile {index}")
+        return asyncio.run(self._delete_profile_async(storage_int, index))
+
+    async def _delete_profile_async(self, storage_int, index):
+        oid = f'{OID_hm2FMProfileAction}.{storage_int}.{index}'
+        await self._set_oids((oid, Integer32(2)))  # delete(2)
+        return await self._get_profiles_async(storage_int)
+
+    # ------------------------------------------------------------------
+    # Config watchdog (HM2-FILEMGMT-MIB)
+    # ------------------------------------------------------------------
+
+    def start_watchdog(self, seconds):
+        """Start the config watchdog timer.
+
+        If the timer expires before stop_watchdog() is called, the device
+        reverts to the saved config (NVM) automatically.
+
+        Args:
+            seconds: timer interval (30-600)
+        """
+        if not (30 <= seconds <= 600):
+            raise ValueError(f"Watchdog interval must be 30-600, got {seconds}")
+        return asyncio.run(self._start_watchdog_async(seconds))
+
+    async def _start_watchdog_async(self, seconds):
+        await self._set_scalar(OID_hm2ConfigWatchdogTimeInterval, Integer32(seconds))
+        await self._set_scalar(OID_hm2ConfigWatchdogAdminStatus, Integer32(1))  # enable
+
+    def stop_watchdog(self):
+        """Stop (disable) the config watchdog timer."""
+        return asyncio.run(self._stop_watchdog_async())
+
+    async def _stop_watchdog_async(self):
+        await self._set_scalar(OID_hm2ConfigWatchdogAdminStatus, Integer32(2))  # disable
+
+    def get_watchdog_status(self):
+        """Read config watchdog state.
+
+        Returns::
+
+            {
+                'enabled': True,
+                'oper_status': 1,
+                'interval': 60,
+                'remaining': 45,
+            }
+        """
+        return asyncio.run(self._get_watchdog_status_async())
+
+    async def _get_watchdog_status_async(self):
+        scalars = await self._get_scalar(
+            OID_hm2ConfigWatchdogAdminStatus,
+            OID_hm2ConfigWatchdogOperStatus,
+            OID_hm2ConfigWatchdogTimeInterval,
+            OID_hm2ConfigWatchdogTimerValue,
+        )
+        return {
+            'enabled': _snmp_int(scalars.get(OID_hm2ConfigWatchdogAdminStatus, 2)) == 1,
+            'oper_status': _snmp_int(scalars.get(OID_hm2ConfigWatchdogOperStatus, 2)),
+            'interval': _snmp_int(scalars.get(OID_hm2ConfigWatchdogTimeInterval, 0)),
+            'remaining': _snmp_int(scalars.get(OID_hm2ConfigWatchdogTimerValue, 0)),
+        }

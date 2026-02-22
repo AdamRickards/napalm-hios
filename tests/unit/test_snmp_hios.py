@@ -54,6 +54,15 @@ from napalm_hios.snmp_hios import (
     OID_lldpXdot3RemPortOperMauType,
     OID_lldpXdot3RemLinkAggStatus, OID_lldpXdot3RemLinkAggPortId,
     OID_lldpXdot1RemPortVlanId, OID_lldpXdot1RemVlanId,
+    OID_hm2FMProfileStorageType, OID_hm2FMProfileIndex,
+    OID_hm2FMProfileName, OID_hm2FMProfileDateTime,
+    OID_hm2FMProfileActive, OID_hm2FMProfileAction,
+    OID_hm2FMProfileEncryptionActive, OID_hm2FMProfileEncryptionVerified,
+    OID_hm2FMProfileSwMajorRelNum, OID_hm2FMProfileSwMinorRelNum,
+    OID_hm2FMProfileSwBugfixRelNum, OID_hm2FMProfileFingerprint,
+    OID_hm2FMProfileFingerprintVerified,
+    OID_hm2ConfigWatchdogAdminStatus, OID_hm2ConfigWatchdogOperStatus,
+    OID_hm2ConfigWatchdogTimeInterval, OID_hm2ConfigWatchdogTimerValue,
 )
 from napalm.base.exceptions import ConnectionException
 
@@ -1345,6 +1354,327 @@ class TestSNMPHIOS(unittest.TestCase):
             self.assertEqual(len(set_calls), 2)
             self.assertEqual(set_calls[0][1], 2)  # notInService
             self.assertEqual(set_calls[1][1], 6)  # destroy
+
+
+    # ------------------------------------------------------------------
+    # get_profiles
+    # ------------------------------------------------------------------
+
+    def test_get_profiles_nvm(self):
+        """Walk profile table, filter by NVM, format timestamps and firmware."""
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                # NVM profile 1 (active)
+                '1.1': {
+                    'storage': 1,  # nvm
+                    'index': 1,
+                    'name': 'config',
+                    'datetime': 1739451916,  # 2025-02-13 13:25:16 UTC
+                    'active': 1,
+                    'enc_active': 2,   # false
+                    'enc_verified': 2,
+                    'sw_major': 9,
+                    'sw_minor': 4,
+                    'sw_bugfix': 4,
+                    'fingerprint': '9244C58FEA7549A1E2C80DB7608B8D75CF068A66',
+                    'fp_verified': 1,
+                },
+                # NVM profile 2 (inactive)
+                '1.2': {
+                    'storage': 1,  # nvm
+                    'index': 2,
+                    'name': 'backup',
+                    'datetime': 1739000000,
+                    'active': 2,   # inactive
+                    'enc_active': 2,
+                    'enc_verified': 2,
+                    'sw_major': 9,
+                    'sw_minor': 4,
+                    'sw_bugfix': 2,
+                    'fingerprint': 'ABCDEF1234567890ABCDEF1234567890ABCDEF12',
+                    'fp_verified': 2,  # not verified
+                },
+                # ENVM profile 1 (should be filtered out)
+                '2.1': {
+                    'storage': 2,  # envm
+                    'index': 1,
+                    'name': 'external',
+                    'datetime': 1739000000,
+                    'active': 2,
+                    'enc_active': 2,
+                    'enc_verified': 2,
+                    'sw_major': 9,
+                    'sw_minor': 4,
+                    'sw_bugfix': 2,
+                    'fingerprint': '0000000000000000000000000000000000000000',
+                    'fp_verified': 2,
+                },
+            }
+
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            profiles = self.snmp.get_profiles('nvm')
+
+        self.assertEqual(len(profiles), 2)
+
+        # Profile 1 — active
+        p1 = profiles[0]
+        self.assertEqual(p1['index'], 1)
+        self.assertEqual(p1['name'], 'config')
+        self.assertTrue(p1['active'])
+        self.assertIn('2025-02-13', p1['datetime'])
+        self.assertEqual(p1['firmware'], '09.4.04')
+        self.assertEqual(p1['fingerprint'], '9244C58FEA7549A1E2C80DB7608B8D75CF068A66')
+        self.assertTrue(p1['fingerprint_verified'])
+        self.assertFalse(p1['encrypted'])
+        self.assertFalse(p1['encryption_verified'])
+
+        # Profile 2 — inactive
+        p2 = profiles[1]
+        self.assertEqual(p2['index'], 2)
+        self.assertEqual(p2['name'], 'backup')
+        self.assertFalse(p2['active'])
+        self.assertFalse(p2['fingerprint_verified'])
+
+    def test_get_profiles_envm(self):
+        """get_profiles('envm') filters by storage type 2."""
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '1.1': {'storage': 1, 'index': 1, 'name': 'nvm-config',
+                         'datetime': 0, 'active': 1, 'enc_active': 2,
+                         'enc_verified': 2, 'sw_major': 9, 'sw_minor': 4,
+                         'sw_bugfix': 4, 'fingerprint': '', 'fp_verified': 2},
+                '2.1': {'storage': 2, 'index': 1, 'name': 'sd-card',
+                         'datetime': 0, 'active': 2, 'enc_active': 2,
+                         'enc_verified': 2, 'sw_major': 9, 'sw_minor': 4,
+                         'sw_bugfix': 2, 'fingerprint': '', 'fp_verified': 2},
+            }
+
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            profiles = self.snmp.get_profiles('envm')
+
+        self.assertEqual(len(profiles), 1)
+        self.assertEqual(profiles[0]['name'], 'sd-card')
+
+    def test_get_profiles_invalid_storage(self):
+        with self.assertRaises(ValueError):
+            self.snmp.get_profiles('usb')
+
+    # ------------------------------------------------------------------
+    # get_config_fingerprint
+    # ------------------------------------------------------------------
+
+    def test_get_config_fingerprint(self):
+        """Returns fingerprint of the active NVM profile."""
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '1.1': {
+                    'storage': 1, 'index': 1, 'name': 'config',
+                    'datetime': 1739451916, 'active': 1,
+                    'enc_active': 2, 'enc_verified': 2,
+                    'sw_major': 9, 'sw_minor': 4, 'sw_bugfix': 4,
+                    'fingerprint': '9244C58FEA7549A1E2C80DB7608B8D75CF068A66',
+                    'fp_verified': 1,
+                },
+            }
+
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            fp = self.snmp.get_config_fingerprint()
+
+        self.assertEqual(fp['fingerprint'], '9244C58FEA7549A1E2C80DB7608B8D75CF068A66')
+        self.assertTrue(fp['verified'])
+
+    def test_get_config_fingerprint_no_active(self):
+        """No active profile → empty fingerprint."""
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '1.1': {
+                    'storage': 1, 'index': 1, 'name': 'config',
+                    'datetime': 0, 'active': 2,  # inactive
+                    'enc_active': 2, 'enc_verified': 2,
+                    'sw_major': 0, 'sw_minor': 0, 'sw_bugfix': 0,
+                    'fingerprint': '', 'fp_verified': 2,
+                },
+            }
+
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            fp = self.snmp.get_config_fingerprint()
+
+        self.assertEqual(fp['fingerprint'], '')
+        self.assertFalse(fp['verified'])
+
+    # ------------------------------------------------------------------
+    # activate_profile
+    # ------------------------------------------------------------------
+
+    def test_activate_profile(self):
+        """SET hm2FMProfileActive.1.2 = 1 to activate profile 2."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, int(val)))
+
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '1.2': {
+                    'storage': 1, 'index': 2, 'name': 'backup',
+                    'datetime': 0, 'active': 1,  # now active after SET
+                    'enc_active': 2, 'enc_verified': 2,
+                    'sw_major': 9, 'sw_minor': 4, 'sw_bugfix': 2,
+                    'fingerprint': 'AABB', 'fp_verified': 1,
+                },
+            }
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            result = self.snmp.activate_profile('nvm', 2)
+
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(f'{OID_hm2FMProfileActive}.1.2', set_calls[0][0])
+        self.assertEqual(set_calls[0][1], 1)
+        self.assertEqual(len(result), 1)
+
+    # ------------------------------------------------------------------
+    # delete_profile
+    # ------------------------------------------------------------------
+
+    def test_delete_profile(self):
+        """SET hm2FMProfileAction.1.2 = 2 (delete) for inactive profile."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, int(val)))
+
+        walk_call_count = [0]
+        async def mock_walk_columns(oid_map, engine=None):
+            walk_call_count[0] += 1
+            if walk_call_count[0] == 1:
+                # First call: check if active (from get_profiles in delete_profile)
+                return {
+                    '1.1': {
+                        'storage': 1, 'index': 1, 'name': 'config',
+                        'datetime': 0, 'active': 1,
+                        'enc_active': 2, 'enc_verified': 2,
+                        'sw_major': 9, 'sw_minor': 4, 'sw_bugfix': 4,
+                        'fingerprint': '', 'fp_verified': 2,
+                    },
+                    '1.2': {
+                        'storage': 1, 'index': 2, 'name': 'backup',
+                        'datetime': 0, 'active': 2,  # inactive — can delete
+                        'enc_active': 2, 'enc_verified': 2,
+                        'sw_major': 9, 'sw_minor': 4, 'sw_bugfix': 2,
+                        'fingerprint': '', 'fp_verified': 2,
+                    },
+                }
+            # Second call: after delete, return updated list
+            return {
+                '1.1': {
+                    'storage': 1, 'index': 1, 'name': 'config',
+                    'datetime': 0, 'active': 1,
+                    'enc_active': 2, 'enc_verified': 2,
+                    'sw_major': 9, 'sw_minor': 4, 'sw_bugfix': 4,
+                    'fingerprint': '', 'fp_verified': 2,
+                },
+            }
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            result = self.snmp.delete_profile('nvm', 2)
+
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(f'{OID_hm2FMProfileAction}.1.2', set_calls[0][0])
+        self.assertEqual(set_calls[0][1], 2)  # delete action
+        self.assertEqual(len(result), 1)  # only profile 1 remains
+
+    def test_delete_active_profile_raises(self):
+        """Cannot delete the active profile."""
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '1.1': {
+                    'storage': 1, 'index': 1, 'name': 'config',
+                    'datetime': 0, 'active': 1,  # active — cannot delete
+                    'enc_active': 2, 'enc_verified': 2,
+                    'sw_major': 9, 'sw_minor': 4, 'sw_bugfix': 4,
+                    'fingerprint': '', 'fp_verified': 2,
+                },
+            }
+
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            with self.assertRaises(ValueError) as ctx:
+                self.snmp.delete_profile('nvm', 1)
+            self.assertIn('active', str(ctx.exception))
+
+    # ------------------------------------------------------------------
+    # Watchdog
+    # ------------------------------------------------------------------
+
+    def test_start_watchdog(self):
+        """SET interval then enable."""
+        set_calls = []
+        async def mock_set(oid, value):
+            set_calls.append((oid, int(value)))
+
+        with patch.object(self.snmp, '_set_scalar', side_effect=mock_set):
+            self.snmp.start_watchdog(60)
+
+        self.assertEqual(len(set_calls), 2)
+        # First: set interval
+        self.assertIn(OID_hm2ConfigWatchdogTimeInterval, set_calls[0][0])
+        self.assertEqual(set_calls[0][1], 60)
+        # Second: enable
+        self.assertIn(OID_hm2ConfigWatchdogAdminStatus, set_calls[1][0])
+        self.assertEqual(set_calls[1][1], 1)
+
+    def test_start_watchdog_invalid_interval(self):
+        with self.assertRaises(ValueError):
+            self.snmp.start_watchdog(10)  # < 30
+        with self.assertRaises(ValueError):
+            self.snmp.start_watchdog(700)  # > 600
+
+    def test_stop_watchdog(self):
+        """SET disable."""
+        set_calls = []
+        async def mock_set(oid, value):
+            set_calls.append((oid, int(value)))
+
+        with patch.object(self.snmp, '_set_scalar', side_effect=mock_set):
+            self.snmp.stop_watchdog()
+
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2ConfigWatchdogAdminStatus, set_calls[0][0])
+        self.assertEqual(set_calls[0][1], 2)
+
+    def test_get_watchdog_status(self):
+        """GET all 4 watchdog scalars."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2ConfigWatchdogAdminStatus: 1,   # enabled
+                OID_hm2ConfigWatchdogOperStatus: 1,
+                OID_hm2ConfigWatchdogTimeInterval: 60,
+                OID_hm2ConfigWatchdogTimerValue: 45,
+            }
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            status = self.snmp.get_watchdog_status()
+
+        self.assertTrue(status['enabled'])
+        self.assertEqual(status['oper_status'], 1)
+        self.assertEqual(status['interval'], 60)
+        self.assertEqual(status['remaining'], 45)
+
+    def test_get_watchdog_status_disabled(self):
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2ConfigWatchdogAdminStatus: 2,   # disabled
+                OID_hm2ConfigWatchdogOperStatus: 2,
+                OID_hm2ConfigWatchdogTimeInterval: 0,
+                OID_hm2ConfigWatchdogTimerValue: 0,
+            }
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            status = self.snmp.get_watchdog_status()
+
+        self.assertFalse(status['enabled'])
+        self.assertEqual(status['remaining'], 0)
 
 
 if __name__ == '__main__':

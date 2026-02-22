@@ -1,7 +1,9 @@
 import unittest
 from unittest.mock import Mock, patch
 from napalm_hios.hios import HIOSDriver
-from napalm.base.exceptions import ConnectionException, CommandErrorException
+from napalm.base.exceptions import (
+    ConnectionException, CommandErrorException, MergeConfigException, CommitError
+)
 
 
 class TestHIOSDriver(unittest.TestCase):
@@ -12,6 +14,8 @@ class TestHIOSDriver(unittest.TestCase):
         self.device.active_protocol = 'ssh'
         self.mock_connection = Mock()
         self.device._get_active_connection = Mock(return_value=self.mock_connection)
+        # SSH-only methods (cli, get_config, ping, commit_config) use self.ssh directly
+        self.device.ssh = self.mock_connection
 
     # --- Connection lifecycle ---
 
@@ -80,6 +84,7 @@ class TestHIOSDriver(unittest.TestCase):
     def test_cli_no_connection(self):
         """CLI should raise NotImplementedError when no protocol is active."""
         self.device.active_protocol = None
+        self.device.ssh = None
         with self.assertRaises(NotImplementedError):
             self.device.cli(["show version"])
 
@@ -319,14 +324,141 @@ class TestHIOSDriver(unittest.TestCase):
         self.assertEqual(env["cpu"]["0"]["%usage"], 23.0)
         self.assertGreater(env["memory"]["available_ram"], env["memory"]["used_ram"])
 
-    # --- Config management (intentionally not implemented) ---
+    # --- Config management ---
 
-    def test_config_management_not_implemented(self):
-        for method_name in ['load_merge_candidate', 'load_replace_candidate',
-                            'compare_config', 'commit_config',
-                            'discard_config', 'rollback']:
-            with self.assertRaises(NotImplementedError, msg=f"{method_name} should raise"):
-                getattr(self.device, method_name)()
+    def test_load_merge_candidate_string(self):
+        self.device.load_merge_candidate(config='interface 1/1\nno shutdown')
+        self.assertTrue(self.device._loaded)
+        self.assertEqual(self.device._merge_candidate, 'interface 1/1\nno shutdown')
+
+    def test_load_merge_candidate_no_args(self):
+        with self.assertRaises(MergeConfigException):
+            self.device.load_merge_candidate()
+
+    def test_compare_config_returns_staged(self):
+        self.device._merge_candidate = 'interface 1/1\nno shutdown'
+        result = self.device.compare_config()
+        self.assertEqual(result, 'interface 1/1\nno shutdown')
+
+    def test_compare_config_empty(self):
+        result = self.device.compare_config()
+        self.assertEqual(result, '')
+
+    def test_discard_config(self):
+        self.device._merge_candidate = 'interface 1/1'
+        self.device._loaded = True
+        self.device.discard_config()
+        self.assertEqual(self.device._merge_candidate, '')
+        self.assertFalse(self.device._loaded)
+
+    def test_rollback_raises(self):
+        with self.assertRaises(NotImplementedError) as ctx:
+            self.device.rollback()
+        self.assertIn('activate_profile', str(ctx.exception))
+
+    def test_load_replace_candidate_raises(self):
+        with self.assertRaises(NotImplementedError):
+            self.device.load_replace_candidate(config='test')
+
+    def test_commit_config_not_loaded(self):
+        with self.assertRaises(CommitError):
+            self.device.commit_config()
+
+    def test_commit_config_success(self):
+        """Full commit workflow: load → check NVM → config mode → execute → save."""
+        self.device.load_merge_candidate(config='system location Test\nno shutdown')
+        self.device.ssh = self.mock_connection
+        self.mock_connection.get_config_status.return_value = {'saved': True, 'nvm': 'ok'}
+        self.mock_connection._config_mode.return_value = None
+        self.mock_connection._exit_config_mode.return_value = None
+        self.mock_connection.cli.return_value = {'cmd': ''}
+        self.mock_connection.save_config.return_value = {'saved': True, 'nvm': 'ok'}
+
+        self.device.commit_config()
+
+        self.assertTrue(self.device._changed)
+        self.assertFalse(self.device._loaded)
+        self.assertEqual(self.device._merge_candidate, '')
+        self.mock_connection._config_mode.assert_called_once()
+        self.mock_connection._exit_config_mode.assert_called_once()
+        self.mock_connection.save_config.assert_called_once()
+
+    def test_commit_config_unsaved_nvm_rejects(self):
+        """Refuse to commit if NVM is out of sync (someone else's changes)."""
+        self.device.load_merge_candidate(config='test cmd')
+        self.device.ssh = self.mock_connection
+        self.mock_connection.get_config_status.return_value = {
+            'saved': False, 'nvm': 'out of sync'
+        }
+        with self.assertRaises(CommitError) as ctx:
+            self.device.commit_config()
+        self.assertIn('not saved', str(ctx.exception))
+
+    # --- Protocol preference ---
+
+    @patch('napalm_hios.hios.SNMPHIOS')
+    def test_default_protocol_snmp_first(self, mock_snmp_cls):
+        """Default protocol preference is now SNMP-first."""
+        device = HIOSDriver('192.168.1.1', 'admin', 'private')
+        mock_snmp_cls.return_value.open.return_value = None
+        device.open()
+        mock_snmp_cls.assert_called_once()
+        self.assertEqual(device.active_protocol, 'snmp')
+
+    # --- Lazy SSH ---
+
+    def test_get_config_lazy_ssh(self):
+        """get_config should lazy-connect SSH when active protocol is SNMP."""
+        self.device.active_protocol = 'snmp'
+        self.device.ssh = None
+        mock_ssh = Mock()
+        mock_ssh.get_config.return_value = {
+            'running': '! config', 'startup': '', 'candidate': ''
+        }
+        with patch.object(self.device, '_ensure_ssh', return_value=True):
+            self.device.ssh = mock_ssh
+            config = self.device.get_config()
+        self.assertIn('running', config)
+
+    def test_cli_lazy_ssh(self):
+        """cli should lazy-connect SSH when active protocol is SNMP."""
+        self.device.active_protocol = 'snmp'
+        self.device.ssh = None
+        mock_ssh = Mock()
+        mock_ssh.cli.return_value = {'show version': 'HiOS'}
+        with patch.object(self.device, '_ensure_ssh', return_value=True):
+            self.device.ssh = mock_ssh
+            result = self.device.cli(['show version'])
+        self.assertEqual(result['show version'], 'HiOS')
+
+    # --- Profile dispatch ---
+
+    def test_get_profiles_dispatch(self):
+        self.mock_connection.get_profiles.return_value = [
+            {'index': 1, 'name': 'config', 'active': True}
+        ]
+        result = self.device.get_profiles('nvm')
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['name'], 'config')
+
+    def test_get_config_fingerprint_dispatch(self):
+        self.mock_connection.get_config_fingerprint.return_value = {
+            'fingerprint': 'ABCD1234', 'verified': True
+        }
+        result = self.device.get_config_fingerprint()
+        self.assertEqual(result['fingerprint'], 'ABCD1234')
+
+    def test_activate_profile_dispatch(self):
+        self.mock_connection.activate_profile.return_value = [
+            {'index': 1, 'name': 'config', 'active': True}
+        ]
+        result = self.device.activate_profile('nvm', 1)
+        self.assertEqual(len(result), 1)
+
+    def test_delete_profile_dispatch(self):
+        self.mock_connection.delete_profile.return_value = []
+        result = self.device.delete_profile('nvm', 2)
+        self.assertEqual(result, [])
 
     # --- Error handling ---
 
@@ -343,6 +475,7 @@ class TestHIOSDriver(unittest.TestCase):
     def test_no_protocol_raises(self):
         """All data methods should raise when active_protocol is not set."""
         self.device.active_protocol = None
+        self.device.ssh = None
         methods = ['get_facts', 'get_interfaces', 'get_interfaces_ip',
                    'get_lldp_neighbors', 'get_environment', 'get_config',
                    'get_users', 'get_vlans', 'get_snmp_information',

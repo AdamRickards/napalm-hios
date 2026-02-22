@@ -626,5 +626,143 @@ class TestConfigStatus(unittest.TestCase):
         self.assertEqual(result['nvm'], 'busy')
 
 
+class TestProfileParser(unittest.TestCase):
+    """Test SSH config profile parser."""
+
+    def setUp(self):
+        self.ssh = SSHHIOS.__new__(SSHHIOS)
+        self.ssh.connection = None
+
+    def test_single_profile(self):
+        """Parse single active profile from live GRS1042 output."""
+        fixture = load_fixture('show_config_profiles_nvm.txt')
+        self.ssh._send_command = lambda cmd: fixture
+        result = self.ssh.get_profiles('nvm')
+        self.assertEqual(len(result), 1)
+        p = result[0]
+        self.assertEqual(p['index'], 1)
+        self.assertEqual(p['name'], 'config')
+        self.assertTrue(p['active'])
+        self.assertEqual(p['datetime'], '2026-02-13 13:25:16')
+        self.assertEqual(p['firmware'], '09.4.4')
+        self.assertEqual(p['fingerprint'], '9244C58FEA7549A1E2C80DB7608B8D75CF068A66')
+        self.assertTrue(p['fingerprint_verified'])
+        self.assertFalse(p['encrypted'])
+        self.assertFalse(p['encryption_verified'])
+
+    def test_multi_profile(self):
+        """Parse two profiles — one active, one inactive."""
+        fixture = load_fixture('show_config_profiles_nvm_multi.txt')
+        self.ssh._send_command = lambda cmd: fixture
+        result = self.ssh.get_profiles('nvm')
+        self.assertEqual(len(result), 2)
+        # Active
+        self.assertTrue(result[0]['active'])
+        self.assertEqual(result[0]['name'], 'config')
+        self.assertTrue(result[0]['fingerprint_verified'])
+        # Inactive
+        self.assertFalse(result[1]['active'])
+        self.assertEqual(result[1]['name'], 'backup')
+        self.assertFalse(result[1]['fingerprint_verified'])
+        self.assertEqual(result[1]['fingerprint'], 'ABCDEF1234567890ABCDEF1234567890ABCDEF12')
+
+    def test_invalid_storage_raises(self):
+        """Reject invalid storage type."""
+        with self.assertRaises(ValueError):
+            self.ssh.get_profiles('invalid')
+
+    def test_fingerprint(self):
+        """get_config_fingerprint returns active profile SHA1."""
+        fixture = load_fixture('show_config_profiles_nvm.txt')
+        self.ssh._send_command = lambda cmd: fixture
+        result = self.ssh.get_config_fingerprint()
+        self.assertEqual(result['fingerprint'], '9244C58FEA7549A1E2C80DB7608B8D75CF068A66')
+        self.assertTrue(result['verified'])
+
+    def test_fingerprint_no_active(self):
+        """Empty fingerprint when no active profile."""
+        # Create fixture with no [x] marker
+        fixture = (
+            "Index   Name                                      Date & Time (UTC)    SW-Rel.\n"
+            "Active  Fingerprint                               FP verified\n"
+            "        Encrypted    Key verified\n"
+            "------  -----------  ---------------------------  -------------------  ---------\n"
+            "  1     config                                    2026-02-13 13:25:16  09.4.4\n"
+            " [ ]    9244C58FEA7549A1E2C80DB7608B8D75CF068A66  yes\n"
+            "        no           no\n"
+        )
+        self.ssh._send_command = lambda cmd: fixture
+        result = self.ssh.get_config_fingerprint()
+        self.assertEqual(result['fingerprint'], '')
+        self.assertFalse(result['verified'])
+
+
+class TestProfileWriteSSH(unittest.TestCase):
+    """Test SSH profile activate/delete methods."""
+
+    def setUp(self):
+        self.ssh = SSHHIOS.__new__(SSHHIOS)
+        self.ssh.connection = None
+        self.ssh._in_config_mode = False
+        # Mock config mode and CLI
+        self.ssh._config_mode = lambda: setattr(self.ssh, '_in_config_mode', True)
+        self.ssh._exit_config_mode = lambda: setattr(self.ssh, '_in_config_mode', False)
+
+        # Default: two profiles, index 1 active, index 2 inactive
+        self.multi_fixture = load_fixture('show_config_profiles_nvm_multi.txt')
+        self.ssh._send_command = lambda cmd: self.multi_fixture
+
+    def test_delete_inactive_profile(self):
+        """Delete inactive profile index 2."""
+        self.cli_calls = []
+        def mock_cli(cmd):
+            self.cli_calls.append(cmd)
+            return {cmd: ''}
+        self.ssh.cli = mock_cli
+
+        self.ssh.delete_profile('nvm', 2)
+        self.assertIn('config profile delete nvm num 2', self.cli_calls)
+
+    def test_delete_active_profile_raises(self):
+        """Refuse to delete the active profile."""
+        with self.assertRaises(ValueError) as ctx:
+            self.ssh.delete_profile('nvm', 1)
+        self.assertIn('active', str(ctx.exception).lower())
+
+    def test_delete_nonexistent_raises(self):
+        """Refuse to delete a profile that doesn't exist."""
+        with self.assertRaises(ValueError) as ctx:
+            self.ssh.delete_profile('nvm', 99)
+        self.assertIn('not found', str(ctx.exception).lower())
+
+    def test_activate_inactive_profile(self):
+        """Activate inactive profile index 2."""
+        self.cli_calls = []
+        def mock_cli(cmd):
+            self.cli_calls.append(cmd)
+            return {cmd: ''}
+        self.ssh.cli = mock_cli
+
+        self.ssh.activate_profile('nvm', 2)
+        self.assertIn('config profile select nvm 2', self.cli_calls)
+
+    def test_activate_already_active_raises(self):
+        """Refuse to activate a profile that's already active."""
+        with self.assertRaises(ValueError) as ctx:
+            self.ssh.activate_profile('nvm', 1)
+        self.assertIn('already active', str(ctx.exception).lower())
+
+    def test_activate_envm_raises(self):
+        """HiOS only supports select from NVM."""
+        with self.assertRaises(ValueError) as ctx:
+            self.ssh.activate_profile('envm', 1)
+        self.assertIn('nvm', str(ctx.exception).lower())
+
+    def test_delete_invalid_storage_raises(self):
+        """Reject invalid storage type."""
+        with self.assertRaises(ValueError):
+            self.ssh.delete_profile('invalid', 1)
+
+
 if __name__ == '__main__':
     unittest.main()

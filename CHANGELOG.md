@@ -1,5 +1,91 @@
 # Changelog
 
+## 1.3.0 — 2026-02-22
+
+### Candidate config workflow
+
+HiOS has no native candidate config — commands apply immediately. This release adds
+an in-memory staging workflow (`load_merge_candidate` → `compare_config` → `commit_config`)
+that executes staged CLI commands via SSH with safety checks.
+
+- **`load_merge_candidate(filename=None, config=None)`** — stage CLI commands for later commit
+- **`compare_config()`** — return staged commands (no real diff possible on HiOS)
+- **`commit_config(message='', revert_in=None)`** — execute staged commands via SSH, save to NVM
+  - Checks NVM sync before commit (rejects if someone else has unsaved changes)
+  - Optional `revert_in` parameter starts HiOS config watchdog for auto-revert (30-600s)
+  - Watchdog auto-stops on successful save
+- **`discard_config()`** — clear staged commands
+- **`rollback()`** — raises `NotImplementedError` with guidance to use `activate_profile()` instead
+- **`load_replace_candidate()`** — stays as `NotImplementedError` (HiOS limitation)
+
+### Profile management (SNMP)
+
+New vendor-specific methods for HiOS config profile management via HM2-FILEMGMT-MIB:
+
+- **`get_profiles(storage='nvm')`** — list config profiles with name, active state, datetime, firmware version, SHA1 fingerprint, encryption status
+- **`get_config_fingerprint()`** — return SHA1 fingerprint of the active NVM profile
+- **`activate_profile(storage='nvm', index=1)`** — activate a profile (causes warm restart)
+- **`delete_profile(storage='nvm', index=1)`** — delete an inactive profile
+
+All 4 profile methods implemented on both SSH and SNMP:
+- SSH parser uses live device output fixture from GRS1042
+- SSH `activate_profile()`: `config profile select nvm <index>` (configure mode, causes warm restart)
+- SSH `delete_profile()`: `config profile delete {nvm|envm} num <index>` (configure mode)
+
+### Config watchdog (SNMP)
+
+HiOS has a built-in config watchdog that auto-reverts to saved config if a timer expires.
+Used internally by `commit_config(revert_in=N)`, also available directly:
+
+- **`start_watchdog(seconds)`** — start watchdog timer (30-600s)
+- **`stop_watchdog()`** — stop (disable) watchdog timer
+- **`get_watchdog_status()`** — read watchdog state (enabled, interval, remaining)
+
+### Protocol preference — SNMP default + lazy SSH
+
+- **Default protocol changed** from `['ssh', 'snmp', 'netconf']` to `['snmp', 'ssh', 'netconf']`
+- SNMP connects first (lower overhead, stateless); SSH lazy-connects on demand
+- **`_ensure_ssh()`** — auto-connects SSH when SSH-only methods are called
+- SSH-only methods (`get_config`, `ping`, `cli`, `commit_config`) now work even when active protocol is SNMP
+- Explicit `protocol_preference: ['ssh']` disables SNMP entirely (no change)
+
+### Test additions
+- `test_get_profiles_nvm` — walk profile table, filter by storage, format timestamps/firmware
+- `test_get_profiles_envm` — filters by storage type 2
+- `test_get_profiles_invalid_storage` — rejects invalid storage names
+- `test_get_config_fingerprint` — finds active profile SHA1
+- `test_get_config_fingerprint_no_active` — empty fingerprint when no active profile
+- `test_activate_profile` — SET active column
+- `test_delete_profile` — SET action=delete for inactive profile
+- `test_delete_active_profile_raises` — refuses to delete active profile
+- `test_start_watchdog` — SET interval then enable
+- `test_start_watchdog_invalid_interval` — rejects out-of-range values
+- `test_stop_watchdog` — SET disable
+- `test_get_watchdog_status` / `test_get_watchdog_status_disabled` — read all 4 scalars
+- `test_load_merge_candidate_string` / `test_load_merge_candidate_no_args`
+- `test_compare_config_returns_staged` / `test_compare_config_empty`
+- `test_discard_config` / `test_rollback_raises` / `test_load_replace_candidate_raises`
+- `test_commit_config_not_loaded` / `test_commit_config_success` / `test_commit_config_unsaved_nvm_rejects`
+- `test_default_protocol_snmp_first` — verifies SNMP-first default
+- `test_get_config_lazy_ssh` / `test_cli_lazy_ssh` — verify lazy SSH connect
+- `test_get_profiles_dispatch` / `test_get_config_fingerprint_dispatch` / `test_activate_profile_dispatch` / `test_delete_profile_dispatch`
+- `test_single_profile` / `test_multi_profile` — SSH profile parser with live GRS1042 fixture
+- `test_fingerprint` / `test_fingerprint_no_active` / `test_invalid_storage_raises` — SSH profile edge cases
+- `test_delete_inactive_profile` / `test_delete_active_profile_raises` / `test_delete_nonexistent_raises` / `test_delete_invalid_storage_raises` — SSH profile delete
+- `test_activate_inactive_profile` / `test_activate_already_active_raises` / `test_activate_envm_raises` — SSH profile activate
+
+### Bug fixes
+- **`commit_config` uses config mode**: commands now execute in `configure` mode (`_config_mode()` / `_exit_config_mode()`) instead of enable mode. HiOS configuration commands like `system location` require the `configure` sub-shell.
+- **`commit_config` error checking**: CLI output is now checked for `Error:` responses during commit. Failed commands are collected and raised as `CommitError` with details.
+- **NVM busy polling**: `commit_config` now polls through transient "busy" NVM state (up to 5s) instead of immediately rejecting. Prevents false failures when committing shortly after a previous save.
+
+### Live validation (GRS1042, HiOS-3A-09.4.04)
+- Full candidate config cycle: `load_merge_candidate` → `compare_config` → `commit_config` → verified on device
+- Profile fingerprint divergence confirmed: SHA1 changes on each NVM save, useful for NMS change detection
+- Watchdog: manual start/stop cycle verified, `commit_config(revert_in=60)` auto-starts and auto-stops
+- SSH profile parser: matches SNMP profile output on same device
+- Lazy SSH connect: SNMP-first → SSH auto-connects for `commit_config` and `get_config`
+
 ## 1.2.3 — 2026-02-22
 
 ### Bugfix: remove link-up safety check from set_mrp()
