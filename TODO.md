@@ -1,30 +1,5 @@
 # TODO
 
-## Done (1.3.0)
-
-- [x] Candidate config workflow — `load_merge_candidate`, `compare_config`, `commit_config`, `discard_config`
-- [x] Config watchdog — `start_watchdog`, `stop_watchdog`, `get_watchdog_status` (SNMP)
-- [x] Profile management — `get_profiles`, `get_config_fingerprint`, `activate_profile`, `delete_profile` (SNMP + SSH read)
-- [x] SSH profile parser — `get_profiles()`, `get_config_fingerprint()` with live GRS1042 fixture
-- [x] SNMP-first default protocol preference + lazy SSH connect for SSH-only methods
-- [x] `rollback()` → guidance message pointing to `activate_profile()`
-- [x] `commit_config` bugfix — config mode, error checking, NVM busy polling
-
-## Done (1.2.x)
-
-- [x] Config status / save — `get_config_status()`, `save_config()` (SSH + SNMP)
-- [x] HiDiscovery — `get_hidiscovery()`, `set_hidiscovery()` (SSH + SNMP, including blinking toggle)
-- [x] MRP — `get_mrp()`, `set_mrp()`, `delete_mrp()` (SSH + SNMP, with recovery delay validation)
-- [x] Full SSH/SNMP getter parity — 20 getters on both protocols
-- [x] All vendor write operations on both protocols (1.2.2)
-- [x] Extended LLDP with 802.1/802.3 extensions on SNMP
-
-## 1.3.0 (late additions)
-
-- [x] SSH `activate_profile()` — `config profile select nvm <index>` (in configure mode, causes warm restart)
-- [x] SSH `delete_profile()` — `config profile delete {nvm|envm} num <index>` (in configure mode)
-- [x] Full SSH/SNMP profile parity (read + write) — all 4 profile methods on both protocols
-
 ## 1.4.0
 
 ### Factory-fresh device onboarding
