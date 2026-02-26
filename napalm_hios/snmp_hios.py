@@ -20,7 +20,7 @@ from pysnmp.hlapi.v3arch.asyncio import (
     ObjectType, ObjectIdentity, get_cmd, set_cmd, bulk_walk_cmd,
     usmHMACMD5AuthProtocol, usmDESPrivProtocol,
 )
-from pysnmp.proto.rfc1902 import Integer32
+from pysnmp.proto.rfc1902 import Integer32, OctetString
 from pysnmp.proto.secmod.rfc3414.localkey import hash_passphrase_md5
 from pysnmp.entity.config import USM_KEY_TYPE_MASTER
 from napalm.base.exceptions import ConnectionException
@@ -191,8 +191,13 @@ OID_hm2FMNvmState       = '1.3.6.1.4.1.248.11.21.1.3.1'
 OID_hm2FMEnvmState      = '1.3.6.1.4.1.248.11.21.1.3.2'
 OID_hm2FMBootParamState  = '1.3.6.1.4.1.248.11.21.1.3.3'
 OID_hm2FMActionActivateKey = '1.3.6.1.4.1.248.11.21.1.2.18'
+OID_hm2FMActionParameter   = '1.3.6.1.4.1.248.11.21.1.2.20'
 # Table entry: copy(2).config(10).runningConfig(10).nvm(2) — fully indexed, >=14 parts
-OID_hm2FMActionActivate_save = '1.3.6.1.4.1.248.11.21.1.2.1.1.5.2.10.10.2'
+OID_hm2FMActionActivate_save         = '1.3.6.1.4.1.248.11.21.1.2.1.1.5.2.10.10.2'
+# clear(3).config(10).runningConfig(10).runningConfig(10) — clear running config
+OID_hm2FMActionActivate_clear_config = '1.3.6.1.4.1.248.11.21.1.2.1.1.5.3.10.10.10'
+# clear(3).config(10).nvm(2).nvm(2) — factory reset
+OID_hm2FMActionActivate_clear_factory = '1.3.6.1.4.1.248.11.21.1.2.1.1.5.3.10.2.2'
 
 # HM2-FILEMGMT-MIB — profile table  1.3.6.1.4.1.248.11.21.1.1.1.1.*
 # Indexed by (storageType, profileIndex): nvm=1, envm=2
@@ -1594,6 +1599,69 @@ class SNMPHIOS:
 
         return await self._get_config_status_async()
 
+    def clear_config(self, keep_ip=False):
+        """Clear running config (back to default) via SNMP.
+
+        WARNING: Device warm-restarts. Connection will drop.
+
+        Args:
+            keep_ip: If True, preserve management IP address.
+        """
+        return asyncio.run(self._clear_config_async(keep_ip))
+
+    async def _clear_config_async(self, keep_ip=False):
+        scalars = await self._get_scalar(OID_hm2FMActionActivateKey)
+        key = int(scalars.get(OID_hm2FMActionActivateKey, 0))
+
+        param = 11 if keep_ip else 1
+        await self._set_scalar(OID_hm2FMActionParameter, Integer32(param))
+
+        try:
+            await self._set_scalar(OID_hm2FMActionActivate_clear_config, Integer32(key))
+        except Exception:
+            pass  # device warm-restarts before responding
+
+        return {"restarting": True}
+
+    def clear_factory(self, erase_all=False):
+        """Factory reset via SNMP. Device will reboot.
+
+        Args:
+            erase_all: If True, also regenerate factory.cfg from firmware.
+                Use when factory defaults file may be corrupted.
+        """
+        return asyncio.run(self._clear_factory_async(erase_all))
+
+    async def _clear_factory_async(self, erase_all=False):
+        scalars = await self._get_scalar(OID_hm2FMActionActivateKey)
+        key = int(scalars.get(OID_hm2FMActionActivateKey, 0))
+
+        param = 2 if erase_all else 1
+        await self._set_scalar(OID_hm2FMActionParameter, Integer32(param))
+
+        try:
+            await self._set_scalar(OID_hm2FMActionActivate_clear_factory, Integer32(key))
+        except Exception:
+            pass  # device reboots before responding
+
+        return {"rebooting": True}
+
+    def is_factory_default(self):
+        """Not implemented for SNMP — factory gate blocks SNMP access.
+
+        When the device is factory-default, hm2UserForcePasswordStatus=enable(1)
+        gates all SNMP operations. Use MOPS or SSH to check/onboard instead.
+        """
+        raise NotImplementedError(
+            "is_factory_default not available via SNMP — "
+            "SNMP is gated on factory-default devices. Use MOPS or SSH.")
+
+    def onboard(self, new_password):
+        """Not implemented for SNMP — factory gate blocks SNMP access."""
+        raise NotImplementedError(
+            "onboard not available via SNMP — "
+            "SNMP is gated on factory-default devices. Use MOPS or SSH.")
+
     async def _set_scalar(self, oid, value):
         """SET a single OID value.
 
@@ -1648,6 +1716,30 @@ class SNMPHIOS:
     # ------------------------------------------------------------------
     # Write operations — vendor-specific (MRP, HiDiscovery)
     # ------------------------------------------------------------------
+
+    def set_interface(self, interface, enabled=None, description=None):
+        """Set interface admin state and/or description via SNMP.
+
+        Args:
+            interface: port name (e.g. '1/5')
+            enabled: True (admin up) or False (admin down), None to skip
+            description: port description string, None to skip
+        """
+        ifindex_map = asyncio.run(self._build_ifindex_map())
+        name_to_idx = {name: idx for idx, name in ifindex_map.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+
+        sets = []
+        if enabled is not None:
+            sets.append((f"{OID_ifAdminStatus}.{ifidx}",
+                         Integer32(1 if enabled else 2)))
+        if description is not None:
+            sets.append((f"{OID_ifAlias}.{ifidx}",
+                         OctetString(description)))
+        if sets:
+            asyncio.run(self._set_oids(*sets))
 
     def set_hidiscovery(self, status, blinking=None):
         """Set HiDiscovery operating mode via SNMP.

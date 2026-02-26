@@ -788,6 +788,81 @@ class TestMOPSHIOSSetters(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.backend.delete_profile('usb', 1)
 
+    # --- set_interface ---
+
+    def test_set_interface_disable(self):
+        self.backend._build_ifindex_map = Mock(return_value={"5": "1/5"})
+        self.backend.client.set_indexed.return_value = True
+
+        self.backend.set_interface('1/5', enabled=False)
+
+        self.backend.client.set_indexed.assert_called_once_with(
+            "IF-MIB", "ifEntry", index={"ifIndex": "5"},
+            values={"ifAdminStatus": "2"})
+
+    def test_set_interface_enable(self):
+        self.backend._build_ifindex_map = Mock(return_value={"5": "1/5"})
+        self.backend.client.set_indexed.return_value = True
+
+        self.backend.set_interface('1/5', enabled=True)
+
+        self.backend.client.set_indexed.assert_called_once_with(
+            "IF-MIB", "ifEntry", index={"ifIndex": "5"},
+            values={"ifAdminStatus": "1"})
+
+    def test_set_interface_description(self):
+        self.backend._build_ifindex_map = Mock(return_value={"5": "1/5"})
+        self.backend.client.set_indexed.return_value = True
+
+        self.backend.set_interface('1/5', description='Uplink')
+
+        self.backend.client.set_indexed.assert_called_once_with(
+            "IF-MIB", "ifXEntry", index={"ifIndex": "5"},
+            values={"ifAlias": "55 70 6c 69 6e 6b"})  # hex-encoded "Uplink"
+
+    def test_set_interface_both(self):
+        self.backend._build_ifindex_map = Mock(return_value={"5": "1/5"})
+        self.backend.client.set_indexed.return_value = True
+
+        self.backend.set_interface('1/5', enabled=False, description='Down')
+
+        calls = self.backend.client.set_indexed.call_args_list
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0].kwargs['values'], {"ifAdminStatus": "2"})
+        self.assertEqual(calls[1].kwargs['values'], {"ifAlias": "44 6f 77 6e"})
+
+    def test_set_interface_unknown_port(self):
+        self.backend._build_ifindex_map = Mock(return_value={"5": "1/5"})
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.set_interface('99/99', enabled=True)
+        self.assertIn("Unknown interface", str(ctx.exception))
+
+    # --- clear_config / clear_factory ---
+
+    def test_clear_config(self):
+        self.backend.client.clear_config = Mock(return_value={"restarting": True})
+        result = self.backend.clear_config()
+        self.backend.client.clear_config.assert_called_once_with(keep_ip=False)
+        self.assertTrue(result['restarting'])
+
+    def test_clear_config_keep_ip(self):
+        self.backend.client.clear_config = Mock(return_value={"restarting": True})
+        result = self.backend.clear_config(keep_ip=True)
+        self.backend.client.clear_config.assert_called_once_with(keep_ip=True)
+        self.assertTrue(result['restarting'])
+
+    def test_clear_factory(self):
+        self.backend.client.clear_factory = Mock(return_value={"rebooting": True})
+        result = self.backend.clear_factory()
+        self.backend.client.clear_factory.assert_called_once_with(erase_all=False)
+        self.assertTrue(result['rebooting'])
+
+    def test_clear_factory_erase_all(self):
+        self.backend.client.clear_factory = Mock(return_value={"rebooting": True})
+        result = self.backend.clear_factory(erase_all=True)
+        self.backend.client.clear_factory.assert_called_once_with(erase_all=True)
+        self.assertTrue(result['rebooting'])
+
 
 class TestMOPSHIOSRSTP(unittest.TestCase):
     """Test MOPS backend RSTP getter and setter methods."""

@@ -529,7 +529,8 @@ class MOPSClient:
         WARNING: Device will reboot. The HTTP response may not arrive.
 
         Args:
-            erase_all: If True, also wipe SSH keys and HTTPS certs.
+            erase_all: If True, also regenerate factory.cfg from firmware.
+                Use when factory defaults file may be corrupted.
 
         Returns: dict with 'rebooting': True (or action result if response arrives)
         """

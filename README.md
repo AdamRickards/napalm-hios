@@ -71,7 +71,7 @@ device.close()
 `get_mrp` | `get_hidiscovery` | `get_rstp` | `get_rstp_port` | `get_lldp_neighbors_detail_extended` | `get_config_status` | `get_profiles` | `get_config_fingerprint` | `is_factory_default`
 
 **Write:**
-`set_mrp` | `delete_mrp` | `set_hidiscovery` | `set_rstp` | `set_rstp_port` | `save_config` | `clear_config` | `clear_factory` | `activate_profile` | `delete_profile` | `onboard`
+`set_interface` | `set_mrp` | `delete_mrp` | `set_hidiscovery` | `set_rstp` | `set_rstp_port` | `save_config` | `clear_config` | `clear_factory` | `activate_profile` | `delete_profile` | `onboard`
 
 See [docs/vendor_specific.md](docs/vendor_specific.md) for arguments, return values, and protocol behaviour.
 

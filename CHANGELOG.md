@@ -1,5 +1,58 @@
 # Changelog
 
+## 1.5.0 — 2026-02-26
+
+### Port admin control
+
+- **`set_interface(interface, enabled, description)`** — enable/disable ports and set descriptions on all 3 protocols. MOPS: atomic SET on IF-MIB + ifAlias. SNMP: multi-OID SET. SSH: `interface` config mode commands.
+
+### Factory reset — all protocols
+
+Two levels of device reset, matching HiOS CLI semantics:
+
+- **`clear_config(keep_ip=False)`** — clears running config to factory defaults (RAM only). Warm restart ~12s. NVM shows "out of sync" after (saved config untouched). `keep_ip=True` preserves management IP and addressing mode (LOCAL/DHCP).
+- **`clear_factory(erase_all=False)`** — full factory reset. Wipes RAM + NVM + ACA, cold reboot (uptime resets). `erase_all=True` also regenerates factory.cfg from firmware (for corrupted factory defaults).
+- All 3 protocols: MOPS (hm2FMActionEntry indexed SET), SNMP (OID SET), SSH (CLI with Y/N prompt handling).
+- Live-tested on BRS50: canary-based proofs (set port description → save → dirty → clear → verify revert to factory default).
+
+### Factory onboarding
+
+- **`is_factory_default()`** — detect factory-fresh HiOS 10.3+ devices. SSH: detects "Enter new password" prompt during `open()`. MOPS: reads `hm2UserForcePasswordStatus` MIB. SNMP: returns `False` (SNMP is gated on factory-default devices — if connected, gate is already cleared).
+- **`onboard(new_password)`** — respond to factory password gate. SSH: sends password to interactive prompts via Netmiko channel. MOPS: POST to `/mops_changePassword`. SNMP: raises `NotImplementedError` (gated).
+- Live-tested on factory-fresh BRS50 (both SSH and MOPS).
+
+### Protocol cleanup
+
+- **NETCONF removed from default `protocol_preference`**: was `['mops', 'snmp', 'ssh', 'netconf']`, now `['mops', 'snmp', 'ssh']`. NETCONF is stub-only and caused noisy connection failures. Opt in explicitly if needed.
+
+### Safe MRP deploy/undeploy
+
+Updated `tools/deploy_mrp/` with loop-prevention sequence:
+
+- **deploy_mrp.py**: 6-phase — disable RM port2 → configure MRP (parallel) → disable RSTP on ring ports → enable RM port2 → verify ring → save. Error recovery re-enables RM port2 on failure.
+- **undeploy_mrp.py**: 5-step — disable RM port2 → re-enable RSTP → delete MRP → enable RM port2 → save.
+- Live-tested: 11s deploy, 7s undeploy on 2-device ring.
+
+### MIBs reference folder
+
+- 66 vendor MIB files restored to `MIBs/` (gitignored, reference only — from HiOS firmware).
+
+### Unit tests
+
+- `set_interface`: 5 MOPS tests, 3 SNMP tests
+- `clear_config` / `clear_factory`: 4 MOPS tests, 4 SNMP tests
+- `is_factory_default` / `onboard`: SSH + SNMP dispatch tests
+
+### Documentation
+
+- **vendor_specific.md**: full rewrite — added Profiles, RSTP, Factory Onboarding, Factory Reset, MOPS Staging, Config Watchdog, Port Admin Control sections. Updated all examples from `device.ssh.method()` to `device.method()`.
+- **usage.md**: full rewrite — added MOPS as default protocol, updated protocol_preference default, added all vendor-specific methods to Available Methods.
+- **protocols.md**: updated default order (removed NETCONF), added set_interface/is_factory_default/onboard to availability matrix, updated lazy-fail section for SNMP gating.
+
+### Version bump
+
+- `version.py` and `setup.py`: 1.4.2 → 1.5.0
+
 ## 1.4.2 — 2026-02-26
 
 ### MOPS driver integration
@@ -7,7 +60,7 @@
 MOPS (MIB Operations over HTTPS) was implemented in 1.4.0 as a backend (`mops_hios.py`) but never wired into the main `HIOSDriver` dispatch layer. This release completes the integration:
 
 - **MOPS in HIOSDriver**: `_try_connect()`, `_get_active_connection()`, `close()` all handle MOPS
-- **Default protocol**: `protocol_preference` now defaults to `['mops', 'snmp', 'ssh', 'netconf']` — MOPS first
+- **Default protocol**: `protocol_preference` now defaults to `['mops', 'snmp', 'ssh']` — MOPS first
 - **All 31 dispatch checks** updated from `('ssh', 'snmp')` to `('ssh', 'snmp', 'mops')`
 - **RSTP dispatch**: `get_rstp()`, `get_rstp_port()`, `set_rstp()`, `set_rstp_port()` added to HIOSDriver
 

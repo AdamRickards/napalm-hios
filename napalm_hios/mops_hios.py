@@ -1845,6 +1845,32 @@ class MOPSHIOS:
     # Vendor setters
     # ------------------------------------------------------------------
 
+    def set_interface(self, interface, enabled=None, description=None):
+        """Set interface admin state and/or description via MOPS.
+
+        Args:
+            interface: port name (e.g. '1/5')
+            enabled: True (admin up) or False (admin down), None to skip
+            description: port description string, None to skip
+        """
+        ifindex_map = self._build_ifindex_map()
+        name_to_idx = {name: idx for idx, name in ifindex_map.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+
+        idx = {"ifIndex": ifidx}
+
+        if enabled is not None:
+            self.client.set_indexed("IF-MIB", "ifEntry",
+                                    index=idx,
+                                    values={"ifAdminStatus": "1" if enabled else "2"})
+
+        if description is not None:
+            self.client.set_indexed("IF-MIB", "ifXEntry",
+                                    index=idx,
+                                    values={"ifAlias": encode_string(description)})
+
     def set_hidiscovery(self, status, blinking=None):
         """Set HiDiscovery operating mode via MOPS.
 

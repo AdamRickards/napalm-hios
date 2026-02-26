@@ -19,6 +19,7 @@ class SSHHIOS:
         self.connection = None
         self.pagination_disabled = False  # Track the pagination state
         self._in_config_mode = False      # Track global config mode
+        self._factory_default = False     # True if password gate detected on open
 
     def open(self):
         try:
@@ -30,6 +31,13 @@ class SSHHIOS:
                 timeout=self.timeout,
                 port=self.port
             )
+            # Check for factory-default password gate
+            time.sleep(1)
+            output = self.connection.read_channel()
+            if 'Enter new password' in output:
+                self._factory_default = True
+                logger.info("Factory-default password gate detected on %s", self.hostname)
+                return  # Don't try CLI commands — device is at password prompt
             self.disable_pagination()
         except Exception as e:
             log_error(logger, f"Error opening SSH connection: {str(e)}")
@@ -1503,6 +1511,131 @@ class SSHHIOS:
             self._exit_config_mode()
 
         return self.get_mrp()
+
+    def set_interface(self, interface, enabled=None, description=None):
+        """Set interface admin state and/or description via SSH.
+
+        Args:
+            interface: port name (e.g. '1/5')
+            enabled: True (admin up) or False (admin down), None to skip
+            description: port description string, None to skip
+        """
+        self._config_mode()
+        try:
+            output = self.cli(f'interface {interface}')
+            resp = output.get(f'interface {interface}', '')
+            if 'Error' in resp or 'Invalid' in resp:
+                raise ValueError(f"Unknown interface '{interface}'")
+            if enabled is not None:
+                self.cli('no shutdown' if enabled else 'shutdown')
+            if description is not None:
+                self.cli(f'name {description}' if description else 'no name')
+            self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    def _send_confirm(self, cmd):
+        """Send a command that requires Y/N confirmation, answer 'y'.
+
+        Used by clear config / clear factory which prompt before executing.
+        Returns the output after confirmation.
+        """
+        self.connection.write_channel(cmd + '\n')
+        time.sleep(0.5)
+
+        output = ""
+        for _ in range(20):
+            output += self.connection.read_channel()
+            if '(Y/N)' in output or '(y/n)' in output:
+                break
+            time.sleep(0.5)
+
+        self.connection.write_channel('y\n')
+        time.sleep(0.5)
+
+        # Read remaining output
+        for _ in range(10):
+            new_data = self.connection.read_channel()
+            output += new_data
+            if not new_data:
+                break
+            time.sleep(0.3)
+
+        return output
+
+    def clear_config(self, keep_ip=False):
+        """Clear running config (back to default) via SSH.
+
+        WARNING: Device warm-restarts. Connection will drop.
+
+        Args:
+            keep_ip: If True, preserve management IP address.
+        """
+        self._enable()
+        cmd = 'clear config keep-ip' if keep_ip else 'clear config'
+        try:
+            self._send_confirm(cmd)
+        except Exception:
+            pass  # device warm-restarts, connection drops
+        return {"restarting": True}
+
+    def clear_factory(self, erase_all=False):
+        """Factory reset via SSH. Device will reboot.
+
+        Args:
+            erase_all: If True, also regenerate factory.cfg from firmware.
+                Use when factory defaults file may be corrupted.
+        """
+        self._enable()
+        cmd = 'clear factory erase-all' if erase_all else 'clear factory'
+        try:
+            self._send_confirm(cmd)
+        except Exception:
+            pass  # device reboots, connection drops
+        return {"rebooting": True}
+
+    def is_factory_default(self):
+        """Check if device is in factory-default password state.
+
+        Detected during open() — if the SSH banner contained
+        'Enter new password' instead of a CLI prompt, the factory
+        gate is active.
+
+        Returns: True if factory gate is active, False otherwise.
+        """
+        return self._factory_default
+
+    def onboard(self, new_password):
+        """Onboard a factory-fresh device by setting the initial password.
+
+        Responds to the 'Enter new password' / 'Confirm new password'
+        prompts shown on factory-default SSH login. After successful
+        onboarding, the connection is ready for normal CLI use.
+
+        Args:
+            new_password: Password to set.
+
+        Returns: True on success.
+        Raises: ConnectionException if not factory-default.
+        """
+        if not self._factory_default:
+            raise ConnectionException(
+                "Device is already onboarded — onboard() must only be "
+                "called on factory-fresh devices")
+        # Send password to 'Enter new password:' prompt
+        self.connection.write_channel(new_password + '\n')
+        time.sleep(1)
+        # Send password to 'Confirm new password:' prompt
+        output = self.connection.read_channel()
+        if 'Confirm' in output:
+            self.connection.write_channel(new_password + '\n')
+            time.sleep(2)
+        # Read remaining output — should get normal CLI prompt
+        output = self.connection.read_channel()
+        self._factory_default = False
+        # Now set up pagination
+        self.disable_pagination()
+        return True
 
     def set_hidiscovery(self, status, blinking=None):
         """Set HiDiscovery operating mode.

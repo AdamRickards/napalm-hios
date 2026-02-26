@@ -1229,8 +1229,115 @@ class TestSNMPHIOS(unittest.TestCase):
 
 
     # ------------------------------------------------------------------
-    # Write operations — set_hidiscovery, set_mrp, delete_mrp
+    # Write operations — set_interface, set_hidiscovery, set_mrp, delete_mrp
     # ------------------------------------------------------------------
+
+    def test_set_interface_disable(self):
+        """SET ifAdminStatus=2 (down) for a port."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        async def mock_ifmap(engine=None):
+            return {'5': '1/5', '6': '1/6'}
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            self.snmp.set_interface('1/5', enabled=False)
+            self.assertEqual(len(set_calls), 1)
+            self.assertIn(OID_ifAdminStatus, set_calls[0][0])
+            self.assertIn('.5', set_calls[0][0])
+            self.assertEqual(int(set_calls[0][1]), 2)
+
+    def test_set_interface_enable_with_description(self):
+        """SET ifAdminStatus=1 + ifAlias in one PDU."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        async def mock_ifmap(engine=None):
+            return {'5': '1/5'}
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            self.snmp.set_interface('1/5', enabled=True, description='Uplink')
+            self.assertEqual(len(set_calls), 2)
+            # First: admin up
+            self.assertIn(OID_ifAdminStatus, set_calls[0][0])
+            self.assertEqual(int(set_calls[0][1]), 1)
+            # Second: description
+            self.assertIn(OID_ifAlias, set_calls[1][0])
+            self.assertEqual(str(set_calls[1][1]), 'Uplink')
+
+    def test_set_interface_unknown_port(self):
+        """Unknown interface raises ValueError."""
+        async def mock_ifmap(engine=None):
+            return {'5': '1/5'}
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            with self.assertRaises(ValueError) as ctx:
+                self.snmp.set_interface('99/99', enabled=True)
+            self.assertIn("Unknown interface", str(ctx.exception))
+
+    def test_clear_config(self):
+        """Clear running config: SET parameter=1, then trigger clear action."""
+        set_calls = []
+        async def mock_set(oid, value):
+            set_calls.append((oid, int(value)))
+        async def mock_scalar(*oids):
+            return {OID_hm2FMActionActivateKey: 42}
+
+        with patch.object(self.snmp, '_set_scalar', side_effect=mock_set), \
+             patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.clear_config()
+            self.assertTrue(result['restarting'])
+            # parameter=1 (none), then activate with key
+            self.assertEqual(set_calls[0][1], 1)   # param
+            self.assertEqual(set_calls[1][1], 42)   # key
+            self.assertIn('3.10.10.10', set_calls[1][0])  # clear_config OID
+
+    def test_clear_config_keep_ip(self):
+        """Clear config with keep_ip: parameter=11."""
+        set_calls = []
+        async def mock_set(oid, value):
+            set_calls.append((oid, int(value)))
+        async def mock_scalar(*oids):
+            return {OID_hm2FMActionActivateKey: 42}
+
+        with patch.object(self.snmp, '_set_scalar', side_effect=mock_set), \
+             patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.clear_config(keep_ip=True)
+            self.assertTrue(result['restarting'])
+            self.assertEqual(set_calls[0][1], 11)  # keep-ip param
+
+    def test_clear_factory(self):
+        """Factory reset: SET parameter=1, then trigger clear action."""
+        set_calls = []
+        async def mock_set(oid, value):
+            set_calls.append((oid, int(value)))
+        async def mock_scalar(*oids):
+            return {OID_hm2FMActionActivateKey: 42}
+
+        with patch.object(self.snmp, '_set_scalar', side_effect=mock_set), \
+             patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.clear_factory()
+            self.assertTrue(result['rebooting'])
+            self.assertEqual(set_calls[0][1], 1)   # param=none
+            self.assertEqual(set_calls[1][1], 42)   # key
+            self.assertIn('3.10.2.2', set_calls[1][0])  # clear_factory OID
+
+    def test_clear_factory_erase_all(self):
+        """Factory reset with erase_all: parameter=2."""
+        set_calls = []
+        async def mock_set(oid, value):
+            set_calls.append((oid, int(value)))
+        async def mock_scalar(*oids):
+            return {OID_hm2FMActionActivateKey: 42}
+
+        with patch.object(self.snmp, '_set_scalar', side_effect=mock_set), \
+             patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.clear_factory(erase_all=True)
+            self.assertTrue(result['rebooting'])
+            self.assertEqual(set_calls[0][1], 2)  # erase-all param
 
     def test_set_hidiscovery_off(self):
         """SET hm2HiDiscOper=2 (disable) when status='off'."""

@@ -76,7 +76,7 @@ class HIOSDriver(NetworkDriver):
                 return
 
             # Get protocol preference from optional args or use default
-            protocol_preference = self.optional_args.get('protocol_preference', ['mops', 'snmp', 'ssh', 'netconf'])
+            protocol_preference = self.optional_args.get('protocol_preference', ['mops', 'snmp', 'ssh'])
             
             # Try each protocol in order of preference
             for protocol in protocol_preference:
@@ -550,6 +550,31 @@ class HIOSDriver(NetworkDriver):
             return self._get_active_connection().save_config()
         raise NotImplementedError("save_config is not implemented for this protocol")
 
+    def is_factory_default(self):
+        if self.active_protocol in ('ssh', 'mops'):
+            return self._get_active_connection().is_factory_default()
+        if self.active_protocol == 'snmp':
+            # SNMP is gated on factory-default devices — if we're connected, it's not factory-default
+            return False
+        raise NotImplementedError("is_factory_default is not implemented for this protocol")
+
+    def onboard(self, new_password):
+        if self.active_protocol in ('ssh', 'mops'):
+            return self._get_active_connection().onboard(new_password)
+        raise NotImplementedError(
+            "onboard not available via SNMP — "
+            "SNMP is gated on factory-default devices. Use MOPS or SSH.")
+
+    def clear_config(self, keep_ip=False):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
+            return self._get_active_connection().clear_config(keep_ip=keep_ip)
+        raise NotImplementedError("clear_config is not implemented for this protocol")
+
+    def clear_factory(self, erase_all=False):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
+            return self._get_active_connection().clear_factory(erase_all=erase_all)
+        raise NotImplementedError("clear_factory is not implemented for this protocol")
+
     def set_mrp(self, operation='enable', mode='client', port_primary=None,
                 port_secondary=None, vlan=None, recovery_delay=None):
         if self.active_protocol in ('ssh', 'snmp', 'mops'):
@@ -562,6 +587,13 @@ class HIOSDriver(NetworkDriver):
         if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().delete_mrp()
         raise NotImplementedError("delete_mrp is not implemented for this protocol")
+
+    def set_interface(self, interface, enabled=None, description=None):
+        if enabled is None and description is None:
+            return
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
+            return self._get_active_connection().set_interface(interface, enabled=enabled, description=description)
+        raise NotImplementedError("set_interface is not implemented for this protocol")
 
     def set_hidiscovery(self, status, blinking=None):
         if self.active_protocol in ('ssh', 'snmp', 'mops'):

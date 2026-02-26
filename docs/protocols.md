@@ -1,6 +1,6 @@
 # Protocol Support
 
-The driver supports three protocols, selected via `protocol_preference` in `optional_args`. Default order: MOPS → SNMP → SSH → NETCONF.
+The driver supports three protocols, selected via `protocol_preference` in `optional_args`. Default order: MOPS → SNMP → SSH.
 
 | Protocol | Transport | Auth | Bulk Read | Atomic Write | Dependencies |
 |----------|-----------|------|-----------|--------------|-------------|
@@ -53,15 +53,12 @@ device = driver(hostname='192.168.1.4', username='admin', password='private',
 
 The driver respects the user's protocol choice. If you select SNMP and `get_facts()` times out, you get that error — the driver does not silently reroute to another protocol.
 
-There is one exception where SNMP **lazy-fails** to MOPS:
+SNMP raises `NotImplementedError` for `is_factory_default()` and `onboard()` —
+the SNMP agent is gated on factory-default devices and cannot be used for
+onboarding. Use MOPS or SSH to onboard, then SNMP becomes available.
 
-- `is_factory_default()` / `onboard()` — SNMP agent is dead on factory-fresh devices
-
-SSH handles both natively: `is_factory_default()` probes the banner for the
-password prompt, `onboard()` handles the interactive prompt via paramiko.
-
-This is not a protocol override. SNMP is fundamentally incapable of these
-operations. For everything SNMP *can* do, the user's choice is honoured.
+SSH handles both natively: `is_factory_default()` detects the password-change
+prompt during `open()`, `onboard()` responds to the interactive prompts.
 
 ---
 
@@ -122,14 +119,15 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `get_config_fingerprint` | Yes | Yes | Yes | Vendor |
 | `activate_profile` | Yes | Yes | Yes | Vendor write (warm restart) |
 | `delete_profile` | Yes | Yes | Yes | Vendor write |
+| `set_interface` | Yes | Yes | Yes | Vendor write |
 | `set_mrp` / `delete_mrp` | Yes | Yes | Yes | Vendor write |
 | `set_hidiscovery` | Yes | Yes | Yes | Vendor write |
 | `get_rstp` | Yes | Yes | Yes | Vendor |
 | `get_rstp_port` | Yes | Yes | Yes | Vendor |
 | `set_rstp` | Yes | Yes | Yes | Vendor write |
 | `set_rstp_port` | Yes | Yes | Yes | Vendor write |
-| `is_factory_default` | Yes | Yes | Fallback→MOPS | Vendor |
-| `onboard` | Yes | Yes | Lazy-fail→MOPS | Vendor |
+| `is_factory_default` | Yes | Yes | No (gated) | Vendor |
+| `onboard` | Yes | Yes | No (gated) | Vendor |
 
 ---
 
@@ -139,4 +137,4 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 - `activate_profile()` triggers a warm restart — the connection will drop. Reconnect after the device reboots.
 - `commit_config()` in SSH mode executes commands in configure mode. CLI errors are detected and raised as `CommitError`. NVM busy state is polled through (up to 5s) to handle back-to-back commits.
 - MOPS getter output matches SNMP output (same underlying MIB data), but some MOPS MIB/Node names are still being discovered.
-- NETCONF support is stub-only — not usable for production.
+- NETCONF support is stub-only — not in default protocol order. Opt in via `protocol_preference=['mops', 'snmp', 'ssh', 'netconf']`.

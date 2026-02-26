@@ -72,3 +72,6 @@ local/
 
 # Patch files
 *.patch
+
+# Vendor MIB files (reference only, from firmware)
+MIBs/

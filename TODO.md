@@ -14,14 +14,26 @@
 - [x] Add deploy_mrp tool: threaded MRP ring deployment + undeploy, MOPS/SNMP/SSH selectable
 - [x] Unit tests: 306 passed, 0 failed (1 pre-existing ssh fixture error)
 
-## 1.5.0 — Port admin control + RSTP on SNMP/SSH
+## 1.5.0 — Port admin control + factory reset + protocol cleanup
 
-- [ ] set_interface(interface, enabled, description) — port admin up/down
-- [ ] Safe MRP deploy/undeploy: disable RM port2 → configure MRP → disable RSTP on ring ports → enable RM port2
+- [x] set_interface(interface, enabled, description) — all 3 protocols, live-tested on .127
+- [x] clear_config(keep_ip=False) — all 3 protocols, live-tested (warm restart ~12s)
+- [x] clear_config(keep_ip=True) — all 3 protocols, live-tested (static IP + LOCAL mode preserved)
+- [x] clear_factory(erase_all=False) — all 3 protocols, live-tested (cold reboot, NVM+ACA wiped)
+- [x] clear_factory(erase_all=True) — MOPS + SSH live-tested (likely regenerates factory.cfg)
+- [x] Remove NETCONF from default protocol_preference (not deployed, noisy failures)
+- [x] Unit tests: set_interface (5 MOPS, 3 SNMP), clear_config/clear_factory (4 MOPS, 4 SNMP)
+- [x] MIBs folder: 66 vendor MIBs restored to MIBs/ (gitignored, reference only)
+- [x] Safe MRP deploy/undeploy: disable RM port2 → configure → disable RSTP → enable RM port2 → verify ring (live-tested, 11s deploy, 7s undeploy)
+- [x] Factory onboarding: is_factory_default() + onboard() on SSH (live-tested on factory-fresh .127)
+- [x] SNMP: NotImplementedError for is_factory_default/onboard (SNMP gated on factory-default devices)
+- [x] SSH open() detects factory password gate, skips pagination, sets _factory_default flag
+- [x] Driver dispatch: is_factory_default() returns False for SNMP (if connected, gate is cleared)
+
+## 1.6.0 — RSTP on SNMP + SSH backends
+
 - [ ] set_rstp_port / set_rstp / get_rstp / get_rstp_port on SNMP backend
 - [ ] set_rstp_port / set_rstp / get_rstp / get_rstp_port on SSH backend
-- [ ] Factory reset methods: clear_config(), clear_factory() on all protocols
-- [ ] Factory onboarding: is_factory_default(), onboard() on SSH/SNMP backends
 
 ## Documentation update
 

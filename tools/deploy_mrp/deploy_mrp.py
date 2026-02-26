@@ -335,8 +335,26 @@ def main():
             sys.exit(1)
 
         try:
-            # --- Phase 1: Configure MRP in parallel ---
-            print("\n  Phase 1: Configuring MRP...")
+            managers = [d for d in config['devices'] if d['role'] == 'manager']
+            rm_ip = managers[0]['ip']
+            rm_device = connections.get(rm_ip)
+            rm_dev = managers[0]
+
+            if not rm_device:
+                print(f"\n  FATAL: No connection to ring manager {rm_ip}\n")
+                sys.exit(1)
+
+            # --- Phase 1: Disable RM port2 (break ring before configuring) ---
+            print(f"\n  Phase 1: Disabling RM port2 ({rm_dev['port2']}) on {rm_ip}...")
+            try:
+                rm_device.set_interface(rm_dev['port2'], enabled=False)
+                print(f"  [{rm_ip}] port {rm_dev['port2']} admin DOWN")
+            except Exception as e:
+                print(f"  FATAL: Cannot disable RM port2: {e}\n")
+                sys.exit(1)
+
+            # --- Phase 2: Configure MRP in parallel ---
+            print("\n  Phase 2: Configuring MRP...")
             vlan = int(config['vlan'])
             recovery_delay = config['recovery_delay']
             mrp_results = []
@@ -356,37 +374,22 @@ def main():
                     ip, ok, _mrp_data, detail = future.result()
                     mrp_results.append((ip, ok, f"MRP {[d for d in config['devices'] if d['ip'] == ip][0]['role']}, {detail}"))
 
-            print_results("Phase 1 — MRP Configuration", mrp_results)
+            print_results("Phase 2 — MRP Configuration", mrp_results)
 
             failures = [r for r in mrp_results if not r[1]]
             if failures:
-                print(f"\n  {len(failures)} device(s) failed. Configs NOT saved — power cycle to rollback.\n")
+                print(f"\n  {len(failures)} device(s) failed.")
+                # Re-enable RM port2 before aborting
+                print(f"  Re-enabling RM port2 ({rm_dev['port2']})...")
+                try:
+                    rm_device.set_interface(rm_dev['port2'], enabled=True)
+                except Exception:
+                    pass
+                print("  Configs NOT saved — power cycle to rollback.\n")
                 sys.exit(1)
 
-            # --- Phase 2: Verify ring on manager ---
-            print("\n  Phase 2: Verifying ring...")
-            managers = [d for d in config['devices'] if d['role'] == 'manager']
-            rm_ip = managers[0]['ip']
-            rm_device = connections.get(rm_ip)
-
-            if not rm_device:
-                print(f"\n  FATAL: No connection to ring manager {rm_ip}\n")
-                sys.exit(1)
-
-            mrp = rm_device.get_mrp()
-            ring_state = mrp.get('ring_state', 'unknown')
-            redundancy = mrp.get('redundancy', False)
-            healthy = ring_state == 'closed' and redundancy
-
-            status_tag = "HEALTHY" if healthy else "UNHEALTHY"
-            print(f"  Ring: [{status_tag}] state={ring_state}, redundancy={redundancy}")
-
-            if not healthy:
-                print("\n  Ring NOT healthy. Configs NOT saved — power cycle to rollback.\n")
-                sys.exit(1)
-
-            # --- Disable RSTP on ring ports in parallel ---
-            print("\n  Disabling RSTP on ring ports...")
+            # --- Phase 3: Disable RSTP on ring ports in parallel ---
+            print("\n  Phase 3: Disabling RSTP on ring ports...")
             rstp_results = []
 
             with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
@@ -402,16 +405,40 @@ def main():
 
             rstp_failures = [r for r in rstp_results if not r[1]]
             if rstp_failures:
-                # Not fatal — just warn
                 for ip, _, detail in rstp_failures:
                     logging.warning(f"[{ip}] {detail}")
                 print(f"  RSTP: {len(rstp_failures)} device(s) need manual RSTP disable")
             else:
                 print("  RSTP: disabled on all ring ports")
 
-            # --- Phase 3: Save ---
+            # --- Phase 4: Enable RM port2 (close the ring) ---
+            print(f"\n  Phase 4: Enabling RM port2 ({rm_dev['port2']}) on {rm_ip}...")
+            try:
+                rm_device.set_interface(rm_dev['port2'], enabled=True)
+                print(f"  [{rm_ip}] port {rm_dev['port2']} admin UP")
+            except Exception as e:
+                print(f"  WARNING: Cannot re-enable RM port2: {e}")
+
+            # Brief pause for ring to converge
+            time.sleep(2)
+
+            # --- Phase 5: Verify ring on manager ---
+            print("\n  Phase 5: Verifying ring...")
+            mrp = rm_device.get_mrp()
+            ring_state = mrp.get('ring_state', 'unknown')
+            redundancy = mrp.get('redundancy', False)
+            healthy = ring_state == 'closed' and redundancy
+
+            status_tag = "HEALTHY" if healthy else "UNHEALTHY"
+            print(f"  Ring: [{status_tag}] state={ring_state}, redundancy={redundancy}")
+
+            if not healthy:
+                print("\n  Ring NOT healthy. Configs NOT saved — power cycle to rollback.\n")
+                sys.exit(1)
+
+            # --- Phase 6: Save ---
             if config['save']:
-                print("\n  Phase 3: Saving configs...")
+                print("\n  Phase 6: Saving configs...")
                 save_results = []
 
                 with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
@@ -425,13 +452,13 @@ def main():
                         ip, ok, detail = future.result()
                         save_results.append((ip, ok, detail))
 
-                print_results("Phase 3 — Config Save", save_results)
+                print_results("Phase 6 — Config Save", save_results)
 
                 save_failures = [r for r in save_results if not r[1]]
                 if save_failures:
                     print(f"\n  WARNING: {len(save_failures)} device(s) failed to save.")
             else:
-                print("\n  Phase 3: Skipped (save=false)")
+                print("\n  Phase 6: Skipped (save=false)")
                 print("  Configs in RAM only — power cycle to rollback.")
 
             elapsed = time.time() - start_time

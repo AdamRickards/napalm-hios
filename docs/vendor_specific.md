@@ -413,14 +413,51 @@ result = device.set_hidiscovery('ro', blinking='toggle')
 
 ---
 
+## Port Admin Control
+
+### set_interface(interface, enabled=None, description=None)
+
+Set port admin state and/or description. Only provided parameters are
+changed — omitted parameters are left untouched.
+
+```python
+# Disable a port
+device.set_interface('1/5', enabled=False)
+
+# Enable a port with a description
+device.set_interface('1/5', enabled=True, description='Uplink')
+
+# Clear the description
+device.set_interface('1/5', description='')
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `interface` | interface name | required | Port to configure (e.g. `'1/5'`) |
+| `enabled` | `True`, `False`, `None` | `None` | Admin up/down |
+| `description` | string, `None` | `None` | Port alias (ifAlias) |
+
+**Raises** `ValueError` if the interface name is not found on the device.
+
+No-op if both `enabled` and `description` are `None`.
+
+---
+
 ## Factory Onboarding (MOPS + SSH)
 
 HiOS 10.3+ forces a password change on first login before any CLI or
 SNMP access is available. These methods detect and handle that state.
 
+**Not available via SNMP** — the SNMP agent is gated on factory-default
+devices. Use MOPS or SSH to onboard, then SNMP becomes available.
+
 ### is_factory_default()
 
 Check if the device is in factory-default password state.
+
+- **MOPS**: Reads `hm2UserForcePasswordStatus` (1=gate active)
+- **SSH**: Detects `Enter new password` prompt during `open()`
+- **SNMP**: Returns `False` (if SNMP connected, gate is already cleared)
 
 ```python
 if device.is_factory_default():
@@ -435,6 +472,9 @@ Change the default password on a factory-fresh device, unlocking CLI
 and SNMP access. The new password can be the same as the current one —
 the act of calling the endpoint clears the factory gate.
 
+- **MOPS**: POST to `/mops_changePassword`
+- **SSH**: Responds to interactive `Enter new password` / `Confirm` prompts
+
 ```python
 device.onboard('NewPassword1')
 ```
@@ -446,36 +486,40 @@ device.onboard('NewPassword1')
 
 ---
 
-## Factory Reset (MOPS)
+## Factory Reset
 
 ### clear_config(keep_ip=False)
 
-Clear running config (back to default). Device warm-restarts —
-connection will drop.
+Clear running config back to factory defaults. Wipes RAM only — NVM
+is not touched. Device warm-restarts (~12s) — connection will drop.
+
+After clear, `nvm` shows `out of sync` because NVM still has the
+previously saved config while running config is now factory defaults.
 
 ```python
 result = device.clear_config()
-result = device.clear_config(keep_ip=True)  # preserve management IP
+result = device.clear_config(keep_ip=True)  # preserve management IP + addressing mode
 ```
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
-| `keep_ip` | `True`, `False` | `False` | Preserve management IP address |
+| `keep_ip` | `True`, `False` | `False` | Preserve management IP address and addressing mode (LOCAL/DHCP) |
 
 **Returns** `{'restarting': True}`
 
 ### clear_factory(erase_all=False)
 
-Full factory reset. Wipes RAM, NVM, ENVM, SSH keys, HTTPS certs.
-Device reboots — connection will drop.
+Full factory reset. Wipes RAM + NVM + ENVM. Device cold-reboots —
+connection will drop. Uptime resets to 0.
 
 ```python
 result = device.clear_factory()
+result = device.clear_factory(erase_all=True)  # also regenerate factory.cfg
 ```
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
-| `erase_all` | `True`, `False` | `False` | Extended wipe |
+| `erase_all` | `True`, `False` | `False` | Also regenerate `factory.cfg` from firmware (use when factory defaults file may be corrupted) |
 
 **Returns** `{'rebooting': True}`
 
