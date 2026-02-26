@@ -669,8 +669,6 @@ class TestMOPSHIOSSetters(unittest.TestCase):
 
     def test_set_mrp_enable_client(self):
         """Enable MRP as client — creates domain if needed."""
-        # get_mrp returns no domain
-        self.backend.get_mrp = Mock(return_value={'configured': False})
         # ifindex map for port resolution
         self.backend._build_ifindex_map = Mock(return_value={
             "1": "1/1", "2": "1/2", "3": "1/3", "4": "1/4"})
@@ -680,24 +678,28 @@ class TestMOPSHIOSSetters(unittest.TestCase):
                              port_primary='1/3', port_secondary='1/4')
 
         calls = self.backend.client.set_indexed.call_args_list
-        # Call 1: createAndWait
+        # Call 1: createAndWait (may fail if exists)
         self.assertEqual(calls[0].kwargs['values'], {"hm2MrpRowStatus": "5"})
-        # Call 2: set parameters
-        params = calls[1].kwargs['values']
+        # Call 2: notInService for modification
+        self.assertEqual(calls[1].kwargs['values'], {"hm2MrpRowStatus": "2"})
+        # Call 3: set parameters
+        params = calls[2].kwargs['values']
         self.assertEqual(params["hm2MrpRoleAdminState"], "1")  # client
         self.assertEqual(params["hm2MrpRingport1IfIndex"], "3")
         self.assertEqual(params["hm2MrpRingport2IfIndex"], "4")
-        # Call 3: activate
-        self.assertEqual(calls[2].kwargs['values'], {"hm2MrpRowStatus": "1"})
+        # Call 4: activate
+        self.assertEqual(calls[3].kwargs['values'], {"hm2MrpRowStatus": "1"})
 
     def test_set_mrp_disable(self):
-        self.backend.get_mrp = Mock(return_value={'configured': True})
         self.backend.client.set_indexed.return_value = True
 
         self.backend.set_mrp(operation='disable')
 
         calls = self.backend.client.set_indexed.call_args_list
-        self.assertEqual(calls[0].kwargs['values'], {"hm2MrpRowStatus": "2"})
+        # Call 1: createAndWait (may fail if exists)
+        self.assertEqual(calls[0].kwargs['values'], {"hm2MrpRowStatus": "5"})
+        # Call 2: notInService (disable)
+        self.assertEqual(calls[1].kwargs['values'], {"hm2MrpRowStatus": "2"})
 
     def test_set_mrp_invalid_operation(self):
         with self.assertRaises(ValueError):

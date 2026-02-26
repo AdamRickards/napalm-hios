@@ -4,6 +4,7 @@ from napalm.base.exceptions import ConnectionException, MergeConfigException, Co
 from napalm_hios.netconf_hios import NetconfHIOS
 from napalm_hios.ssh_hios import SSHHIOS
 from napalm_hios.snmp_hios import SNMPHIOS
+from napalm_hios.mops_hios import MOPSHIOS
 from napalm_hios.mock_hios_device import MockHIOSDevice
 from napalm_hios.utils import log_error
 
@@ -44,6 +45,7 @@ class HIOSDriver(NetworkDriver):
         self.netconf = None
         self.ssh = None
         self.snmp = None
+        self.mops = None
         self.mock_device = None
         self._is_alive = False
         self.active_protocol = None
@@ -74,7 +76,7 @@ class HIOSDriver(NetworkDriver):
                 return
 
             # Get protocol preference from optional args or use default
-            protocol_preference = self.optional_args.get('protocol_preference', ['snmp', 'ssh', 'netconf'])
+            protocol_preference = self.optional_args.get('protocol_preference', ['mops', 'snmp', 'ssh', 'netconf'])
             
             # Try each protocol in order of preference
             for protocol in protocol_preference:
@@ -119,6 +121,12 @@ class HIOSDriver(NetworkDriver):
                 self.snmp = SNMPHIOS(self.hostname, self.username, self.password, self.timeout, port=snmp_port)
                 self.snmp.open()
                 return True
+            elif protocol == 'mops':
+                # Try MOPS (HTTPS/XML) connection
+                mops_port = self.optional_args.get('mops_port', 443)
+                self.mops = MOPSHIOS(self.hostname, self.username, self.password, self.timeout, port=mops_port)
+                self.mops.open()
+                return True
         except Exception as e:
             log_error(logger, f"Failed to connect using {protocol}: {str(e)}")
         return False
@@ -132,7 +140,7 @@ class HIOSDriver(NetworkDriver):
             self.mock_device = None
         else:
             # Try to close all active connections
-            for conn in [self.netconf, self.ssh, self.snmp]:
+            for conn in [self.netconf, self.ssh, self.snmp, self.mops]:
                 if conn:
                     try:
                         conn.close()
@@ -159,6 +167,8 @@ class HIOSDriver(NetworkDriver):
             return self.ssh
         elif self.active_protocol == 'snmp':
             return self.snmp
+        elif self.active_protocol == 'mops':
+            return self.mops
         else:
             raise ConnectionException("No active connection")
 
@@ -175,7 +185,7 @@ class HIOSDriver(NetworkDriver):
         return False
 
     def get_facts(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             facts = self._get_active_connection().get_facts()
             # Ensure all required keys are present
             required_keys = ['uptime', 'vendor', 'model', 'hostname', 'fqdn', 'os_version', 'serial_number', 'interface_list']
@@ -186,7 +196,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_facts is not implemented for this protocol")
     
     def get_interfaces_counters(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             counters = self._get_active_connection().get_interfaces_counters()
             required_keys = ['tx_errors', 'rx_errors', 'tx_discards', 'rx_discards', 'tx_octets', 'rx_octets', 'tx_unicast_packets', 'rx_unicast_packets', 'tx_multicast_packets', 'rx_multicast_packets', 'tx_broadcast_packets', 'rx_broadcast_packets']
             for interface in counters.values():
@@ -197,7 +207,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_interfaces_counters is not implemented for this protocol")
     
     def get_interfaces_ip(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             interfaces_ip = self._get_active_connection().get_interfaces_ip()
             for interface in interfaces_ip.values():
                 if 'ipv4' not in interface:
@@ -208,7 +218,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_interfaces_ip is not implemented for this protocol")
     
     def get_lldp_neighbors(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             neighbors = self._get_active_connection().get_lldp_neighbors()
             # Ensure correct format: {local_port: [{'hostname': x, 'port': y}, ...]}
             for local_port, neighbor_list in neighbors.items():
@@ -221,7 +231,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_lldp_neighbors is not implemented for this protocol")
     
     def get_lldp_neighbors_detail(self, interface=""):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             neighbors_detail = self._get_active_connection().get_lldp_neighbors_detail(interface)
             required_keys = ['parent_interface', 'remote_port', 'remote_port_description', 'remote_chassis_id', 'remote_system_name', 'remote_system_description', 'remote_system_capab', 'remote_system_enable_capab']
             for interface_neighbors in neighbors_detail.values():
@@ -233,7 +243,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_lldp_neighbors_detail is not implemented for this protocol")
     
     def get_lldp_neighbors_detail_extended(self, interface=""):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             extended_lldp_details = self._get_active_connection().get_lldp_neighbors_detail_extended(interface)
             required_keys = [
                 'parent_interface', 'remote_port', 'remote_port_description', 'remote_chassis_id',
@@ -258,7 +268,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_lldp_neighbors_detail_extended is not implemented for this protocol")
 
     def get_mac_address_table(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             mac_table = self._get_active_connection().get_mac_address_table()
             required_keys = ['mac', 'interface', 'vlan', 'static', 'active', 'moves', 'last_move']
             for entry in mac_table:
@@ -269,7 +279,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_mac_address_table is not implemented for this protocol")
     
     def get_ntp_servers(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             ntp_servers = self._get_active_connection().get_ntp_servers()
             if self.active_protocol == 'ssh':
                 return {server: {} for server in ntp_servers}
@@ -277,7 +287,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_ntp_servers is not implemented for this protocol")
     
     def get_ntp_stats(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             ntp_stats = self._get_active_connection().get_ntp_stats()
             required_keys = ['remote', 'referenceid', 'synchronized', 'stratum', 'type', 'when', 'hostpoll', 'reachability', 'delay', 'offset', 'jitter']
             for stat in ntp_stats:
@@ -288,7 +298,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_ntp_stats is not implemented for this protocol")
 
     def get_optics(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             optics = self._get_active_connection().get_optics()
             required_keys = ['physical_channels']
             for interface in optics.values():
@@ -299,7 +309,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_optics is not implemented for this protocol")
     
     def get_users(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             users = self._get_active_connection().get_users()
             required_keys = ['level', 'password', 'sshkeys']
             for user in users.values():
@@ -310,7 +320,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_users is not implemented for this protocol")
     
     def get_vlans(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             vlans = self._get_active_connection().get_vlans()
             required_keys = ['name', 'interfaces']
             for vlan in vlans.values():
@@ -340,7 +350,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("cli requires SSH but SSH connection unavailable")
         
     def get_environment(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             env = self._get_active_connection().get_environment()
             # Ensure all required sections are present
             required_sections = ['fans', 'temperature', 'power', 'cpu', 'memory']
@@ -351,7 +361,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_environment is not implemented for this protocol")
 
     def get_arp_table(self, vrf=""):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             arp_table = self._get_active_connection().get_arp_table(vrf)
             required_keys = ['interface', 'mac', 'ip', 'age']
             for entry in arp_table:
@@ -372,7 +382,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_config requires SSH but SSH connection unavailable")
     
     def get_interfaces(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             interfaces = self._get_active_connection().get_interfaces()
             # Ensure all required keys are present for each interface
             required_keys = ['is_up', 'is_enabled', 'description', 'last_flapped', 'speed', 'mtu', 'mac_address']
@@ -521,45 +531,45 @@ class HIOSDriver(NetworkDriver):
         )
 
     def get_mrp(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().get_mrp()
         raise NotImplementedError("get_mrp is not implemented for this protocol")
 
     def get_hidiscovery(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().get_hidiscovery()
         raise NotImplementedError("get_hidiscovery is not implemented for this protocol")
 
     def get_config_status(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().get_config_status()
         raise NotImplementedError("get_config_status is not implemented for this protocol")
 
     def save_config(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().save_config()
         raise NotImplementedError("save_config is not implemented for this protocol")
 
     def set_mrp(self, operation='enable', mode='client', port_primary=None,
                 port_secondary=None, vlan=None, recovery_delay=None):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().set_mrp(
                 operation, mode, port_primary, port_secondary, vlan, recovery_delay,
             )
         raise NotImplementedError("set_mrp is not implemented for this protocol")
 
     def delete_mrp(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().delete_mrp()
         raise NotImplementedError("delete_mrp is not implemented for this protocol")
 
     def set_hidiscovery(self, status, blinking=None):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().set_hidiscovery(status, blinking=blinking)
         raise NotImplementedError("set_hidiscovery is not implemented for this protocol")
 
     def get_snmp_information(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             snmp_info = self._get_active_connection().get_snmp_information()
             required_keys = ['chassis_id', 'community', 'contact', 'location']
             for key in required_keys:
@@ -569,21 +579,52 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_snmp_information is not implemented for this protocol")
 
     def get_profiles(self, storage='nvm'):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().get_profiles(storage)
         raise NotImplementedError("get_profiles is not implemented for this protocol")
 
     def get_config_fingerprint(self):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().get_config_fingerprint()
         raise NotImplementedError("get_config_fingerprint is not implemented for this protocol")
 
     def activate_profile(self, storage='nvm', index=1):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().activate_profile(storage, index)
         raise NotImplementedError("activate_profile is not implemented for this protocol")
 
     def delete_profile(self, storage='nvm', index=1):
-        if self.active_protocol in ('ssh', 'snmp'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
             return self._get_active_connection().delete_profile(storage, index)
         raise NotImplementedError("delete_profile is not implemented for this protocol")
+
+    def get_rstp(self):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
+            return self._get_active_connection().get_rstp()
+        raise NotImplementedError("get_rstp is not implemented for this protocol")
+
+    def get_rstp_port(self, interface=None):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
+            return self._get_active_connection().get_rstp_port(interface)
+        raise NotImplementedError("get_rstp_port is not implemented for this protocol")
+
+    def set_rstp(self, enabled=None, mode=None, priority=None,
+                 hello_time=None, max_age=None, forward_delay=None,
+                 hold_count=None, bpdu_guard=None, bpdu_filter=None):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
+            return self._get_active_connection().set_rstp(
+                enabled, mode, priority, hello_time, max_age, forward_delay,
+                hold_count, bpdu_guard, bpdu_filter,
+            )
+        raise NotImplementedError("set_rstp is not implemented for this protocol")
+
+    def set_rstp_port(self, interface, enabled=None, edge_port=None,
+                      auto_edge=None, path_cost=None, priority=None,
+                      root_guard=None, loop_guard=None, tcn_guard=None,
+                      bpdu_filter=None, bpdu_flood=None):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
+            return self._get_active_connection().set_rstp_port(
+                interface, enabled, edge_port, auto_edge, path_cost, priority,
+                root_guard, loop_guard, tcn_guard, bpdu_filter, bpdu_flood,
+            )
+        raise NotImplementedError("set_rstp_port is not implemented for this protocol")

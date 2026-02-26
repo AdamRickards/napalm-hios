@@ -1,5 +1,28 @@
 # TODO
 
+## 1.4.2 — MOPS driver integration + performance
+
+- [x] Wire MOPS into HIOSDriver (`hios.py`): import, _try_connect, _get_active_connection, close()
+- [x] Default protocol_preference: `['mops', 'snmp', 'ssh', 'netconf']`
+- [x] All 31 dispatch checks updated: `('ssh', 'snmp')` → `('ssh', 'snmp', 'mops')`
+- [x] Add RSTP dispatch methods: get_rstp, get_rstp_port, set_rstp, set_rstp_port
+- [x] Strip MOPS set_mrp read-backs: removed initial get_mrp() check + final get_mrp() read-back
+- [x] Strip MOPS delete_mrp read-back: removed final get_mrp() read-back
+- [x] Strip MOPS set_rstp_port read-back: removed final get_rstp_port() read-back
+- [x] Fix set_mrp tests to match new createAndWait-first flow
+- [x] Remove premature test files (test_factory_reset.py, test_onboarding.py) — methods don't exist yet on SSH/SNMP
+- [x] Add deploy_mrp tool: threaded MRP ring deployment + undeploy, MOPS/SNMP/SSH selectable
+- [x] Unit tests: 306 passed, 0 failed (1 pre-existing ssh fixture error)
+
+## 1.5.0 — Port admin control + RSTP on SNMP/SSH
+
+- [ ] set_interface(interface, enabled, description) — port admin up/down
+- [ ] Safe MRP deploy/undeploy: disable RM port2 → configure MRP → disable RSTP on ring ports → enable RM port2
+- [ ] set_rstp_port / set_rstp / get_rstp / get_rstp_port on SNMP backend
+- [ ] set_rstp_port / set_rstp / get_rstp / get_rstp_port on SSH backend
+- [ ] Factory reset methods: clear_config(), clear_factory() on all protocols
+- [ ] Factory onboarding: is_factory_default(), onboard() on SSH/SNMP backends
+
 ## Documentation update
 
 - [x] vendor_specific.md — full rewrite: added Profiles, RSTP, Factory Onboarding, Factory Reset, MOPS Staging, Config Watchdog sections. Fixed intro (was SSH-only, now all 3 protocols). Updated all examples from `device.ssh.method()` to `device.method()`. Added redundancy warning to set_mrp/set_rstp, loop note to delete_mrp. Added blinking param to set_hidiscovery.

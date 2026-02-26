@@ -1841,8 +1841,6 @@ class MOPSHIOS:
                 index={"ifIndex": ifindex},
                 values=cst_values)
 
-        return self.get_rstp_port(interface)
-
     # ------------------------------------------------------------------
     # Vendor setters
     # ------------------------------------------------------------------
@@ -1901,15 +1899,13 @@ class MOPSHIOS:
         domain_id = domain_id.strip()
         idx = {"hm2MrpDomainID": domain_id}
 
-        # Check if domain exists
-        current = self.get_mrp()
-        domain_exists = current.get('configured', False)
-
-        if not domain_exists:
-            # Create domain in notInService state
+        # Try to create domain — if it already exists, just put it in notInService
+        try:
             self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2MrpEntry",
                                     index=idx,
                                     values={"hm2MrpRowStatus": "5"})  # createAndWait
+        except (MOPSError, ConnectionException):
+            pass  # domain already exists
 
         if operation == 'disable':
             self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2MrpEntry",
@@ -1917,10 +1913,9 @@ class MOPSHIOS:
                                     values={"hm2MrpRowStatus": "2"})  # notInService
         else:
             # Ensure notInService for modification
-            if domain_exists:
-                self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2MrpEntry",
-                                        index=idx,
-                                        values={"hm2MrpRowStatus": "2"})
+            self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2MrpEntry",
+                                    index=idx,
+                                    values={"hm2MrpRowStatus": "2"})
 
             # Build ifName → ifIndex reverse map for port resolution
             ifindex_map = self._build_ifindex_map()
@@ -1958,7 +1953,7 @@ class MOPSHIOS:
                                     index=idx,
                                     values={"hm2MrpRowStatus": "1"})  # active
 
-        return self.get_mrp()
+        return {'configured': True, 'operation': 'enabled' if operation == 'enable' else 'disabled'}
 
     def delete_mrp(self):
         """Delete the MRP default domain via MOPS."""
@@ -1979,7 +1974,7 @@ class MOPSHIOS:
         except (MOPSError, ConnectionException):
             pass
 
-        return self.get_mrp()
+        return {'configured': False}
 
     def activate_profile(self, storage='nvm', index=1):
         """Activate a config profile. Note: causes a warm restart.

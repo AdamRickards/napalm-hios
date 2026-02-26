@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.4.2 — 2026-02-26
+
+### MOPS driver integration
+
+MOPS (MIB Operations over HTTPS) was implemented in 1.4.0 as a backend (`mops_hios.py`) but never wired into the main `HIOSDriver` dispatch layer. This release completes the integration:
+
+- **MOPS in HIOSDriver**: `_try_connect()`, `_get_active_connection()`, `close()` all handle MOPS
+- **Default protocol**: `protocol_preference` now defaults to `['mops', 'snmp', 'ssh', 'netconf']` — MOPS first
+- **All 31 dispatch checks** updated from `('ssh', 'snmp')` to `('ssh', 'snmp', 'mops')`
+- **RSTP dispatch**: `get_rstp()`, `get_rstp_port()`, `set_rstp()`, `set_rstp_port()` added to HIOSDriver
+
+### Performance — MOPS setter read-back removal
+
+MOPS setters were doing unnecessary GET read-backs after every successful SET (MOPS returns `<ok/>` on success — the read-back adds ~1.2s per call for zero value):
+
+- **`set_mrp()`**: removed initial `get_mrp()` existence check (now try createAndWait, catch if exists) and final `get_mrp()` read-back. Returns `{'configured': True, 'operation': 'enabled'/'disabled'}` directly.
+- **`delete_mrp()`**: removed final `get_mrp()` read-back. Returns `{'configured': False}` directly.
+- **`set_rstp_port()`**: removed final `get_rstp_port()` read-back.
+
+Combined effect: MRP deploy dropped from ~26s to ~7.5s for 2 devices (70% reduction).
+
+### New tool: deploy_mrp
+
+Threaded MRP ring deployment tool in `tools/deploy_mrp/`:
+
+- **`deploy_mrp.py`**: parallel connect → parallel MRP configure → verify ring on manager → parallel RSTP disable → parallel save (optional). Supports MOPS, SNMP, and SSH via `script.cfg`.
+- **`undeploy_mrp.py`**: reverse — parallel RSTP re-enable → parallel MRP delete → parallel save (optional).
+- Config-driven: `script.cfg` defines credentials, ring ports, VLAN, recovery delay, protocol, device list.
+- All operations threaded via `ThreadPoolExecutor`.
+
+### Test fixes
+
+- Fixed `test_set_mrp_enable_client` and `test_set_mrp_disable` to match new createAndWait-first flow
+- Removed premature test files (`test_factory_reset.py`, `test_onboarding.py`) for unimplemented methods
+
+### Version bump
+
+- `version.py` and `setup.py`: 1.4.1 → 1.4.2
+
 ## 1.4.1 — 2026-02-26
 
 ### Bug fixes
