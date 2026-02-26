@@ -1500,7 +1500,6 @@ class SNMPHIOS:
 
         mode_val = _snmp_int(scalars.get(OID_hm2HiDiscMode, 2))
         blink_val = _snmp_int(scalars.get(OID_hm2HiDiscBlinking, 2))
-        relay_val = _snmp_int(scalars.get(OID_hm2HiDiscRelay, 2))
 
         # Protocol is BITS { none(0), v1(1), v2(2) }
         # MSB-first: bit 0=0x80 (none), bit 1=0x40 (v1), bit 2=0x20 (v2)
@@ -1511,13 +1510,20 @@ class SNMPHIOS:
         if proto_bits & 0x20:
             protocols.append('v2')
 
-        return {
+        result = {
             'enabled': True,
             'mode': 'read-write' if mode_val == 1 else 'read-only',
             'blinking': blink_val == 1,
             'protocols': protocols,
-            'relay': relay_val == 1,
         }
+
+        # Relay is only present on L3 devices — omit on L2 (matches MOPS/SSH).
+        # L2 devices return NoSuchInstance for this OID.
+        relay_raw = scalars.get(OID_hm2HiDiscRelay)
+        if relay_raw is not None and 'NoSuch' not in type(relay_raw).__name__:
+            result['relay'] = _snmp_int(relay_raw) == 1
+
+        return result
 
     # ------------------------------------------------------------------
     # Config status and save (HM2-FILEMGMT-MIB)

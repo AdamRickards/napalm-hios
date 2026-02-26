@@ -1022,6 +1022,27 @@ class TestSNMPHIOS(unittest.TestCase):
         self.assertEqual(disc['protocols'], ['v1', 'v2'])
         self.assertTrue(disc['relay'])
 
+    def test_get_hidiscovery_l2_no_relay(self):
+        """L2 devices return NoSuchInstance for relay — field should be omitted."""
+        from pysnmp.proto.rfc1905 import NoSuchInstance as _NoSuchInstance
+        no_such = _NoSuchInstance()
+
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2HiDiscOper: 1,
+                OID_hm2HiDiscMode: 2,
+                OID_hm2HiDiscBlinking: 2,
+                OID_hm2HiDiscProtocol: 0x60,
+                OID_hm2HiDiscRelay: no_such,
+            }
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            disc = self.snmp.get_hidiscovery()
+
+        self.assertTrue(disc['enabled'])
+        self.assertEqual(disc['mode'], 'read-only')
+        self.assertNotIn('relay', disc)
+
     # ------------------------------------------------------------------
     # get_config_status
     # ------------------------------------------------------------------

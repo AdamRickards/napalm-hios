@@ -636,7 +636,7 @@ class TestProfileParser(unittest.TestCase):
     def test_single_profile(self):
         """Parse single active profile from live GRS1042 output."""
         fixture = load_fixture('show_config_profiles_nvm.txt')
-        self.ssh._send_command = lambda cmd: fixture
+        self.ssh.cli = lambda cmd: {cmd: fixture}
         result = self.ssh.get_profiles('nvm')
         self.assertEqual(len(result), 1)
         p = result[0]
@@ -653,7 +653,7 @@ class TestProfileParser(unittest.TestCase):
     def test_multi_profile(self):
         """Parse two profiles — one active, one inactive."""
         fixture = load_fixture('show_config_profiles_nvm_multi.txt')
-        self.ssh._send_command = lambda cmd: fixture
+        self.ssh.cli = lambda cmd: {cmd: fixture}
         result = self.ssh.get_profiles('nvm')
         self.assertEqual(len(result), 2)
         # Active
@@ -674,7 +674,7 @@ class TestProfileParser(unittest.TestCase):
     def test_fingerprint(self):
         """get_config_fingerprint returns active profile SHA1."""
         fixture = load_fixture('show_config_profiles_nvm.txt')
-        self.ssh._send_command = lambda cmd: fixture
+        self.ssh.cli = lambda cmd: {cmd: fixture}
         result = self.ssh.get_config_fingerprint()
         self.assertEqual(result['fingerprint'], '9244C58FEA7549A1E2C80DB7608B8D75CF068A66')
         self.assertTrue(result['verified'])
@@ -691,7 +691,7 @@ class TestProfileParser(unittest.TestCase):
             " [ ]    9244C58FEA7549A1E2C80DB7608B8D75CF068A66  yes\n"
             "        no           no\n"
         )
-        self.ssh._send_command = lambda cmd: fixture
+        self.ssh.cli = lambda cmd: {cmd: fixture}
         result = self.ssh.get_config_fingerprint()
         self.assertEqual(result['fingerprint'], '')
         self.assertFalse(result['verified'])
@@ -710,13 +710,16 @@ class TestProfileWriteSSH(unittest.TestCase):
 
         # Default: two profiles, index 1 active, index 2 inactive
         self.multi_fixture = load_fixture('show_config_profiles_nvm_multi.txt')
-        self.ssh._send_command = lambda cmd: self.multi_fixture
+        self.ssh.cli = lambda cmd: {cmd: self.multi_fixture}
 
     def test_delete_inactive_profile(self):
         """Delete inactive profile index 2."""
         self.cli_calls = []
+        fixture = self.multi_fixture
         def mock_cli(cmd):
             self.cli_calls.append(cmd)
+            if 'show config profiles' in cmd:
+                return {cmd: fixture}
             return {cmd: ''}
         self.ssh.cli = mock_cli
 
@@ -738,8 +741,11 @@ class TestProfileWriteSSH(unittest.TestCase):
     def test_activate_inactive_profile(self):
         """Activate inactive profile index 2."""
         self.cli_calls = []
+        fixture = self.multi_fixture
         def mock_cli(cmd):
             self.cli_calls.append(cmd)
+            if 'show config profiles' in cmd:
+                return {cmd: fixture}
             return {cmd: ''}
         self.ssh.cli = mock_cli
 

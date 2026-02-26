@@ -1,17 +1,5 @@
 # TODO
 
-## 1.4.0
-
-### Factory-fresh device onboarding
-HiOS 10.3+ forces a password change on first login (SSH prompt before CLI access). SNMP is non-functional until the default password has been accepted/changed. Ref: RM CLI Overview HiOS Release 10.3, page 46.
-
-Needs factory-default hardware for testing. Implementation:
-- Detect password change prompt during SSH connect (netmiko `expect_string` or connection handler)
-- `initial_setup(new_password=None)` — handle first-login password change flow
-- Raise `InitialSetupRequired` (custom exception) if the prompt is hit unexpectedly during normal `open()`
-- SNMP only becomes usable after SSH password change completes
-- Consider: accept default password and re-set to same value (`private`) for zero-touch scenarios
-
 ## Backburner
 
 ### get_config via SNMP

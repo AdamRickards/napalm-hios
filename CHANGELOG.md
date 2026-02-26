@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.4.1 — 2026-02-26
+
+### Bug fixes
+
+- **SSH `get_profiles()` / `get_config_fingerprint()`**: called non-existent `_send_command()` method — raised `AttributeError` immediately on every invocation. Changed to `self.cli()` matching all other SSH getters.
+- **SNMP `get_hidiscovery()` relay on L2 devices**: always included `relay: false` on L2 devices where the OID (`hm2NetHiDiscoveryRelay`) returns `NoSuchInstance`. The NoSuchInstance payload was interpreted as a garbage integer by `_snmp_int`, which happened to not equal `1`, producing `False`. Now checks for NoSuchInstance and omits `relay` on L2 devices, matching MOPS and SSH behaviour.
+
+### Test additions
+
+- `test_get_hidiscovery_l2_no_relay` — mocks NoSuchInstance for relay OID, verifies field omitted
+- Profile parser/write tests updated to mock `cli()` instead of removed `_send_command()`
+
+### Live validation
+
+- Cross-protocol comparison against 4 devices (3x BRS50, 1x GRS1042) confirmed:
+  - GRS1042 (L3): all 3 protocols return `relay: true` — match
+  - BRS50 (L2): MOPS and SSH omit `relay`, SNMP now also omits — match
+  - SSH `get_profiles` and `get_config_fingerprint` now execute successfully on all devices
+
+### Version bump
+
+- `version.py` and `setup.py`: 1.4.0 → 1.4.1
+
 ## 1.3.1 — 2026-02-22
 
 ### Documentation refresh

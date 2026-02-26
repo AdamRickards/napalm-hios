@@ -1561,7 +1561,8 @@ class SSHHIOS:
         if storage not in ('nvm', 'envm'):
             raise ValueError(f"Invalid storage type '{storage}'. Use 'nvm' or 'envm'.")
 
-        output = self._send_command(f'show config profiles {storage}')
+        cmd = f'show config profiles {storage}'
+        output = self.cli(cmd)[cmd]
         profiles = []
 
         # Find the separator line, then parse 3-line groups after it
