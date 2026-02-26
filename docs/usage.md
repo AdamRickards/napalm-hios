@@ -39,7 +39,7 @@ device = driver(
     username='your_username',
     password='your_password',
     timeout=60,
-    optional_args={'protocol_preference': ['ssh', 'snmp', 'netconf']}
+    optional_args={'protocol_preference': ['mops', 'snmp', 'ssh']}
 )
 
 # Open the connection
@@ -58,14 +58,15 @@ device.close()
 - `password` (str): The password for authentication.
 - `timeout` (int, optional): Connection timeout in seconds. Default is 60.
 - `optional_args` (dict, optional): A dictionary of optional arguments. Supported keys:
-  - `protocol_preference` (list): Order of protocols to try ['ssh', 'snmp', 'netconf'].
-  - `ssh_port` (int): The SSH port to use if different from the default (22).
-  - `netconf_port` (int): The NETCONF port to use if different from the default (830).
-  - `snmp_port` (int): The SNMP port to use if different from the default (161).
+  - `protocol_preference` (list): Order of protocols to try. Default: `['mops', 'snmp', 'ssh', 'netconf']`.
+  - `mops_port` (int): The MOPS (HTTPS) port. Default is 443.
+  - `ssh_port` (int): The SSH port. Default is 22.
+  - `snmp_port` (int): The SNMP port. Default is 161.
+  - `netconf_port` (int): The NETCONF port. Default is 830.
 
 ## Available Methods
 
-### Standard NAPALM getters (SSH + SNMP)
+### Standard NAPALM getters (MOPS + SNMP + SSH)
 
 - `get_facts()`
 - `get_interfaces()`
@@ -89,21 +90,38 @@ device.close()
 - `ping()` — device-originated ping
 - `cli()` — raw command execution
 
-### Vendor-specific methods (SSH + SNMP)
+### Configuration workflow
+
+- `load_merge_candidate()` — stage CLI commands (MOPS: atomic staging; SSH: in-memory)
+- `compare_config()` — return staged commands
+- `commit_config()` — execute staged commands, save to NVM
+- `discard_config()` — clear staged commands
+
+### Vendor-specific read methods (MOPS + SNMP + SSH)
 
 - `get_mrp()` — MRP ring redundancy status
 - `get_hidiscovery()` — HiDiscovery protocol status
+- `get_rstp()` — global STP/RSTP configuration and state
+- `get_rstp_port()` — per-port STP/RSTP state
 - `get_lldp_neighbors_detail_extended()` — LLDP with 802.1/802.3 extensions
 - `get_config_status()` — check if running config is saved to NVM
-- `save_config()` — save running config to NVM
+- `get_profiles()` — list NVM/ENVM config profiles
+- `get_config_fingerprint()` — SHA1 fingerprint of active config
+- `is_factory_default()` — detect factory-fresh HiOS 10.3+ devices
 
-### Vendor-specific write operations (SSH-only)
+### Vendor-specific write methods
 
 - `set_mrp()` — configure MRP ring on default domain
 - `delete_mrp()` — disable and delete MRP domain
 - `set_hidiscovery()` — set HiDiscovery mode (on/off/read-only)
-
-Note: Configuration-related methods (`load_merge_candidate()`, `load_replace_candidate()`, `compare_config()`, `commit_config()`, `discard_config()`, `rollback()`) are not implemented — HiOS does not support candidate configurations.
+- `set_rstp()` — set global STP/RSTP configuration
+- `set_rstp_port()` — set per-port STP/RSTP configuration
+- `save_config()` — save running config to NVM
+- `clear_config()` — clear running config (warm restart)
+- `clear_factory()` — full factory reset (reboot)
+- `activate_profile()` — activate a config profile (warm restart)
+- `delete_profile()` — delete a config profile
+- `onboard()` — change default password on factory-fresh device
 
 For vendor-specific method details, see [vendor_specific.md](vendor_specific.md).
 
@@ -204,30 +222,32 @@ for command, output in outputs.items():
     print("-" * 40)
 ```
 
-Note: This method is only available when using the SSH protocol.
+Note: This method is only available when using the SSH protocol. When the primary protocol is MOPS or SNMP, SSH is lazy-connected on demand.
 
 ## Protocol Information
 
-The NAPALM HiOS driver supports multiple protocols for device communication:
+The NAPALM HiOS driver supports three protocols for device communication:
 
-1. **SSH**: Supports all 23 methods (20 getters + 3 write operations) plus `get_config`, `ping`, and `cli`. Uses Netmiko for CLI interaction.
+1. **MOPS (MIB Operations over HTTPS)**: Default and preferred protocol. Uses the same internal mechanism as the HiOS web UI. Supports atomic multi-table writes in a single POST, HTTP Basic auth, and returns entire tables in one request. Port 443.
 
-2. **SNMPv3**: Supports all 20 read getters plus `save_config` (via SNMP SET). Uses authPriv (MD5/DES) matching HiOS factory defaults. Lower overhead than SSH, no session state, doesn't consume SSH session slots. Short passwords (< 8 chars, including the default `private`) are supported via pre-computed master keys.
+2. **SNMPv3**: authPriv (MD5/DES) matching HiOS factory defaults. Lower overhead than SSH, no session state, doesn't consume SSH session slots. Short passwords (< 8 chars, including the default `private`) are supported via pre-computed master keys. Port 161.
 
-3. **NETCONF**: Stub implementation only — not usable for production.
+3. **SSH**: CLI parsing via Netmiko. Required for `get_config`, `ping`, and `cli` methods. Lazy-connects on demand when the primary protocol is MOPS or SNMP. Port 22.
 
 You can specify the protocol preference in the `optional_args` when initializing the driver. The driver tries each protocol in order and uses the first one that connects successfully.
 
 ```python
-# SNMP-only (recommended for monitoring)
+# Default: MOPS first (recommended)
+device = driver(hostname, user, pw)
+
+# SNMP-only (good for monitoring)
 device = driver(hostname, user, pw, optional_args={'protocol_preference': ['snmp']})
 
-# SSH-only (needed for write operations, get_config, ping, cli)
+# SSH-only (needed for get_config, ping, cli)
 device = driver(hostname, user, pw, optional_args={'protocol_preference': ['ssh']})
-
-# Default: SSH first, SNMP fallback
-device = driver(hostname, user, pw)
 ```
+
+For detailed protocol configuration, known cross-protocol differences, and the full method availability matrix, see [protocols.md](protocols.md).
 
 ## Error Handling
 
@@ -256,9 +276,9 @@ When using the NAPALM HiOS driver, you may encounter various exceptions. Here ar
 3. **NotImplementedError**: Raised when trying to use a method that is not implemented for the HiOS driver.
    ```python
    try:
-       device.load_merge_candidate(config='some config')
+       device.load_replace_candidate(config='some config')
    except NotImplementedError:
-       print("Configuration management is not supported for this device")
+       print("Replace candidate is not supported — use load_merge_candidate instead")
    ```
 
 Always ensure to properly close the connection after use, preferably using a context manager:
@@ -271,7 +291,7 @@ with driver(hostname, username, password) as device:
 
 ## Best Practices
 
-1. **Use SNMP for monitoring, SSH for configuration**: SNMP supports all 20 read getters with lower overhead. Use SSH when you need `get_config`, `ping`, `cli`, or write operations (`set_mrp`, `set_hidiscovery`).
+1. **Use MOPS for most operations**: MOPS is the default and supports all getters plus atomic writes. Use SSH only when you need `get_config`, `ping`, or `cli`.
 
 2. **Handle exceptions**: Always wrap your code in try-except blocks to handle potential exceptions gracefully.
 
@@ -279,7 +299,7 @@ with driver(hostname, username, password) as device:
 
 4. **Limit concurrent connections**: Avoid opening multiple concurrent connections to the same device, as this may lead to performance issues or connection failures.
 
-5. **Verify protocol support**: Before using a method, check if it's supported by the current protocol (SSH, SNMP, or NETCONF) you're using.
+5. **Verify protocol support**: Before using a method, check if it's supported by the current protocol. See [protocols.md](protocols.md) for the full availability matrix.
 
 6. **Use get_facts() for initial device information**: The `get_facts()` method provides a good overview of the device and can be used to verify successful connection and basic device information.
 
@@ -300,7 +320,7 @@ Here are some common issues you might encounter when using the NAPALM HiOS drive
 
 3. **Method Not Implemented**
    - Verify that the method you're trying to use is supported by the HiOS driver.
-   - Check if the method is supported by the protocol you're using (SSH, SNMP, or NETCONF).
+   - Check if the method is supported by the protocol you're using. See [protocols.md](protocols.md).
 
 4. **Unexpected Output Format**
    - Ensure you're using the latest version of the driver.
@@ -309,8 +329,8 @@ Here are some common issues you might encounter when using the NAPALM HiOS drive
 
 5. **SNMP Issues**
    - Verify that SNMP is enabled on the device.
-   - Ensure that the SNMP community string (for SNMPv2) or user/password (for SNMPv3) is correct.
-   - Check if the correct SNMP version is being used.
+   - Ensure that the SNMP user/password is correct (HiOS CLI users = SNMPv3 users).
+   - Check if the correct SNMP version is being used (SNMPv3 authPriv by default).
 
 If you encounter persistent issues that you can't resolve, please check the project's issue tracker or consider contributing by reporting the issue (see Contributing section).
 
