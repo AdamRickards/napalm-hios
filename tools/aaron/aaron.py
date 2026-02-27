@@ -24,6 +24,9 @@ import logging
 import ipaddress
 import argparse
 import time
+import socket
+import platform
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -85,6 +88,7 @@ def parse_config(config_file: str) -> dict:
         'edge_threshold': 3,
         'hide_empty': False,
         'hide_uplinks': False,
+        'arp_scan': [],
         'devices': [],
     }
 
@@ -112,6 +116,16 @@ def parse_config(config_file: str) -> dict:
                     config['hide_empty'] = val.lower() in ('true', 'yes', '1')
                 elif key == 'hide_uplinks':
                     config['hide_uplinks'] = val.lower() in ('true', 'yes', '1')
+                elif key == 'arp_scan':
+                    val_lower = val.strip().lower()
+                    if val_lower == 'passive':
+                        config['arp_scan'] = ['passive']
+                    else:
+                        # Comma-separated subnets: 192.168.1.0/24, 10.0.0.0/24
+                        for subnet in val.split(','):
+                            subnet = subnet.strip()
+                            if subnet:
+                                config['arp_scan'].append(subnet)
                 else:
                     logging.warning(f"Line {line_num}: unknown setting '{key}'")
                 continue
@@ -202,6 +216,79 @@ def build_mac_index(device_data: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# ARP scan — resolve MACs to IPs via local ARP cache
+# ---------------------------------------------------------------------------
+
+AARON_PAYLOAD = b'Hirschmann is the way.'  # 22 bytes — minimum Ethernet frame
+
+
+def arp_tickle(ip):
+    """Send a throwaway UDP packet to trigger OS ARP resolution."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0)
+        s.sendto(AARON_PAYLOAD, (ip, 1))
+        s.close()
+    except Exception:
+        pass
+
+
+def expand_subnets(subnets):
+    """Expand CIDR subnets into individual host IPs."""
+    ips = []
+    for subnet in subnets:
+        try:
+            net = ipaddress.ip_network(subnet, strict=False)
+            ips.extend(str(ip) for ip in net.hosts())
+        except ValueError:
+            # Single IP, not CIDR
+            if is_valid_ipv4(subnet):
+                ips.append(subnet)
+    return ips
+
+
+def read_arp_cache():
+    """Read the OS ARP cache. Returns {mac: ip} (mac in colon-separated lowercase)."""
+    result = {}
+    if platform.system() == 'Windows':
+        try:
+            out = subprocess.run(['arp', '-a'], capture_output=True, text=True, timeout=10)
+            for line in out.stdout.splitlines():
+                parts = line.split()
+                if len(parts) >= 3 and is_valid_ipv4(parts[0]):
+                    mac = parts[1].replace('-', ':').lower()
+                    if mac != 'ff:ff:ff:ff:ff:ff':
+                        result[mac] = parts[0]
+        except Exception:
+            pass
+    else:
+        # Linux: /proc/net/arp
+        try:
+            with open('/proc/net/arp') as f:
+                for line in f.readlines()[1:]:
+                    parts = line.split()
+                    if len(parts) >= 4 and parts[2] != '0x0':
+                        mac = parts[3].lower()
+                        if mac != '00:00:00:00:00:00':
+                            result[mac] = parts[0]
+        except Exception:
+            pass
+    return result
+
+
+def arp_tickle_all(subnets, skip_ips=None):
+    """Fire UDP tickle at all IPs in subnets (background-safe). Skips known IPs."""
+    ips = expand_subnets(subnets)
+    if skip_ips:
+        ips = [ip for ip in ips if ip not in skip_ips]
+    if not ips:
+        return 0
+    with ThreadPoolExecutor(max_workers=min(len(ips), 256)) as pool:
+        list(pool.map(arp_tickle, ips))
+    return len(ips)
+
+
+# ---------------------------------------------------------------------------
 # Phase 3: Classify ports
 # ---------------------------------------------------------------------------
 
@@ -243,6 +330,7 @@ def classify_ports(device_data: dict, mac_index: dict, threshold: int) -> list:
                 'vlan': '',
                 'mac_count': 0,
                 'macs': '',
+                'resolved_ip': '',
                 'lldp_neighbor_ip': '',
                 'lldp_neighbor_name': '',
                 'lldp_neighbor_port': '',
@@ -311,8 +399,8 @@ def classify_ports(device_data: dict, mac_index: dict, threshold: int) -> list:
 
 CSV_HEADERS = [
     'switch_ip', 'switch_name', 'interface', 'type', 'vlan',
-    'mac_count', 'macs', 'lldp_neighbor_ip', 'lldp_neighbor_name',
-    'lldp_neighbor_port',
+    'mac_count', 'macs', 'resolved_ip',
+    'lldp_neighbor_ip', 'lldp_neighbor_name', 'lldp_neighbor_port',
 ]
 
 TYPE_LABELS = {
@@ -345,11 +433,17 @@ def print_summary(device_data: dict, rows: list):
             elif port_type == 'empty':
                 detail = ''
             elif port_type == 'indirect':
-                detail = f"{mac_count:>3} MACs  (unmanaged?)"
+                resolved = row.get('resolved_ip', '')
+                extra = f"  {resolved}" if resolved else ""
+                detail = f"{mac_count:>3} MACs  (unmanaged?){extra}"
             else:
                 # edge
-                mac_str = row['macs'].split('|')[0] if mac_count == 1 else f"{mac_count} MACs"
-                detail = f"{mac_count:>3} MAC{'s' if mac_count != 1 else ' '}  {mac_str}"
+                resolved = row.get('resolved_ip', '')
+                if mac_count == 1:
+                    ident = resolved or row['macs'].split('|')[0]
+                else:
+                    ident = resolved if resolved else f"{mac_count} MACs"
+                detail = f"{mac_count:>3} MAC{'s' if mac_count != 1 else ' '}  {ident}"
 
             print(f"    {iface:<8s} {port_type:<12s} {detail}")
 
@@ -419,8 +513,15 @@ def main():
         print("\n" + "=" * 60)
         print("  AARON \u2014 Automated Asset Recognition On Network")
         print("=" * 60)
+        if not config['arp_scan']:
+            arp_label = 'off'
+        elif config['arp_scan'] == ['passive']:
+            arp_label = 'passive'
+        else:
+            arp_label = ', '.join(config['arp_scan'])
         print(f"  Config: {args.c} | Protocol: {config['protocol']}"
               f" | Devices: {len(config['devices'])} | Edge threshold: \u2264{config['edge_threshold']}")
+        print(f"  ARP scan: {arp_label}")
         print("=" * 60)
 
         if args.dry_run:
@@ -433,6 +534,16 @@ def main():
 
         from napalm import get_network_driver
         driver = get_network_driver('hios')
+
+        # --- Fire ARP tickle in background (runs during Phase 1) ---
+        arp_future = None
+        arp_count = 0
+        arp_passive = config['arp_scan'] == ['passive']
+        arp_active = config['arp_scan'] and not arp_passive
+        if arp_active:
+            skip_ips = set(config['devices'])
+            bg_pool = ThreadPoolExecutor(max_workers=1)
+            arp_future = bg_pool.submit(arp_tickle_all, config['arp_scan'], skip_ips)
 
         # --- Phase 1: Gather data from all devices in parallel ---
         print(f"\n  Gathering data...")
@@ -479,8 +590,32 @@ def main():
         print(f"\n  Cross-referencing MACs across {len(device_data)} devices...")
         print(f"  Unique MACs: {len(all_macs)} | Seen on multiple devices: {multi_device_macs}")
 
+        # --- Collect ARP results ---
+        mac_to_ip = {}
+        if arp_future:
+            arp_count = arp_future.result()
+            bg_pool.shutdown(wait=False)
+            mac_to_ip = read_arp_cache()
+            resolved = sum(1 for m in all_macs if m in mac_to_ip)
+            print(f"\n  ARP scan (active): {arp_count} IPs tickled | Cache: {len(mac_to_ip)} entries | Resolved: {resolved}/{len(all_macs)} MACs")
+        elif arp_passive:
+            mac_to_ip = read_arp_cache()
+            resolved = sum(1 for m in all_macs if m in mac_to_ip)
+            print(f"\n  ARP scan (passive): Cache: {len(mac_to_ip)} entries | Resolved: {resolved}/{len(all_macs)} MACs")
+
         # --- Phase 3: Classify ports ---
         rows = classify_ports(device_data, mac_index, config['edge_threshold'])
+
+        # Enrich edge/indirect ports with resolved IPs (uplinks already have lldp_neighbor_ip)
+        if mac_to_ip:
+            for row in rows:
+                if row['type'] not in ('edge', 'indirect'):
+                    continue
+                if row['mac_count'] == 1 and row['macs']:
+                    row['resolved_ip'] = mac_to_ip.get(row['macs'], '')
+                elif row['mac_count'] > 1 and row['macs']:
+                    resolved = [mac_to_ip[m] for m in row['macs'].split('|') if m in mac_to_ip]
+                    row['resolved_ip'] = '|'.join(resolved)
 
         # --- Phase 4: Output ---
         print_summary(device_data, rows)
