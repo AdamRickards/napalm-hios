@@ -1356,5 +1356,371 @@ class TestMOPSHIOSRSTP(unittest.TestCase):
         self.backend.client.set_indexed.assert_not_called()
 
 
+class TestAutoDisable(unittest.TestCase):
+    """Test auto-disable getter/setters with mocked client."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+        self.backend._ifindex_map = {
+            "1": "1/1", "2": "1/2", "3": "1/3",
+            "29": "cpu/1", "38": "vlan/1",
+        }
+
+    def _make_intf_entry(self, idx, timer=0, reason="0", oper="2",
+                         remaining=0, error_time=0):
+        return {
+            "ifIndex": str(idx),
+            "hm2AutoDisableIntfTimer": str(timer),
+            "hm2AutoDisableIntfRemainingTime": str(remaining),
+            "hm2AutoDisableIntfComponentName": "2d",
+            "hm2AutoDisableIntfErrorReason": str(reason),
+            "hm2AutoDisableIntfOperState": str(oper),
+            "hm2AutoDisableIntfErrorTime": str(error_time),
+        }
+
+    def _make_reason_entry(self, idx, operation="2", category="1"):
+        return {
+            "hm2AutoDisableReasons": str(idx),
+            "hm2AutoDisableReasonOperation": str(operation),
+            "hm2AutoDisableReasonCategory": str(category),
+        }
+
+    def test_get_auto_disable_default(self):
+        """All ports default: timer=0, no error, inactive."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DEVMGMT-MIB": {
+                    "hm2AutoDisableIntfEntry": [
+                        self._make_intf_entry(1),
+                        self._make_intf_entry(2),
+                        self._make_intf_entry(3),
+                        self._make_intf_entry(29),  # cpu — should be skipped
+                        self._make_intf_entry(38),  # vlan — should be skipped
+                    ],
+                    "hm2AutoDisableReasonEntry": [
+                        self._make_reason_entry(1, "2", "2"),   # link-flap, disabled
+                        self._make_reason_entry(6, "2", "4"),   # bpdu-rate, disabled
+                        self._make_reason_entry(10, "2", "4"),  # loop-protection, disabled
+                    ],
+                },
+            },
+            "errors": [],
+        }
+
+        result = self.backend.get_auto_disable()
+        # Only physical ports, no cpu/vlan
+        self.assertEqual(sorted(result['interfaces'].keys()),
+                         ['1/1', '1/2', '1/3'])
+        # Default values
+        port = result['interfaces']['1/1']
+        self.assertEqual(port['timer'], 0)
+        self.assertEqual(port['reason'], 'none')
+        self.assertFalse(port['active'])
+        self.assertEqual(port['component'], '')
+        # Reasons
+        self.assertIn('loop-protection', result['reasons'])
+        self.assertFalse(result['reasons']['loop-protection']['enabled'])
+        self.assertEqual(result['reasons']['loop-protection']['category'],
+                         'l2-redundancy')
+        self.assertFalse(result['reasons']['link-flap']['enabled'])
+        self.assertEqual(result['reasons']['link-flap']['category'],
+                         'port-monitor')
+
+    def test_get_auto_disable_active_port(self):
+        """Port with active auto-disable (loop protection triggered)."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DEVMGMT-MIB": {
+                    "hm2AutoDisableIntfEntry": [
+                        self._make_intf_entry(1, timer=30, reason="10",
+                                              oper="1", remaining=25,
+                                              error_time=1709078400),
+                    ],
+                    "hm2AutoDisableReasonEntry": [],
+                },
+            },
+            "errors": [],
+        }
+        result = self.backend.get_auto_disable()
+        port = result['interfaces']['1/1']
+        self.assertEqual(port['timer'], 30)
+        self.assertEqual(port['reason'], 'loop-protection')
+        self.assertTrue(port['active'])
+        self.assertEqual(port['remaining_time'], 25)
+        self.assertEqual(port['error_time'], 1709078400)
+
+    def test_get_auto_disable_component_dash(self):
+        """Component '2d' (hex for '-') should decode to empty string."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DEVMGMT-MIB": {
+                    "hm2AutoDisableIntfEntry": [
+                        self._make_intf_entry(1),
+                    ],
+                    "hm2AutoDisableReasonEntry": [],
+                },
+            },
+            "errors": [],
+        }
+        result = self.backend.get_auto_disable()
+        self.assertEqual(result['interfaces']['1/1']['component'], '')
+
+    def test_get_auto_disable_l2s_reduced_reasons(self):
+        """L2S device: only 7 reasons (no dhcp-snooping, arp-rate, loop-protection)."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DEVMGMT-MIB": {
+                    "hm2AutoDisableIntfEntry": [
+                        self._make_intf_entry(1),
+                    ],
+                    "hm2AutoDisableReasonEntry": [
+                        self._make_reason_entry(1, "2", "2"),
+                        self._make_reason_entry(2, "2", "2"),
+                        self._make_reason_entry(3, "2", "2"),
+                        self._make_reason_entry(7, "2", "3"),
+                        self._make_reason_entry(8, "2", "2"),
+                        self._make_reason_entry(9, "2", "2"),
+                        self._make_reason_entry(6, "2", "4"),
+                    ],
+                },
+            },
+            "errors": [],
+        }
+        result = self.backend.get_auto_disable()
+        self.assertEqual(len(result['reasons']), 7)
+        self.assertNotIn('loop-protection', result['reasons'])
+        self.assertNotIn('dhcp-snooping', result['reasons'])
+        self.assertNotIn('arp-rate', result['reasons'])
+
+    def test_set_auto_disable_timer(self):
+        """Set recovery timer on a port."""
+        self.backend.set_auto_disable('1/1', timer=30)
+        self.backend.client.set_indexed.assert_called_once_with(
+            "HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
+            index={"ifIndex": "1"},
+            values={"hm2AutoDisableIntfTimer": "30"})
+
+    def test_set_auto_disable_timer_zero(self):
+        """Set timer to 0 (off)."""
+        self.backend.set_auto_disable('1/2', timer=0)
+        self.backend.client.set_indexed.assert_called_once_with(
+            "HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
+            index={"ifIndex": "2"},
+            values={"hm2AutoDisableIntfTimer": "0"})
+
+    def test_set_auto_disable_unknown_interface(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.set_auto_disable('9/9', timer=30)
+        self.assertIn("Unknown interface", str(ctx.exception))
+
+    def test_reset_auto_disable(self):
+        """Manual port re-enable writes true(1) to reset."""
+        self.backend.reset_auto_disable('1/1')
+        self.backend.client.set_indexed.assert_called_once_with(
+            "HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
+            index={"ifIndex": "1"},
+            values={"hm2AutoDisableIntfReset": "1"})
+
+    def test_reset_auto_disable_unknown_interface(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.reset_auto_disable('9/9')
+        self.assertIn("Unknown interface", str(ctx.exception))
+
+    def test_set_auto_disable_reason_enable(self):
+        """Enable auto-disable for loop-protection reason."""
+        self.backend.set_auto_disable_reason('loop-protection', enabled=True)
+        self.backend.client.set_indexed.assert_called_once_with(
+            "HM2-DEVMGMT-MIB", "hm2AutoDisableReasonEntry",
+            index={"hm2AutoDisableReasons": "10"},
+            values={"hm2AutoDisableReasonOperation": "1"})
+
+    def test_set_auto_disable_reason_disable(self):
+        self.backend.set_auto_disable_reason('link-flap', enabled=False)
+        self.backend.client.set_indexed.assert_called_once_with(
+            "HM2-DEVMGMT-MIB", "hm2AutoDisableReasonEntry",
+            index={"hm2AutoDisableReasons": "1"},
+            values={"hm2AutoDisableReasonOperation": "2"})
+
+    def test_set_auto_disable_reason_unknown(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.set_auto_disable_reason('bogus', enabled=True)
+        self.assertIn("Unknown reason", str(ctx.exception))
+
+
+class TestLoopProtection(unittest.TestCase):
+    """Test loop protection getter/setters with mocked client."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+        self.backend._ifindex_map = {
+            "1": "1/1", "2": "1/2", "3": "1/3",
+            "29": "cpu/1", "38": "vlan/1",
+        }
+
+    def _make_port_entry(self, idx, state="2", mode="2", action="11",
+                         vlan="0", tpid="0", detected="2", count="0",
+                         last_time="07 b2 01 01 00 00 00 00",
+                         tx="0", rx="0", discard="0"):
+        return {
+            "ifIndex": str(idx),
+            "hm2AgentKeepalivePortState": state,
+            "hm2AgentKeepalivePortMode": mode,
+            "hm2AgentKeepalivePortRxAction": action,
+            "hm2AgentKeepalivePortVlanId": vlan,
+            "hm2AgentKeepalivePortTpidType": tpid,
+            "hm2AgentKeepalivePortLoopDetected": detected,
+            "hm2AgentKeepalivePortLoopCount": count,
+            "hm2AgentKeepalivePortLastLoopDetectedTime": last_time,
+            "hm2AgentKeepalivePortTxFrameCount": tx,
+            "hm2AgentKeepalivePortRxFrameCount": rx,
+            "hm2AgentKeepalivePortDiscardFrameCount": discard,
+        }
+
+    def _make_global(self, state="2", interval="5", threshold="1"):
+        return {
+            "hm2AgentSwitchKeepaliveState": state,
+            "hm2AgentSwitchKeepaliveTransmitInterval": interval,
+            "hm2AgentSwitchKeepaliveRxThreshold": threshold,
+        }
+
+    def test_get_loop_protection_default(self):
+        """Default state: disabled globally, all ports passive."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-PLATFORM-SWITCHING-MIB": {
+                    "hm2AgentSwitchKeepaliveGroup": [self._make_global()],
+                    "hm2AgentKeepalivePortEntry": [
+                        self._make_port_entry(1),
+                        self._make_port_entry(2),
+                        self._make_port_entry(29),  # cpu — skipped
+                        self._make_port_entry(38),  # vlan — skipped
+                    ],
+                },
+            },
+            "errors": [],
+        }
+        result = self.backend.get_loop_protection()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['transmit_interval'], 5)
+        self.assertEqual(result['receive_threshold'], 1)
+        self.assertEqual(sorted(result['interfaces'].keys()), ['1/1', '1/2'])
+        port = result['interfaces']['1/1']
+        self.assertFalse(port['enabled'])
+        self.assertEqual(port['mode'], 'passive')
+        self.assertEqual(port['action'], 'auto-disable')
+        self.assertEqual(port['vlan_id'], 0)
+        self.assertEqual(port['tpid_type'], 'none')
+        self.assertFalse(port['loop_detected'])
+        self.assertEqual(port['last_loop_time'], '')
+
+    def test_get_loop_protection_active_with_detection(self):
+        """Port with active mode and a detected loop."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-PLATFORM-SWITCHING-MIB": {
+                    "hm2AgentSwitchKeepaliveGroup": [
+                        self._make_global("1", "3", "2")],
+                    "hm2AgentKeepalivePortEntry": [
+                        self._make_port_entry(1, state="1", mode="1",
+                                              action="12", detected="1",
+                                              count="5", tx="100", rx="3",
+                                              last_time="07 ea 02 1c 0e 1e 00 00"),
+                    ],
+                },
+            },
+            "errors": [],
+        }
+        result = self.backend.get_loop_protection()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['transmit_interval'], 3)
+        self.assertEqual(result['receive_threshold'], 2)
+        port = result['interfaces']['1/1']
+        self.assertTrue(port['enabled'])
+        self.assertEqual(port['mode'], 'active')
+        self.assertEqual(port['action'], 'all')
+        self.assertTrue(port['loop_detected'])
+        self.assertEqual(port['loop_count'], 5)
+        self.assertEqual(port['tx_frames'], 100)
+        self.assertEqual(port['rx_frames'], 3)
+        self.assertEqual(port['last_loop_time'], '2026-02-28 14:30:00')
+
+    def test_get_loop_protection_l2s_empty(self):
+        """L2S device: global MIB exists but port table is empty."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-PLATFORM-SWITCHING-MIB": {
+                    "hm2AgentSwitchKeepaliveGroup": [
+                        self._make_global("2", "0", "0")],
+                    "hm2AgentKeepalivePortEntry": [],
+                },
+            },
+            "errors": [],
+        }
+        result = self.backend.get_loop_protection()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['transmit_interval'], 0)
+        self.assertEqual(result['receive_threshold'], 0)
+        self.assertEqual(result['interfaces'], {})
+
+    def test_set_loop_protection_per_port(self):
+        """Set per-port: enabled, active, auto-disable."""
+        self.backend.set_loop_protection('1/1', enabled=True, mode='active',
+                                         action='auto-disable')
+        self.backend.client.set_indexed.assert_called_once_with(
+            "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentKeepalivePortEntry",
+            index={"ifIndex": "1"},
+            values={
+                "hm2AgentKeepalivePortState": "1",
+                "hm2AgentKeepalivePortMode": "1",
+                "hm2AgentKeepalivePortRxAction": "11",
+            })
+
+    def test_set_loop_protection_per_port_passive(self):
+        """Set ring port: enabled, passive (no action change)."""
+        self.backend.set_loop_protection('1/2', enabled=True, mode='passive')
+        self.backend.client.set_indexed.assert_called_once_with(
+            "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentKeepalivePortEntry",
+            index={"ifIndex": "2"},
+            values={
+                "hm2AgentKeepalivePortState": "1",
+                "hm2AgentKeepalivePortMode": "2",
+            })
+
+    def test_set_loop_protection_per_port_unknown(self):
+        with self.assertRaises(ValueError):
+            self.backend.set_loop_protection('9/9', enabled=True)
+
+    def test_set_loop_protection_per_port_bad_mode(self):
+        with self.assertRaises(ValueError):
+            self.backend.set_loop_protection('1/1', mode='bogus')
+
+    def test_set_loop_protection_per_port_bad_action(self):
+        with self.assertRaises(ValueError):
+            self.backend.set_loop_protection('1/1', action='bogus')
+
+    def test_set_loop_protection_global(self):
+        """Set global: enable + interval + threshold."""
+        self.backend.set_loop_protection(enabled=True, transmit_interval=3,
+                                         receive_threshold=2)
+        self.backend.client.set.assert_called_once_with(
+            "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentSwitchKeepaliveGroup",
+            {
+                "hm2AgentSwitchKeepaliveState": "1",
+                "hm2AgentSwitchKeepaliveTransmitInterval": "3",
+                "hm2AgentSwitchKeepaliveRxThreshold": "2",
+            })
+
+    def test_set_loop_protection_global_disable(self):
+        """Disable global loop protection."""
+        self.backend.set_loop_protection(enabled=False)
+        self.backend.client.set.assert_called_once_with(
+            "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentSwitchKeepaliveGroup",
+            {"hm2AgentSwitchKeepaliveState": "2"})
+
+
 if __name__ == '__main__':
     unittest.main()

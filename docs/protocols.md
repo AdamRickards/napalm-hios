@@ -79,6 +79,10 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | 9 | **LLDP system capabilities** | Not exposed by HiOS CLI | Decoded from LLDP-MIB bitmap | SSH `remote_system_capab` is always `[]`, SNMP/MOPS returns actual capabilities |
 | 10 | **Management interface name** | `vlan/N` (from CLI) | `cpu/1` (from IF-MIB) | `get_interfaces_ip` key name differs |
 | 11 | **HiDiscovery relay** | Omitted on L2 devices (CLI doesn't output it) | Always present (MIB returns a value) | SNMP/MOPS `get_hidiscovery` may include `relay` field when SSH doesn't |
+| 12 | **Loop protection tpid_type** | Always `'none'` (not in CLI output) | Actual value from MIB (auto-set from vlan_id) | SSH `get_loop_protection` won't reflect `tpid_type` changes; use MOPS/SNMP getter to read |
+| 13 | **Loop protection on L2S** | `Error: Invalid command` → empty result | Empty tables → empty result | Both return same empty structure, different underlying mechanism |
+| 14 | **Auto-disable reasons on L2S** | 7 reasons (CLI shows what's available) | 7 reasons (SNMP) / 7 reasons (MOPS) | All protocols return only the reasons the firmware supports |
+| 15 | **Auto-disable timer reset** | `auto-disable timer 0` (explicit value) | SET OID to 0 | SSH `no auto-disable timer` is a no-op — always send explicit `0` |
 
 ---
 
@@ -126,6 +130,12 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `get_rstp_port` | Yes | Yes | Yes | Vendor |
 | `set_rstp` | Yes | Yes | Yes | Vendor write |
 | `set_rstp_port` | Yes | Yes | Yes | Vendor write |
+| `get_auto_disable` | Yes | Yes | Yes | Vendor |
+| `set_auto_disable` | Yes | Yes | Yes | Vendor write |
+| `reset_auto_disable` | Yes | Yes | Yes | Vendor write |
+| `set_auto_disable_reason` | Yes | Yes | Yes | Vendor write |
+| `get_loop_protection` | Yes | Yes | Yes | Vendor |
+| `set_loop_protection` | Yes | Yes | Yes | Vendor write |
 | `is_factory_default` | Yes | Yes | No (gated) | Vendor |
 | `onboard` | Yes | Yes | No (gated) | Vendor |
 

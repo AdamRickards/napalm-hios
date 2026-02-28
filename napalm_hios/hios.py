@@ -660,3 +660,38 @@ class HIOSDriver(NetworkDriver):
                 root_guard, loop_guard, tcn_guard, bpdu_filter, bpdu_flood,
             )
         raise NotImplementedError("set_rstp_port is not implemented for this protocol")
+
+    def get_auto_disable(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().get_auto_disable()
+        raise NotImplementedError("get_auto_disable is not implemented for this protocol")
+
+    def set_auto_disable(self, interface, timer=0):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_auto_disable(interface, timer)
+        raise NotImplementedError("set_auto_disable is not implemented for this protocol")
+
+    def reset_auto_disable(self, interface):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().reset_auto_disable(interface)
+        raise NotImplementedError("reset_auto_disable is not implemented for this protocol")
+
+    def set_auto_disable_reason(self, reason, enabled=True):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_auto_disable_reason(reason, enabled)
+        raise NotImplementedError("set_auto_disable_reason is not implemented for this protocol")
+
+    def get_loop_protection(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().get_loop_protection()
+        raise NotImplementedError("get_loop_protection is not implemented for this protocol")
+
+    def set_loop_protection(self, interface=None, enabled=None, mode=None,
+                            action=None, vlan_id=None,
+                            transmit_interval=None, receive_threshold=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_loop_protection(
+                interface, enabled, mode, action, vlan_id,
+                transmit_interval, receive_threshold,
+            )
+        raise NotImplementedError("set_loop_protection is not implemented for this protocol")

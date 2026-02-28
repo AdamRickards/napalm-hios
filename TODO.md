@@ -1,46 +1,8 @@
 # TODO
 
-## 1.4.2 — MOPS driver integration + performance
-
-- [x] Wire MOPS into HIOSDriver (`hios.py`): import, _try_connect, _get_active_connection, close()
-- [x] Default protocol_preference: `['mops', 'snmp', 'ssh', 'netconf']`
-- [x] All 31 dispatch checks updated: `('ssh', 'snmp')` → `('ssh', 'snmp', 'mops')`
-- [x] Add RSTP dispatch methods: get_rstp, get_rstp_port, set_rstp, set_rstp_port
-- [x] Strip MOPS set_mrp read-backs: removed initial get_mrp() check + final get_mrp() read-back
-- [x] Strip MOPS delete_mrp read-back: removed final get_mrp() read-back
-- [x] Strip MOPS set_rstp_port read-back: removed final get_rstp_port() read-back
-- [x] Fix set_mrp tests to match new createAndWait-first flow
-- [x] Remove premature test files (test_factory_reset.py, test_onboarding.py) — methods don't exist yet on SSH/SNMP
-- [x] Add deploy_mrp tool: threaded MRP ring deployment + undeploy, MOPS/SNMP/SSH selectable
-- [x] Unit tests: 306 passed, 0 failed (1 pre-existing ssh fixture error)
-
-## 1.5.0 — Port admin control + factory reset + protocol cleanup
-
-- [x] set_interface(interface, enabled, description) — all 3 protocols, live-tested on .127
-- [x] clear_config(keep_ip=False) — all 3 protocols, live-tested (warm restart ~12s)
-- [x] clear_config(keep_ip=True) — all 3 protocols, live-tested (static IP + LOCAL mode preserved)
-- [x] clear_factory(erase_all=False) — all 3 protocols, live-tested (cold reboot, NVM+ACA wiped)
-- [x] clear_factory(erase_all=True) — MOPS + SSH live-tested (likely regenerates factory.cfg)
-- [x] Remove NETCONF from default protocol_preference (not deployed, noisy failures)
-- [x] Unit tests: set_interface (5 MOPS, 3 SNMP), clear_config/clear_factory (4 MOPS, 4 SNMP)
-- [x] MIBs folder: 66 vendor MIBs restored to MIBs/ (gitignored, reference only)
-- [x] Safe MRP deploy/undeploy: disable RM port2 → configure → disable RSTP → enable RM port2 → verify ring (live-tested, 11s deploy, 7s undeploy)
-- [x] Factory onboarding: is_factory_default() + onboard() on SSH (live-tested on factory-fresh .127)
-- [x] SNMP: NotImplementedError for is_factory_default/onboard (SNMP gated on factory-default devices)
-- [x] SSH open() detects factory password gate, skips pagination, sets _factory_default flag
-- [x] Driver dispatch: is_factory_default() returns False for SNMP (if connected, gate is cleared)
-
-## 1.6.0 — RSTP on SNMP + SSH backends
-
-- [ ] set_rstp_port / set_rstp / get_rstp / get_rstp_port on SNMP backend
-- [ ] set_rstp_port / set_rstp / get_rstp / get_rstp_port on SSH backend
-
 ## Documentation update
 
-- [x] vendor_specific.md — full rewrite: added Profiles, RSTP, Factory Onboarding, Factory Reset, MOPS Staging, Config Watchdog sections. Fixed intro (was SSH-only, now all 3 protocols). Updated all examples from `device.ssh.method()` to `device.method()`. Added redundancy warning to set_mrp/set_rstp, loop note to delete_mrp. Added blinking param to set_hidiscovery.
-- [x] usage.md — full rewrite: added MOPS as default protocol, updated protocol_preference default order, added all vendor-specific read/write methods to Available Methods, updated Protocol Information section, fixed Best Practices (was SSH/SNMP-only), added config workflow methods.
-- [ ] protocols.md — already up to date (has MOPS, full matrix, cross-protocol diffs)
-- [ ] README.md — already up to date (has MOPS, full method lists, protocol table)
+- [x] README.md — updated: added auto-disable + loop protection to features + method lists, updated test count
 
 ## Release Process Checklist
 
@@ -60,6 +22,74 @@
 14. Pull from PyPI into test venv
 15. Test PyPI-deployed version against local test environment
 16. Done
+
+## AARON — auto-entry detection
+
+Local machine identity detection added (`get_local_identity()`): detects own IP via socket + own MACs via `/sys/class/net/*/address` (Linux) or `getmac` (Windows). Injects into ARP map so the scanning machine resolves on its edge port.
+
+Testing needed for auto-entry reliability:
+- [ ] Basic test: laptop plugged directly into managed switch — does it find itself on an edge port?
+- [ ] Through unmanaged switch: laptop behind dumb switch — does it find itself on an indirect port?
+- [ ] Multiple NICs: laptop with WiFi + Ethernet — does it match the right MAC (the one on the switch network)?
+- [ ] VPN/virtual adapters: do extra MACs from VPN/Docker/WSL cause false matches?
+- [ ] Cross-subnet: laptop on different VLAN/subnet from switch management — does socket trick still find the right IP?
+- [ ] Auto-entry: once we can reliably find our own switch+port, use it as `--entry` for MOHAWC/VINNY topology ordering
+
+## deploy_mrp improvements
+
+- [ ] Find a name (backronym tradition: AARON, MOHAWC, MARCO, STONE)
+- [ ] Sub-Ring support
+- [ ] Gather-facts stage: parallel connect, read current state (MRP, RSTP, loop prot, auto-disable), diff against target, apply playbook, verify loop (1s retry), save
+- [ ] L2S safety: check getter before setter (SNMP raises noCreation on L2S devices that lack loop prot / auto-disable)
+- [ ] Loop protection as alternative to RSTP disable (driver getters/setters done — MOPS + SNMP)
+- [ ] Auto-disable integration (driver getters/setters done — MOPS + SNMP)
+- [ ] Phase 5 ring verification: retry 3 times with short delay before declaring unhealthy (ring needs a beat to converge after port enable)
+- [ ] Logging: all screen output should also go to log file (phase steps, per-device results, ring status). Log folder should be PWD, not fixed path
+
+## Vendor-specific getters
+
+- [ ] `get_vlan_ports()` — per-interface VLAN config: PVID, access/trunk mode, ingress filtering, acceptable frame types. Source: Q-BRIDGE-MIB (`dot1qPvid`, `dot1qVlanStaticEgressPorts`, `dot1qVlanStaticUntaggedPorts`). Needed for NILS edge port health checks and device type detection.
+- [ ] `set_vlan()` / `set_vlan_ports()` — create/delete VLANs, set per-port T/U/PVID membership. No port roles on Hirschmann (respects the ASIC) — tool must explicitly set Tagged/Untagged/PVID per port per VLAN.
+- [x] `get_loop_protection()` / `set_loop_protection()` — MOPS + SNMP (SSH pending)
+- [x] `get_auto_disable()` / `set_auto_disable()` / `reset_auto_disable()` / `set_auto_disable_reason()` — MOPS + SNMP (SSH pending)
+
+## VLAN deployment tool
+
+Fleet-wide VLAN provisioning. Depends on `get_vlan_ports()` + `set_vlan()` / `set_vlan_ports()`.
+
+- [ ] Find a name (backronym tradition)
+- [ ] Add VLAN: `tool.py --add-vlan 5 --name "Pizzagate"` — create VLAN table entry across fleet
+- [ ] Auto-trunk: `-T` flag — auto-tag on any port with LLDP neighbor to another switch in the device list. Hirschmann has no port roles — we explicitly set T per port, LLDP tells us which ports are inter-switch
+- [ ] Access port: `--access-port 5 1/1-1/8` — set PVID, set U, remove other VLAN membership for those ports. Port range syntax: `1/1-1/8`, `1/1,1/3,1/5`, `1/1-1/8,2/1-2/4`
+- [ ] CSV export: `tool.py --export vlans.csv` — dump all interfaces with current VLAN membership (PVID, T, U) from fleet to CSV
+- [ ] CSV import: `tool.py --import vlans.csv` — read edited CSV back in, diff against live state, apply changes. Same file format both ways — dump, edit, apply
+- [ ] Compact config format: `tool.py -f VLANset.cfg` — one line per interface: `ip interface pvid [vlan_id,T/U/-]` with multiple VLANs per interface on egress in one line
+- [ ] `--entry ip interface` — specify network entry point for topology-safe ordering:
+  - LLDP BFS from entry to map topology (same pattern as MOHAWC `--entry` reset ordering)
+  - Detect if changes affect connectivity from entry point (current PVID, management VLAN)
+  - Apply uplink changes in reverse order (furthest-first) if they affect our path
+- [ ] **Management VLAN migration** — the ultimate feature:
+  1. Add new VLAN structure across entire network first (safe — additive only)
+  2. Change management VLAN + PVID on furthest switches first, work backwards toward entry
+  3. At entry switch: set both current and new management VLAN as U on local port, then change management VLAN + port PVID in one MOPS exchange (atomic)
+  4. Never lose access from entry point at any step
+- [ ] Dry-run, protocol selection, banner/footer (standard tool patterns)
+- Working name idea: VINNY — VLAN Interactive Network N...Y?
+
+## CLI Reference Parser
+
+- [ ] Parse `local/RM_CLI_HiOS-10300_Overview_en.pdf` (500+ pages) into structured JSON
+- [ ] Per-command metadata: section, title, page, command string, mode (global_config/interface_range/privileged_exec), privilege level, negate form, params with allowed values, description
+- [ ] Separate `commands` vs `show_commands` per section
+- [ ] Output: `local/cli_reference.json` — grepping/filtering replaces reading PDF pages
+- [ ] Speeds up all future SSH backend work (auto-disable, loop prot, RSTP, VLANs, etc.)
+
+## Future — Config import/export + firmware update
+
+- [ ] Config export: download running config as XML/profile via MOPS HTTPS endpoints
+- [ ] Config import: upload profile/XML to device, activate as running config
+- [ ] Firmware update: upload firmware image, trigger install + reboot
+- Profile import is the high-value target — deploy a known-good config to fleet via napalm-hios
 
 ## Backburner
 

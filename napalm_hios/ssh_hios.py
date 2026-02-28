@@ -9,6 +9,15 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# Auto-disable reason → category mapping (CLI doesn't show category)
+_AD_REASON_CATEGORY = {
+    'link-flap': 'port-monitor', 'crc-error': 'port-monitor',
+    'duplex-mismatch': 'port-monitor', 'dhcp-snooping': 'network-security',
+    'arp-rate': 'network-security', 'bpdu-rate': 'l2-redundancy',
+    'port-security': 'network-security', 'overload-detection': 'port-monitor',
+    'speed-duplex': 'port-monitor', 'loop-protection': 'l2-redundancy',
+}
+
 class SSHHIOS:
     def __init__(self, hostname, username, password, timeout, port=22):
         self.hostname = hostname
@@ -1833,6 +1842,407 @@ class SSHHIOS:
                 raise RuntimeError(f"Failed to delete profile: {output}")
         finally:
             self._exit_config_mode()
+
+    # ── Auto-Disable ─────────────────────────────────────────────
+
+    def get_auto_disable(self):
+        output_brief = self.cli('show auto-disable brief')['show auto-disable brief']
+        output_reasons = self.cli('show auto-disable reasons')['show auto-disable reasons']
+
+        # Parse per-interface table (2 lines per record)
+        # Line 1: Intf  Reason  Remaining_time  Error_time  State
+        # Line 2:       Component  Reset_timer
+        interfaces = {}
+        rows = parse_table(output_brief, min_fields=1)
+        current_intf = None
+        for fields in rows:
+            if '/' in fields[0]:
+                # First line of record
+                current_intf = fields[0]
+                reason = fields[1] if len(fields) > 1 else 'none'
+                remaining = int(fields[2]) if len(fields) > 2 else 0
+                error_time = fields[3] if len(fields) > 3 else '-'
+                # State may be split if error_time contains spaces, but from live
+                # output error_time is either '-' or a date string — state is last field
+                state = fields[-1] if len(fields) >= 5 else 'inactive'
+                interfaces[current_intf] = {
+                    'timer': 0,
+                    'reason': reason,
+                    'active': state == 'active',
+                    'component': '',
+                    'remaining_time': remaining,
+                    'error_time': '' if error_time == '-' else error_time,
+                }
+            elif current_intf and '/' not in fields[0]:
+                # Second line of record: component and timer
+                component = fields[0] if fields[0] != '-' else ''
+                timer = int(fields[1]) if len(fields) > 1 else 0
+                interfaces[current_intf]['component'] = component
+                interfaces[current_intf]['timer'] = timer
+
+        # Parse reasons table
+        reasons = {}
+        reason_rows = parse_table(output_reasons, min_fields=2)
+        for fields in reason_rows:
+            name = fields[0]
+            state = fields[1] if len(fields) > 1 else 'disabled'
+            reasons[name] = {
+                'enabled': state == 'enabled',
+                'category': _AD_REASON_CATEGORY.get(name, 'other'),
+            }
+
+        return {'interfaces': interfaces, 'reasons': reasons}
+
+    def set_auto_disable(self, interface, timer=0):
+        timer = int(timer)
+        self._config_mode()
+        try:
+            output = self.cli(f'interface {interface}')
+            resp = output.get(f'interface {interface}', '')
+            if 'Error' in resp or 'Invalid' in resp:
+                raise ValueError(f"Unknown interface '{interface}'")
+            self.cli(f'auto-disable timer {timer}')
+            self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    def reset_auto_disable(self, interface):
+        self._config_mode()
+        try:
+            output = self.cli(f'interface {interface}')
+            resp = output.get(f'interface {interface}', '')
+            if 'Error' in resp or 'Invalid' in resp:
+                raise ValueError(f"Unknown interface '{interface}'")
+            self.cli('auto-disable reset')
+            self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    def set_auto_disable_reason(self, reason, enabled=True):
+        valid = ('link-flap', 'crc-error', 'duplex-mismatch', 'dhcp-snooping',
+                 'arp-rate', 'bpdu-rate', 'port-security', 'overload-detection',
+                 'speed-duplex', 'loop-protection')
+        if reason not in valid:
+            raise ValueError(f"Unknown reason '{reason}'. Valid: {valid}")
+        self._config_mode()
+        try:
+            if enabled:
+                self.cli(f'auto-disable reason {reason}')
+            else:
+                self.cli(f'no auto-disable reason {reason}')
+        finally:
+            self._exit_config_mode()
+
+    # ── Loop Protection ──────────────────────────────────────────
+
+    def get_loop_protection(self):
+        output_global = self.cli('show loop-protection global')['show loop-protection global']
+
+        # Check for L2S "Invalid command" error
+        if 'Invalid command' in output_global or 'Error' in output_global:
+            return {
+                'enabled': False,
+                'transmit_interval': 0,
+                'receive_threshold': 0,
+                'interfaces': {},
+            }
+
+        # Parse global settings (dot-key format)
+        gdata = parse_dot_keys(output_global)
+        enabled = gdata.get('Operational State', 'disabled') != 'disabled'
+        tx_interval = int(gdata.get('Transmit Timeout (sec)', '5'))
+        rx_threshold = int(gdata.get('Receive PDU threshold', '1'))
+
+        # Parse per-interface table
+        output_intf = self.cli('show loop-protection interface')['show loop-protection interface']
+        interfaces = {}
+        rows = parse_table(output_intf, min_fields=7)
+        for fields in rows:
+            if '/' not in fields[0]:
+                continue
+            intf = fields[0]
+            # Intf  Admin  Mode  Action  VLAN  Loop  Last-Timestamp
+            # Last-Timestamp is "1970-01-01 00:00:00.0" (3 tokens when split)
+            admin = fields[1]
+            mode = fields[2]
+            action = fields[3]
+            vlan = int(fields[4])
+            loop = fields[5] == 'yes'
+            # Timestamp: reassemble remaining fields
+            ts_parts = fields[6:]
+            timestamp = ' '.join(ts_parts) if ts_parts else ''
+            # Treat 1970 epoch as empty (same as MOPS/SNMP)
+            if timestamp.startswith('1970'):
+                timestamp = ''
+            # Strip trailing .0 deciseconds
+            if timestamp.endswith('.0'):
+                timestamp = timestamp[:-2]
+            interfaces[intf] = {
+                'enabled': admin != 'disabled',
+                'mode': mode,
+                'action': action,
+                'vlan_id': vlan,
+                'loop_detected': loop,
+                'last_loop_time': timestamp,
+                'tpid_type': 'none',  # not shown in CLI output
+            }
+
+        return {
+            'enabled': enabled,
+            'transmit_interval': tx_interval,
+            'receive_threshold': rx_threshold,
+            'interfaces': interfaces,
+        }
+
+    def set_loop_protection(self, interface=None, enabled=None, mode=None,
+                            action=None, vlan_id=None,
+                            transmit_interval=None, receive_threshold=None):
+        self._config_mode()
+        try:
+            if interface is None:
+                # Global settings
+                if enabled is not None:
+                    if enabled:
+                        self.cli('loop-protection operation')
+                    else:
+                        self.cli('no loop-protection operation')
+                if transmit_interval is not None:
+                    self.cli(f'loop-protection tx-interval {int(transmit_interval)}')
+                if receive_threshold is not None:
+                    self.cli(f'loop-protection rx-threshold {int(receive_threshold)}')
+            else:
+                # Per-interface settings
+                output = self.cli(f'interface {interface}')
+                resp = output.get(f'interface {interface}', '')
+                if 'Error' in resp or 'Invalid' in resp:
+                    raise ValueError(f"Unknown interface '{interface}'")
+                if enabled is not None:
+                    if enabled:
+                        self.cli('loop-protection operation')
+                    else:
+                        self.cli('no loop-protection operation')
+                if mode is not None:
+                    if mode not in ('active', 'passive'):
+                        raise ValueError(f"mode must be 'active' or 'passive', got '{mode}'")
+                    self.cli(f'loop-protection mode {mode}')
+                if action is not None:
+                    if action not in ('trap', 'auto-disable', 'all'):
+                        raise ValueError(f"action must be 'trap', 'auto-disable', or 'all', got '{action}'")
+                    self.cli(f'loop-protection action {action}')
+                if vlan_id is not None:
+                    self.cli(f'loop-protection vlan {int(vlan_id)}')
+                self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    # ── RSTP ──────────────────────────────────────────────────────
+
+    def get_rstp(self):
+        output = self.cli('show spanning-tree global')['show spanning-tree global']
+        d = parse_dot_keys(output)
+
+        # Mode: "RSTP", "STP", "MSTP", "Disabled"
+        mode_raw = d.get('Spanning Tree Mode', 'rstp').strip().lower()
+        enabled = mode_raw != 'disabled'
+        if not enabled:
+            mode_raw = 'rstp'  # default underlying mode when disabled
+
+        # Bridge/root IDs — already colon-separated hex from CLI
+        bridge_id = d.get('Bridge identifier', '').lower()
+        root_id = d.get('Root identifier', '').lower()
+
+        # Root port identifier: "80:0C" → extract port number
+        root_port_hex = d.get('Root port identifier', '00:00')
+        try:
+            parts = root_port_hex.split(':')
+            root_port = ((int(parts[0], 16) << 8) | int(parts[1], 16)) & 0x0FFF
+        except (ValueError, IndexError):
+            root_port = 0
+
+        # Time since topology change: "1 days 8 h 22 min 10 sec"
+        time_str = d.get('Time since topology change', '0 sec')
+        time_since = self._parse_stp_time(time_str)
+
+        return {
+            'enabled': enabled,
+            'mode': mode_raw,
+            'bridge_id': bridge_id,
+            'priority': int(d.get('Bridge priority', 32768)),
+            'hello_time': int(d.get('Bridge hello time', 2)),
+            'max_age': int(d.get('Bridge max age', 20)),
+            'forward_delay': int(d.get('Bridge forward delay', 15)),
+            'hold_count': int(d.get('Bridge hold count', 10)),
+            'max_hops': int(d.get('Bridge max hops', 0)),
+            'root_id': root_id,
+            'root_port': root_port,
+            'root_path_cost': int(d.get('Root path cost', 0)),
+            'topology_changes': int(d.get('Topology change count', 0)),
+            'time_since_topology_change': time_since,
+            'root_hello_time': int(d.get('Root hello time', 2)),
+            'root_max_age': int(d.get('Root max age', 20)),
+            'root_forward_delay': int(d.get('Root forward delay', 15)),
+            'bpdu_guard': d.get('BPDU-Guard mode', 'disabled').lower() == 'enabled',
+            'bpdu_filter': d.get('BPDU-Filter for edge ports', 'disabled').lower() == 'enabled',
+        }
+
+    def _parse_stp_time(self, time_str):
+        """Parse '1 days 8 h 22 min 10 sec' → seconds."""
+        total = 0
+        for match in re.finditer(r'(\d+)\s*(days?|h|min|sec)', time_str):
+            val = int(match.group(1))
+            unit = match.group(2)
+            if unit.startswith('day'):
+                total += val * 86400
+            elif unit == 'h':
+                total += val * 3600
+            elif unit == 'min':
+                total += val * 60
+            else:
+                total += val
+        return total
+
+    def get_rstp_port(self, interface=None):
+        # Get forwarding state from MST port table (one command for all ports)
+        mst_output = self.cli('show spanning-tree mst port 0')['show spanning-tree mst port 0']
+        fwd_states = {}
+        for fields in parse_table(mst_output, min_fields=3):
+            intf = fields[1]
+            state = fields[2].lower() if len(fields) > 2 else 'disabled'
+            fwd_states[intf] = state
+
+        # Determine which ports to query
+        if interface:
+            port_list = [interface]
+        else:
+            port_list = list(fwd_states.keys())
+
+        ports = {}
+        for port in port_list:
+            cmd = f'show spanning-tree port {port}'
+            output = self.cli(cmd)[cmd]
+            d = parse_dot_keys(output)
+            if not d:
+                continue
+
+            ports[port] = {
+                'enabled': d.get('Port mode', 'disabled').lower() == 'enabled',
+                'state': fwd_states.get(port, 'disabled'),
+                'edge_port': d.get('Edge Port', 'false').lower() == 'true',
+                'edge_port_oper': d.get('Edge port status', 'disabled').lower() == 'enabled',
+                'auto_edge': d.get('Auto edge', 'true').lower() == 'true',
+                'point_to_point': d.get('Point to point MAC status', 'true').lower() == 'true',
+                'path_cost': int(d.get('Port path cost', 0)),
+                'priority': int(d.get('Port priority', 128)),
+                'root_guard': d.get('Root guard', 'false').lower() == 'true',
+                'loop_guard': d.get('Loop guard', 'false').lower() == 'true',
+                'tcn_guard': d.get('TCN guard', 'false').lower() == 'true',
+                'bpdu_guard': d.get('BPDU guard effect', 'disabled').lower() == 'enabled',
+                'bpdu_filter': d.get('BPDU filter mode', 'disabled').lower() == 'enabled',
+                'bpdu_flood': d.get('BPDU flood mode', 'disabled').lower() == 'enabled',
+                'rstp_bpdu_rx': int(d.get('RSTP BPDUs received', 0)),
+                'rstp_bpdu_tx': int(d.get('RSTP BPDUs transmitted', 0)),
+                'stp_bpdu_rx': int(d.get('STP BPDUs received', 0)),
+                'stp_bpdu_tx': int(d.get('STP BPDUs transmitted', 0)),
+            }
+
+        return ports
+
+    def set_rstp(self, enabled=None, mode=None, priority=None,
+                 hello_time=None, max_age=None, forward_delay=None,
+                 hold_count=None, bpdu_guard=None, bpdu_filter=None):
+        self._config_mode()
+        try:
+            if enabled is not None:
+                if enabled:
+                    self.cli('spanning-tree operation')
+                else:
+                    self.cli('no spanning-tree operation')
+            if mode is not None:
+                if mode not in ('stp', 'rstp', 'mstp'):
+                    raise ValueError(f"mode must be 'stp', 'rstp', or 'mstp', got '{mode}'")
+                self.cli(f'spanning-tree forceversion {mode}')
+            if priority is not None:
+                self.cli(f'spanning-tree mst priority 0 {int(priority)}')
+            if hello_time is not None:
+                self.cli(f'spanning-tree hello-time {int(hello_time)}')
+            if max_age is not None:
+                self.cli(f'spanning-tree max-age {int(max_age)}')
+            if forward_delay is not None:
+                self.cli(f'spanning-tree forward-time {int(forward_delay)}')
+            if hold_count is not None:
+                self.cli(f'spanning-tree hold-count {int(hold_count)}')
+            if bpdu_guard is not None:
+                if bpdu_guard:
+                    self.cli('spanning-tree bpdu-guard')
+                else:
+                    self.cli('no spanning-tree bpdu-guard')
+            if bpdu_filter is not None:
+                if bpdu_filter:
+                    self.cli('spanning-tree bpdu-filter')
+                else:
+                    self.cli('no spanning-tree bpdu-filter')
+        finally:
+            self._exit_config_mode()
+        return self.get_rstp()
+
+    def set_rstp_port(self, interface, enabled=None, edge_port=None,
+                      auto_edge=None, path_cost=None, priority=None,
+                      root_guard=None, loop_guard=None, tcn_guard=None,
+                      bpdu_filter=None, bpdu_flood=None):
+        self._config_mode()
+        try:
+            output = self.cli(f'interface {interface}')
+            resp = output.get(f'interface {interface}', '')
+            if 'Error' in resp or 'Invalid' in resp:
+                raise ValueError(f"Unknown interface '{interface}'")
+            if enabled is not None:
+                if enabled:
+                    self.cli('spanning-tree mode')
+                else:
+                    self.cli('no spanning-tree mode')
+            if edge_port is not None:
+                if edge_port:
+                    self.cli('spanning-tree edge-port')
+                else:
+                    self.cli('no spanning-tree edge-port')
+            if auto_edge is not None:
+                if auto_edge:
+                    self.cli('spanning-tree edge-auto')
+                else:
+                    self.cli('no spanning-tree edge-auto')
+            if path_cost is not None:
+                self.cli(f'spanning-tree cost {int(path_cost)}')
+            if priority is not None:
+                self.cli(f'spanning-tree priority {int(priority)}')
+            if root_guard is not None:
+                if root_guard:
+                    self.cli('spanning-tree guard-root')
+                else:
+                    self.cli('no spanning-tree guard-root')
+            if loop_guard is not None:
+                if loop_guard:
+                    self.cli('spanning-tree guard-loop')
+                else:
+                    self.cli('no spanning-tree guard-loop')
+            if tcn_guard is not None:
+                if tcn_guard:
+                    self.cli('spanning-tree guard-tcn')
+                else:
+                    self.cli('no spanning-tree guard-tcn')
+            if bpdu_filter is not None:
+                if bpdu_filter:
+                    self.cli('spanning-tree bpdu-filter')
+                else:
+                    self.cli('no spanning-tree bpdu-filter')
+            if bpdu_flood is not None:
+                if bpdu_flood:
+                    self.cli('spanning-tree bpdu-flood')
+                else:
+                    self.cli('no spanning-tree bpdu-flood')
+            self.cli('exit')
+        finally:
+            self._exit_config_mode()
+        return self.get_rstp_port(interface)
 
     def _parse_speed(self, speed_str):
         speed_map = {

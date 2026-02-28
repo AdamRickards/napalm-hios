@@ -103,6 +103,8 @@ device.close()
 - `get_hidiscovery()` — HiDiscovery protocol status
 - `get_rstp()` — global STP/RSTP configuration and state
 - `get_rstp_port()` — per-port STP/RSTP state
+- `get_auto_disable()` — per-port auto-disable status and reason configuration
+- `get_loop_protection()` — global and per-port loop detection state
 - `get_lldp_neighbors_detail_extended()` — LLDP with 802.1/802.3 extensions
 - `get_config_status()` — check if running config is saved to NVM
 - `get_profiles()` — list NVM/ENVM config profiles
@@ -116,6 +118,10 @@ device.close()
 - `set_hidiscovery()` — set HiDiscovery mode (on/off/read-only)
 - `set_rstp()` — set global STP/RSTP configuration
 - `set_rstp_port()` — set per-port STP/RSTP configuration
+- `set_auto_disable()` — set auto-disable recovery timer per port
+- `reset_auto_disable()` — re-enable an auto-disabled port
+- `set_auto_disable_reason()` — enable/disable auto-disable per reason
+- `set_loop_protection()` — configure loop protection (global or per-port)
 - `save_config()` — save running config to NVM
 - `clear_config()` — clear running config (warm restart)
 - `clear_factory()` — full factory reset (reboot)

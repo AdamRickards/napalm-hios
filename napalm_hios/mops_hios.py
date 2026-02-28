@@ -45,6 +45,32 @@ _MRP_CONFIG_INFO = {'1': 'no error', '2': 'ring port link error', '3': 'multiple
 _MRP_RECOVERY_DELAY_REV = {'500ms': '1', '200ms': '2', '30ms': '3', '10ms': '4'}
 _MRP_ROLE_REV = {'client': '1', 'manager': '2'}
 
+# Auto-disable error reason enum (hm2AutoDisableIntfErrorReason)
+_AUTO_DISABLE_REASONS = {
+    '0': 'none', '1': 'link-flap', '2': 'crc-error', '3': 'duplex-mismatch',
+    '4': 'dhcp-snooping', '5': 'arp-rate', '6': 'bpdu-rate',
+    '7': 'mac-based-port-security', '8': 'overload-detection',
+    '9': 'speed-duplex', '10': 'loop-protection',
+}
+_AUTO_DISABLE_REASONS_REV = {v: k for k, v in _AUTO_DISABLE_REASONS.items() if v != 'none'}
+
+# Auto-disable reason category (hm2AutoDisableReasonCategory)
+_AUTO_DISABLE_CATEGORY = {
+    '1': 'other', '2': 'port-monitor', '3': 'network-security', '4': 'l2-redundancy',
+}
+
+# Loop protection action enum (hm2AgentKeepalivePortRxAction)
+_LOOP_PROT_ACTION = {'10': 'trap', '11': 'auto-disable', '12': 'all'}
+_LOOP_PROT_ACTION_REV = {'trap': '10', 'auto-disable': '11', 'all': '12'}
+
+# Loop protection mode enum (hm2AgentKeepalivePortMode)
+_LOOP_PROT_MODE = {'1': 'active', '2': 'passive'}
+_LOOP_PROT_MODE_REV = {'active': '1', 'passive': '2'}
+
+# Loop protection tpid type (hm2AgentKeepalivePortTpidType)
+_LOOP_PROT_TPID = {'0': 'none', '1': 'dot1q', '2': 'dot1ad'}
+_LOOP_PROT_TPID_REV = {'none': '0', 'dot1q': '1', 'dot1ad': '2'}
+
 # IANA dot3MauType OID suffix → human-readable name (match snmp_hios.py)
 _MAU_TYPES = {
     '10': '10BaseTHD', '11': '10BaseTFD',
@@ -103,6 +129,31 @@ def _re_hex(value):
             pass
     # Mangled binary — re-encode each char as hex
     return " ".join(f"{ord(c):02x}" for c in value)
+
+
+def _decode_date_time(hex_str):
+    """Decode SNMP DateAndTime (8 or 11 bytes) to ISO string.
+
+    Format: year(2) month(1) day(1) hour(1) min(1) sec(1) decisec(1)
+    Returns '' for zero/empty values.
+    """
+    if not hex_str or not hex_str.strip():
+        return ''
+    parts = hex_str.strip().split()
+    # Mangled binary string — re-encode
+    if not all(len(p) == 2 for p in parts):
+        parts = [f"{ord(c):02x}" for c in hex_str]
+    if len(parts) < 8:
+        return ''
+    try:
+        raw = bytes.fromhex("".join(parts[:8]))
+        year = (raw[0] << 8) | raw[1]
+        month, day, hour, minute, sec = raw[2], raw[3], raw[4], raw[5], raw[6]
+        if year <= 1970:
+            return ''
+        return f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{sec:02d}"
+    except (ValueError, IndexError):
+        return ''
 
 
 def _safe_int(val, default=0):
@@ -2045,3 +2096,293 @@ class MOPSHIOS:
                                 },
                                 values={"hm2FMProfileAction": "2"})  # delete
         return self.get_profiles(storage)
+
+    # ------------------------------------------------------------------
+    # Auto-Disable
+    # ------------------------------------------------------------------
+
+    def get_auto_disable(self):
+        """Return auto-disable state: per-port table + per-reason table.
+
+        Returns:
+            dict with:
+                'interfaces': {port_name: {timer, remaining_time, component,
+                    reason, active, error_time}}
+                'reasons': {reason_name: {enabled, category}}
+        """
+        ifindex_map = self._build_ifindex_map()
+
+        result = self.client.get_multi([
+            ("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry", [
+                "ifIndex",
+                "hm2AutoDisableIntfTimer",
+                "hm2AutoDisableIntfRemainingTime",
+                "hm2AutoDisableIntfComponentName",
+                "hm2AutoDisableIntfErrorReason",
+                "hm2AutoDisableIntfOperState",
+                "hm2AutoDisableIntfErrorTime",
+            ]),
+            ("HM2-DEVMGMT-MIB", "hm2AutoDisableReasonEntry", [
+                "hm2AutoDisableReasons",
+                "hm2AutoDisableReasonOperation",
+                "hm2AutoDisableReasonCategory",
+            ]),
+        ], decode_strings=False)
+
+        mibs = result["mibs"]
+        intf_entries = (mibs.get("HM2-DEVMGMT-MIB", {})
+                        .get("hm2AutoDisableIntfEntry", []))
+        reason_entries = (mibs.get("HM2-DEVMGMT-MIB", {})
+                          .get("hm2AutoDisableReasonEntry", []))
+
+        interfaces = {}
+        for entry in intf_entries:
+            idx = entry.get("ifIndex", "")
+            name = ifindex_map.get(idx, "")
+            if not name or name.startswith("cpu") or name.startswith("vlan"):
+                continue
+
+            component_hex = entry.get("hm2AutoDisableIntfComponentName", "")
+            component = _decode_hex_string(component_hex)
+            if component == '-':
+                component = ''
+
+            reason_code = entry.get("hm2AutoDisableIntfErrorReason", "0")
+
+            interfaces[name] = {
+                'timer': _safe_int(entry.get("hm2AutoDisableIntfTimer", "0")),
+                'remaining_time': _safe_int(
+                    entry.get("hm2AutoDisableIntfRemainingTime", "0")),
+                'component': component,
+                'reason': _AUTO_DISABLE_REASONS.get(reason_code, 'none'),
+                'active': entry.get("hm2AutoDisableIntfOperState", "2") == "1",
+                'error_time': _safe_int(
+                    entry.get("hm2AutoDisableIntfErrorTime", "0")),
+            }
+
+        reasons = {}
+        for entry in reason_entries:
+            reason_idx = entry.get("hm2AutoDisableReasons", "")
+            reason_name = _AUTO_DISABLE_REASONS.get(reason_idx, "")
+            if not reason_name or reason_name == 'none':
+                continue
+
+            cat_code = entry.get("hm2AutoDisableReasonCategory", "1")
+            reasons[reason_name] = {
+                'enabled': entry.get(
+                    "hm2AutoDisableReasonOperation", "2") == "1",
+                'category': _AUTO_DISABLE_CATEGORY.get(cat_code, 'other'),
+            }
+
+        return {'interfaces': interfaces, 'reasons': reasons}
+
+    def set_auto_disable(self, interface, timer=0):
+        """Set auto-disable recovery timer for a port.
+
+        Args:
+            interface: port name (e.g. '1/5')
+            timer: recovery interval in seconds (0=off, 30 minimum)
+        """
+        ifindex_map = self._build_ifindex_map()
+        name_to_idx = {name: idx for idx, name in ifindex_map.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+
+        self.client.set_indexed("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
+                                index={"ifIndex": ifidx},
+                                values={"hm2AutoDisableIntfTimer": str(int(timer))})
+
+    def reset_auto_disable(self, interface):
+        """Manually re-enable an auto-disabled port.
+
+        Writes true(1) to hm2AutoDisableIntfReset — no need for admin down/up.
+
+        Args:
+            interface: port name (e.g. '1/5')
+        """
+        ifindex_map = self._build_ifindex_map()
+        name_to_idx = {name: idx for idx, name in ifindex_map.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+
+        self.client.set_indexed("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
+                                index={"ifIndex": ifidx},
+                                values={"hm2AutoDisableIntfReset": "1"})  # true
+
+    def set_auto_disable_reason(self, reason, enabled=True):
+        """Enable or disable auto-disable recovery for a specific reason type.
+
+        Args:
+            reason: reason name (e.g. 'loop-protection', 'link-flap')
+            enabled: True to enable, False to disable
+        """
+        reason_idx = _AUTO_DISABLE_REASONS_REV.get(reason)
+        if reason_idx is None:
+            raise ValueError(
+                f"Unknown reason '{reason}': use one of "
+                f"{list(_AUTO_DISABLE_REASONS_REV.keys())}")
+
+        self.client.set_indexed("HM2-DEVMGMT-MIB", "hm2AutoDisableReasonEntry",
+                                index={"hm2AutoDisableReasons": reason_idx},
+                                values={"hm2AutoDisableReasonOperation":
+                                        "1" if enabled else "2"})
+
+    # ------------------------------------------------------------------
+    # Loop Protection (Keepalive)
+    # ------------------------------------------------------------------
+
+    def get_loop_protection(self):
+        """Return loop protection configuration and state.
+
+        Returns:
+            dict with:
+                'enabled': bool (global)
+                'transmit_interval': int (seconds, 1-10)
+                'receive_threshold': int (0|1-50)
+                'interfaces': {port_name: {enabled, mode, action, vlan_id,
+                    tpid_type, loop_detected, loop_count, last_loop_time,
+                    tx_frames, rx_frames, discard_frames}}
+        """
+        ifindex_map = self._build_ifindex_map()
+
+        result = self.client.get_multi([
+            ("HM2-PLATFORM-SWITCHING-MIB", "hm2AgentSwitchKeepaliveGroup", [
+                "hm2AgentSwitchKeepaliveState",
+                "hm2AgentSwitchKeepaliveTransmitInterval",
+                "hm2AgentSwitchKeepaliveRxThreshold",
+            ]),
+            ("HM2-PLATFORM-SWITCHING-MIB", "hm2AgentKeepalivePortEntry", [
+                "ifIndex",
+                "hm2AgentKeepalivePortState",
+                "hm2AgentKeepalivePortMode",
+                "hm2AgentKeepalivePortRxAction",
+                "hm2AgentKeepalivePortVlanId",
+                "hm2AgentKeepalivePortTpidType",
+                "hm2AgentKeepalivePortLoopDetected",
+                "hm2AgentKeepalivePortLoopCount",
+                "hm2AgentKeepalivePortLastLoopDetectedTime",
+                "hm2AgentKeepalivePortTxFrameCount",
+                "hm2AgentKeepalivePortRxFrameCount",
+                "hm2AgentKeepalivePortDiscardFrameCount",
+            ]),
+        ], decode_strings=False)
+
+        mibs = result["mibs"]
+        glb = (mibs.get("HM2-PLATFORM-SWITCHING-MIB", {})
+               .get("hm2AgentSwitchKeepaliveGroup", [{}])[0])
+        port_entries = (mibs.get("HM2-PLATFORM-SWITCHING-MIB", {})
+                        .get("hm2AgentKeepalivePortEntry", []))
+
+        interfaces = {}
+        for entry in port_entries:
+            idx = entry.get("ifIndex", "")
+            name = ifindex_map.get(idx, "")
+            if not name or name.startswith("cpu") or name.startswith("vlan"):
+                continue
+
+            action_code = entry.get("hm2AgentKeepalivePortRxAction", "11")
+            mode_code = entry.get("hm2AgentKeepalivePortMode", "2")
+            tpid_code = entry.get("hm2AgentKeepalivePortTpidType", "0")
+
+            interfaces[name] = {
+                'enabled': entry.get(
+                    "hm2AgentKeepalivePortState", "2") == "1",
+                'mode': _LOOP_PROT_MODE.get(mode_code, 'passive'),
+                'action': _LOOP_PROT_ACTION.get(action_code, 'auto-disable'),
+                'vlan_id': _safe_int(
+                    entry.get("hm2AgentKeepalivePortVlanId", "0")),
+                'tpid_type': _LOOP_PROT_TPID.get(tpid_code, 'none'),
+                'loop_detected': entry.get(
+                    "hm2AgentKeepalivePortLoopDetected", "2") == "1",
+                'loop_count': _safe_int(
+                    entry.get("hm2AgentKeepalivePortLoopCount", "0")),
+                'last_loop_time': _decode_date_time(
+                    entry.get("hm2AgentKeepalivePortLastLoopDetectedTime", "")),
+                'tx_frames': _safe_int(
+                    entry.get("hm2AgentKeepalivePortTxFrameCount", "0")),
+                'rx_frames': _safe_int(
+                    entry.get("hm2AgentKeepalivePortRxFrameCount", "0")),
+                'discard_frames': _safe_int(
+                    entry.get("hm2AgentKeepalivePortDiscardFrameCount", "0")),
+            }
+
+        return {
+            'enabled': glb.get("hm2AgentSwitchKeepaliveState", "2") == "1",
+            'transmit_interval': _safe_int(
+                glb.get("hm2AgentSwitchKeepaliveTransmitInterval", "5")),
+            'receive_threshold': _safe_int(
+                glb.get("hm2AgentSwitchKeepaliveRxThreshold", "1")),
+            'interfaces': interfaces,
+        }
+
+    def set_loop_protection(self, interface=None, enabled=None, mode=None,
+                            action=None, vlan_id=None,
+                            transmit_interval=None, receive_threshold=None):
+        """Set loop protection configuration.
+
+        If interface is provided, sets per-port values.
+        If interface is None, sets global values.
+
+        Args:
+            interface: port name or None for global settings
+            enabled: True/False for on/off
+            mode: 'active' or 'passive' (per-port only)
+            action: 'trap', 'auto-disable', or 'all' (per-port only)
+            vlan_id: VLAN ID (0=untagged, 1-4042=tagged dot1q) (per-port only)
+            transmit_interval: 1-10 seconds (global only)
+            receive_threshold: 0|1-50 probes (global only)
+
+        Note: tpid_type is auto-derived from vlan_id by the device
+        (0→none, >0→dot1q). It is read-only in the getter.
+        """
+        if interface is not None:
+            # Per-port
+            ifindex_map = self._build_ifindex_map()
+            name_to_idx = {name: idx for idx, name in ifindex_map.items()}
+            ifidx = name_to_idx.get(interface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{interface}'")
+
+            values = {}
+            if enabled is not None:
+                values["hm2AgentKeepalivePortState"] = "1" if enabled else "2"
+            if mode is not None:
+                val = _LOOP_PROT_MODE_REV.get(mode)
+                if val is None:
+                    raise ValueError(
+                        f"Invalid mode '{mode}': use 'active' or 'passive'")
+                values["hm2AgentKeepalivePortMode"] = val
+            if action is not None:
+                val = _LOOP_PROT_ACTION_REV.get(action)
+                if val is None:
+                    raise ValueError(
+                        f"Invalid action '{action}': use 'trap', "
+                        f"'auto-disable', or 'all'")
+                values["hm2AgentKeepalivePortRxAction"] = val
+            if vlan_id is not None:
+                values["hm2AgentKeepalivePortVlanId"] = str(int(vlan_id))
+
+            if values:
+                self.client.set_indexed(
+                    "HM2-PLATFORM-SWITCHING-MIB",
+                    "hm2AgentKeepalivePortEntry",
+                    index={"ifIndex": ifidx},
+                    values=values)
+        else:
+            # Global
+            values = {}
+            if enabled is not None:
+                values["hm2AgentSwitchKeepaliveState"] = (
+                    "1" if enabled else "2")
+            if transmit_interval is not None:
+                values["hm2AgentSwitchKeepaliveTransmitInterval"] = str(
+                    int(transmit_interval))
+            if receive_threshold is not None:
+                values["hm2AgentSwitchKeepaliveRxThreshold"] = str(
+                    int(receive_threshold))
+
+            if values:
+                self.client.set("HM2-PLATFORM-SWITCHING-MIB",
+                                "hm2AgentSwitchKeepaliveGroup", values)

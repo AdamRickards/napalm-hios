@@ -354,6 +354,181 @@ result = device.set_rstp_port('1/5', edge_port=True, root_guard=True)
 
 ---
 
+## Auto-Disable
+
+Auto-disable is a port enforcement mechanism. When a monitored condition
+triggers (e.g. loop detected, CRC errors, link flapping), the port is
+automatically shut down for a configurable recovery interval. After the
+timer expires, the port re-enables automatically.
+
+### get_auto_disable()
+
+Returns per-interface auto-disable status and per-reason enable/disable
+configuration.
+
+```python
+ad = device.get_auto_disable()
+```
+
+```python
+{
+    'interfaces': {
+        '1/1': {
+            'timer': 0,                     # recovery timer (seconds), 0 = disabled
+            'reason': 'none',               # trigger reason or 'none'
+            'active': False,                # True if port is currently auto-disabled
+            'component': '',                # feature component that triggered
+            'remaining_time': 0,            # seconds until recovery
+            'error_time': '',               # ISO timestamp when error occurred
+        },
+        # ... one entry per port
+    },
+    'reasons': {
+        'link-flap':           {'enabled': False, 'category': 'port-monitor'},
+        'crc-error':           {'enabled': False, 'category': 'port-monitor'},
+        'duplex-mismatch':     {'enabled': False, 'category': 'port-monitor'},
+        'dhcp-snooping':       {'enabled': False, 'category': 'network-security'},
+        'arp-rate':            {'enabled': False, 'category': 'network-security'},
+        'bpdu-rate':           {'enabled': False, 'category': 'l2-redundancy'},
+        'port-security':       {'enabled': False, 'category': 'network-security'},
+        'overload-detection':  {'enabled': False, 'category': 'port-monitor'},
+        'speed-duplex':        {'enabled': False, 'category': 'port-monitor'},
+        'loop-protection':     {'enabled': False, 'category': 'l2-redundancy'},
+    },
+}
+```
+
+L2S firmware returns fewer reasons (no dhcp-snooping, arp-rate, loop-protection).
+The getter returns whatever the device provides — no padding.
+
+### set_auto_disable(interface, timer=0)
+
+Set the auto-disable recovery timer on a port.
+
+```python
+device.set_auto_disable('1/1', timer=60)   # 60-second recovery
+device.set_auto_disable('1/1', timer=0)    # disable timer
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `interface` | interface name | required | Port to configure (e.g. `'1/1'`) |
+| `timer` | `0`, `30`–`4294967295` | `0` | Recovery interval in seconds (0 = disabled) |
+
+### reset_auto_disable(interface)
+
+Reset (re-enable) an auto-disabled port immediately, without waiting for
+the recovery timer.
+
+```python
+device.reset_auto_disable('1/1')
+```
+
+### set_auto_disable_reason(reason, enabled=True)
+
+Enable or disable auto-disable enforcement for a specific reason globally.
+This controls whether the device will auto-disable ports when the given
+condition is detected.
+
+```python
+device.set_auto_disable_reason('loop-protection', True)   # enable
+device.set_auto_disable_reason('loop-protection', False)  # disable
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `reason` | see reasons table above | required | Reason name |
+| `enabled` | `True`, `False` | `True` | Enable/disable enforcement |
+
+---
+
+## Loop Protection
+
+Loop protection sends periodic detection PDUs on configured ports. When a
+PDU is received back (indicating a loop), the port takes a configured
+action: send a trap, auto-disable the port, or both.
+
+### get_loop_protection()
+
+Returns global loop protection state and per-interface settings.
+
+```python
+lp = device.get_loop_protection()
+```
+
+```python
+{
+    'enabled': False,                   # global enable state
+    'transmit_interval': 5,            # PDU send interval (seconds)
+    'receive_threshold': 1,            # PDUs before action
+    'interfaces': {
+        '1/1': {
+            'enabled': False,           # per-port enable
+            'mode': 'passive',          # 'active' | 'passive'
+            'action': 'auto-disable',   # 'trap' | 'auto-disable' | 'all'
+            'vlan_id': 0,               # detection VLAN (0 = untagged)
+            'loop_detected': False,     # loop currently detected
+            'last_loop_time': '',       # ISO timestamp or '' if never
+            'tpid_type': 'none',        # read-only, auto-set by device based on vlan_id
+        },
+        # ... one entry per port
+    },
+}
+```
+
+**Mode**: `active` ports send AND process detection PDUs. `passive` ports
+only process received PDUs. Use `active` on edge ports, `passive` on
+ring/uplink ports.
+
+**L2S devices**: Loop protection is not available. The getter returns
+`{'enabled': False, 'transmit_interval': 0, 'receive_threshold': 0, 'interfaces': {}}`.
+SSH returns `Error: Invalid command`, MOPS returns empty tables — both
+are handled gracefully.
+
+### set_loop_protection(interface=None, ...)
+
+Configure loop protection. When `interface` is `None`, sets global
+parameters. When `interface` is specified, sets per-port parameters.
+
+```python
+# Enable loop protection globally
+device.set_loop_protection(enabled=True)
+
+# Configure a port as active with trap+auto-disable
+device.set_loop_protection(interface='1/1', enabled=True, mode='active', action='all')
+
+# Set global transmit interval
+device.set_loop_protection(transmit_interval=3)
+
+# Disable loop protection globally
+device.set_loop_protection(enabled=False)
+```
+
+**Global parameters** (when `interface=None`):
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `enabled` | `True`, `False` | `None` | Enable/disable globally |
+| `transmit_interval` | `1`–`10` | `None` | PDU transmit interval (seconds) |
+| `receive_threshold` | `1`–`50` | `None` | PDU count before action |
+
+**Per-port parameters** (when `interface` is specified):
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `interface` | interface name | `None` | Port to configure (e.g. `'1/1'`) |
+| `enabled` | `True`, `False` | `None` | Enable/disable on this port |
+| `mode` | `'active'`, `'passive'` | `None` | Detection mode |
+| `action` | `'trap'`, `'auto-disable'`, `'all'` | `None` | Action on loop detection |
+| `vlan_id` | `0`–`4042` | `None` | Detection VLAN (0 = untagged) |
+
+**Note**: The `tpid_type` field in the getter output is read-only and
+auto-populated by the device based on `vlan_id`: setting `vlan_id=0`
+→ `tpid_type='none'` (untagged), setting `vlan_id` > 0 → `tpid_type='dot1q'`
+(802.1Q tagged). It cannot be overridden independently.
+
+---
+
 ## HiDiscovery Protocol
 
 HiDiscovery is Belden's proprietary device discovery and configuration

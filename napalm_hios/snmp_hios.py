@@ -20,7 +20,7 @@ from pysnmp.hlapi.v3arch.asyncio import (
     ObjectType, ObjectIdentity, get_cmd, set_cmd, bulk_walk_cmd,
     usmHMACMD5AuthProtocol, usmDESPrivProtocol,
 )
-from pysnmp.proto.rfc1902 import Integer32, OctetString
+from pysnmp.proto.rfc1902 import Integer32, Unsigned32, OctetString
 from pysnmp.proto.secmod.rfc3414.localkey import hash_passphrase_md5
 from pysnmp.entity.config import USM_KEY_TYPE_MASTER
 from napalm.base.exceptions import ConnectionException
@@ -177,6 +177,77 @@ OID_hm2MrpRowStatus           = '1.3.6.1.4.1.248.11.40.1.1.1.1.26'
 OID_hm2MrpRingport2FixedBackup = '1.3.6.1.4.1.248.11.40.1.1.1.1.27'
 OID_hm2MrpRecoveryDelaySupported = '1.3.6.1.4.1.248.11.40.1.1.1.1.12'
 OID_hm2MrpFastMrp             = '1.3.6.1.4.1.248.11.40.1.1.3'
+
+# HM2-DEVMGMT-MIB — Auto-Disable  1.3.6.1.4.1.248.11.10.1.9.*
+OID_hm2AutoDisableIntfTimer         = '1.3.6.1.4.1.248.11.10.1.9.1.1.4'
+OID_hm2AutoDisableIntfRemainingTime = '1.3.6.1.4.1.248.11.10.1.9.1.1.1'
+OID_hm2AutoDisableIntfComponentName = '1.3.6.1.4.1.248.11.10.1.9.1.1.2'
+OID_hm2AutoDisableIntfErrorReason   = '1.3.6.1.4.1.248.11.10.1.9.1.1.3'
+OID_hm2AutoDisableIntfReset         = '1.3.6.1.4.1.248.11.10.1.9.1.1.5'
+OID_hm2AutoDisableIntfOperState     = '1.3.6.1.4.1.248.11.10.1.9.1.1.6'
+OID_hm2AutoDisableIntfErrorTime     = '1.3.6.1.4.1.248.11.10.1.9.1.1.7'
+OID_hm2AutoDisableReasonOperation   = '1.3.6.1.4.1.248.11.10.1.9.2.1.2'
+OID_hm2AutoDisableReasonCategory    = '1.3.6.1.4.1.248.11.10.1.9.2.1.3'
+
+# HM2-PLATFORM-SWITCHING-MIB — Loop Protection (Keepalive)  1.3.6.1.4.1.248.12.1.2.*
+OID_hm2KeepaliveState              = '1.3.6.1.4.1.248.12.1.2.8.43.1'
+OID_hm2KeepaliveTransmitInterval   = '1.3.6.1.4.1.248.12.1.2.8.43.2'
+OID_hm2KeepaliveRxThreshold        = '1.3.6.1.4.1.248.12.1.2.8.43.248'
+OID_hm2KeepalivePortState          = '1.3.6.1.4.1.248.12.1.2.31.1.1'
+OID_hm2KeepalivePortLoopDetected   = '1.3.6.1.4.1.248.12.1.2.31.1.2'
+OID_hm2KeepalivePortLoopCount      = '1.3.6.1.4.1.248.12.1.2.31.1.3'
+OID_hm2KeepalivePortRxAction       = '1.3.6.1.4.1.248.12.1.2.31.1.5'
+OID_hm2KeepalivePortLastLoopTime   = '1.3.6.1.4.1.248.12.1.2.31.1.7'
+OID_hm2KeepalivePortTpidType       = '1.3.6.1.4.1.248.12.1.2.31.1.8'
+OID_hm2KeepalivePortVlanId         = '1.3.6.1.4.1.248.12.1.2.31.1.9'
+OID_hm2KeepalivePortMode           = '1.3.6.1.4.1.248.12.1.2.31.1.248'
+OID_hm2KeepalivePortTxFrames       = '1.3.6.1.4.1.248.12.1.2.31.1.249'
+OID_hm2KeepalivePortRxFrames       = '1.3.6.1.4.1.248.12.1.2.31.1.250'
+OID_hm2KeepalivePortDiscardFrames  = '1.3.6.1.4.1.248.12.1.2.31.1.251'
+
+# HM2-PLATFORM-SWITCHING-MIB — STP/RSTP  1.3.6.1.4.1.248.12.1.2.15.*
+# Global config (hm2AgentStpSwitchConfigGroup)
+OID_hm2AgentStpForceVersion       = '1.3.6.1.4.1.248.12.1.2.15.5'
+OID_hm2AgentStpAdminMode          = '1.3.6.1.4.1.248.12.1.2.15.6'
+OID_hm2AgentStpBpduGuardMode      = '1.3.6.1.4.1.248.12.1.2.15.13'
+OID_hm2AgentStpBpduFilterDefault  = '1.3.6.1.4.1.248.12.1.2.15.14'
+# CST config (hm2AgentStpCstConfigGroup)
+OID_hm2AgentStpCstHelloTime         = '1.3.6.1.4.1.248.12.1.2.15.8.1'
+OID_hm2AgentStpCstMaxAge            = '1.3.6.1.4.1.248.12.1.2.15.8.2'
+OID_hm2AgentStpCstRootFwdDelay      = '1.3.6.1.4.1.248.12.1.2.15.8.5'
+OID_hm2AgentStpCstBridgeFwdDelay    = '1.3.6.1.4.1.248.12.1.2.15.8.6'
+OID_hm2AgentStpCstBridgeHelloTime   = '1.3.6.1.4.1.248.12.1.2.15.8.7'
+OID_hm2AgentStpCstBridgeMaxAge      = '1.3.6.1.4.1.248.12.1.2.15.8.9'
+OID_hm2AgentStpCstBridgeMaxHops     = '1.3.6.1.4.1.248.12.1.2.15.8.10'
+OID_hm2AgentStpCstBridgePriority    = '1.3.6.1.4.1.248.12.1.2.15.8.11'
+OID_hm2AgentStpCstBridgeHoldCount   = '1.3.6.1.4.1.248.12.1.2.15.8.12'
+# MST entry (hm2AgentStpMstEntry) — instance 0 = CIST
+OID_hm2AgentStpMstBridgeIdentifier  = '1.3.6.1.4.1.248.12.1.2.15.10.1.3'
+OID_hm2AgentStpMstDesignatedRootId  = '1.3.6.1.4.1.248.12.1.2.15.10.1.4'
+OID_hm2AgentStpMstRootPathCost      = '1.3.6.1.4.1.248.12.1.2.15.10.1.5'
+OID_hm2AgentStpMstRootPortId        = '1.3.6.1.4.1.248.12.1.2.15.10.1.6'
+OID_hm2AgentStpMstTimeSinceTopologyChange = '1.3.6.1.4.1.248.12.1.2.15.10.1.7'
+OID_hm2AgentStpMstTopologyChangeCount     = '1.3.6.1.4.1.248.12.1.2.15.10.1.8'
+# Port entry (hm2AgentStpPortEntry)
+OID_hm2AgentStpPortState           = '1.3.6.1.4.1.248.12.1.2.15.7.1.1'
+OID_hm2AgentStpPortStatsRstpBpduRx = '1.3.6.1.4.1.248.12.1.2.15.7.1.4'
+OID_hm2AgentStpPortStatsRstpBpduTx = '1.3.6.1.4.1.248.12.1.2.15.7.1.5'
+OID_hm2AgentStpPortStatsStpBpduRx  = '1.3.6.1.4.1.248.12.1.2.15.7.1.6'
+OID_hm2AgentStpPortStatsStpBpduTx  = '1.3.6.1.4.1.248.12.1.2.15.7.1.7'
+# CST port entry (hm2AgentStpCstPortEntry)
+OID_hm2AgentStpCstPortOperEdge         = '1.3.6.1.4.1.248.12.1.2.15.9.1.1'
+OID_hm2AgentStpCstPortOperPointToPoint = '1.3.6.1.4.1.248.12.1.2.15.9.1.2'
+OID_hm2AgentStpCstPortEdge             = '1.3.6.1.4.1.248.12.1.2.15.9.1.4'
+OID_hm2AgentStpCstPortForwardingState  = '1.3.6.1.4.1.248.12.1.2.15.9.1.5'
+OID_hm2AgentStpCstPortPathCost         = '1.3.6.1.4.1.248.12.1.2.15.9.1.7'
+OID_hm2AgentStpCstPortPriority         = '1.3.6.1.4.1.248.12.1.2.15.9.1.8'
+OID_hm2AgentStpCstPortBpduGuardEffect  = '1.3.6.1.4.1.248.12.1.2.15.9.1.13'
+OID_hm2AgentStpCstPortBpduFilter       = '1.3.6.1.4.1.248.12.1.2.15.9.1.14'
+OID_hm2AgentStpCstPortBpduFlood        = '1.3.6.1.4.1.248.12.1.2.15.9.1.15'
+OID_hm2AgentStpCstPortAutoEdge         = '1.3.6.1.4.1.248.12.1.2.15.9.1.16'
+OID_hm2AgentStpCstPortRootGuard        = '1.3.6.1.4.1.248.12.1.2.15.9.1.17'
+OID_hm2AgentStpCstPortTCNGuard         = '1.3.6.1.4.1.248.12.1.2.15.9.1.18'
+OID_hm2AgentStpCstPortLoopGuard        = '1.3.6.1.4.1.248.12.1.2.15.9.1.19'
 
 # HIRSCHMANN-DISCOVERY-MGMT-MIB  1.3.6.1.4.1.248.16.100.*
 # HM2-NETCONFIG-MIB hm2NetHiDiscoveryGroup  1.3.6.1.4.1.248.11.20.1.4.*
@@ -383,6 +454,50 @@ _MRP_CONFIG_OPER_STATE = {1: 'noError', 2: 'linkError', 3: 'multipleMRM'}
 _MRP_CONFIG_INFO = {1: 'no error', 2: 'ring port link error', 3: 'multiple MRM detected'}
 _MRP_RECOVERY_DELAY_REV = {'500ms': 1, '200ms': 2, '30ms': 3, '10ms': 4}
 _MRP_ROLE_REV = {'client': 1, 'manager': 2}
+
+# Auto-disable reason enum
+_AUTO_DISABLE_REASONS = {
+    0: 'none', 1: 'link-flap', 2: 'crc-error', 3: 'duplex-mismatch',
+    4: 'dhcp-snooping', 5: 'arp-rate', 6: 'bpdu-rate',
+    7: 'mac-based-port-security', 8: 'overload-detection',
+    9: 'speed-duplex', 10: 'loop-protection',
+}
+_AUTO_DISABLE_REASONS_REV = {v: k for k, v in _AUTO_DISABLE_REASONS.items() if v != 'none'}
+_AUTO_DISABLE_CATEGORY = {1: 'other', 2: 'port-monitor', 3: 'network-security', 4: 'l2-redundancy'}
+
+# Loop protection enums
+_LOOP_PROT_ACTION = {10: 'trap', 11: 'auto-disable', 12: 'all'}
+_LOOP_PROT_ACTION_REV = {'trap': 10, 'auto-disable': 11, 'all': 12}
+_LOOP_PROT_MODE = {1: 'active', 2: 'passive'}
+_LOOP_PROT_MODE_REV = {'active': 1, 'passive': 2}
+_LOOP_PROT_TPID = {0: 'none', 1: 'dot1q', 2: 'dot1ad'}
+
+# STP/RSTP enums (int keys for SNMP)
+_STP_VERSION = {1: 'stp', 2: 'rstp', 3: 'mstp'}
+_STP_VERSION_REV = {'stp': 1, 'rstp': 2, 'mstp': 3}
+_STP_FWD_STATE = {1: 'discarding', 2: 'learning', 3: 'forwarding',
+                  4: 'disabled', 5: 'manualFwd', 6: 'notParticipate'}
+
+
+def _decode_snmp_date_time(val):
+    """Decode SNMP DateAndTime OctetString to ISO string.
+
+    DateAndTime is 8 or 11 bytes: year(2) month day hour min sec decisec [utc_dir utc_h utc_m].
+    Returns '' for zero/epoch values.
+    """
+    if val is None:
+        return ''
+    try:
+        raw = bytes(val)
+    except (TypeError, ValueError):
+        return ''
+    if len(raw) < 8:
+        return ''
+    year = (raw[0] << 8) | raw[1]
+    month, day, hour, minute, sec = raw[2], raw[3], raw[4], raw[5], raw[6]
+    if year <= 1970:
+        return ''
+    return f"{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{sec:02d}"
 
 # Default MRP domain UUID (all 0xFF) — used as table index suffix
 MRP_DEFAULT_DOMAIN_SUFFIX = '.255.255.255.255.255.255.255.255.255.255.255.255.255.255.255.255'
@@ -2309,3 +2424,487 @@ class SNMPHIOS:
             'interval': _snmp_int(scalars.get(OID_hm2ConfigWatchdogTimeInterval, 0)),
             'remaining': _snmp_int(scalars.get(OID_hm2ConfigWatchdogTimerValue, 0)),
         }
+
+    # ------------------------------------------------------------------
+    # Auto-Disable
+    # ------------------------------------------------------------------
+
+    def get_auto_disable(self):
+        """Return auto-disable state: per-port table + per-reason table."""
+        return asyncio.run(self._get_auto_disable_async())
+
+    async def _get_auto_disable_async(self):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+
+        intf_rows = await self._walk_columns({
+            'timer': OID_hm2AutoDisableIntfTimer,
+            'remaining_time': OID_hm2AutoDisableIntfRemainingTime,
+            'component': OID_hm2AutoDisableIntfComponentName,
+            'reason': OID_hm2AutoDisableIntfErrorReason,
+            'oper_state': OID_hm2AutoDisableIntfOperState,
+            'error_time': OID_hm2AutoDisableIntfErrorTime,
+        }, engine)
+
+        reason_rows = await self._walk_columns({
+            'operation': OID_hm2AutoDisableReasonOperation,
+            'category': OID_hm2AutoDisableReasonCategory,
+        }, engine)
+
+        interfaces = {}
+        for suffix, cols in intf_rows.items():
+            name = ifmap.get(suffix, '')
+            if not name or name.startswith('cpu') or name.startswith('vlan'):
+                continue
+            component = str(cols.get('component', ''))
+            if component == '-':
+                component = ''
+            reason_code = _snmp_int(cols.get('reason', 0))
+            interfaces[name] = {
+                'timer': _snmp_int(cols.get('timer', 0)),
+                'remaining_time': _snmp_int(cols.get('remaining_time', 0)),
+                'component': component,
+                'reason': _AUTO_DISABLE_REASONS.get(reason_code, 'none'),
+                'active': _snmp_int(cols.get('oper_state', 2)) == 1,
+                'error_time': _snmp_int(cols.get('error_time', 0)),
+            }
+
+        reasons = {}
+        for suffix, cols in reason_rows.items():
+            reason_idx = int(suffix)
+            reason_name = _AUTO_DISABLE_REASONS.get(reason_idx, '')
+            if not reason_name or reason_name == 'none':
+                continue
+            cat_code = _snmp_int(cols.get('category', 1))
+            reasons[reason_name] = {
+                'enabled': _snmp_int(cols.get('operation', 2)) == 1,
+                'category': _AUTO_DISABLE_CATEGORY.get(cat_code, 'other'),
+            }
+
+        return {'interfaces': interfaces, 'reasons': reasons}
+
+    def set_auto_disable(self, interface, timer=0):
+        """Set auto-disable recovery timer for a port."""
+        return asyncio.run(self._set_auto_disable_async(interface, timer))
+
+    async def _set_auto_disable_async(self, interface, timer):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        name_to_idx = {name: idx for idx, name in ifmap.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+        await self._set_oids(
+            (f"{OID_hm2AutoDisableIntfTimer}.{ifidx}", Unsigned32(int(timer))),
+        )
+
+    def reset_auto_disable(self, interface):
+        """Manually re-enable an auto-disabled port."""
+        return asyncio.run(self._reset_auto_disable_async(interface))
+
+    async def _reset_auto_disable_async(self, interface):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        name_to_idx = {name: idx for idx, name in ifmap.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+        await self._set_oids(
+            (f"{OID_hm2AutoDisableIntfReset}.{ifidx}", Integer32(1)),  # true
+        )
+
+    def set_auto_disable_reason(self, reason, enabled=True):
+        """Enable or disable auto-disable recovery for a specific reason type."""
+        return asyncio.run(self._set_auto_disable_reason_async(reason, enabled))
+
+    async def _set_auto_disable_reason_async(self, reason, enabled):
+        reason_idx = _AUTO_DISABLE_REASONS_REV.get(reason)
+        if reason_idx is None:
+            raise ValueError(
+                f"Unknown reason '{reason}': use one of "
+                f"{list(_AUTO_DISABLE_REASONS_REV.keys())}")
+        await self._set_oids(
+            (f"{OID_hm2AutoDisableReasonOperation}.{reason_idx}",
+             Integer32(1 if enabled else 2)),
+        )
+
+    # ------------------------------------------------------------------
+    # Loop Protection (Keepalive)
+    # ------------------------------------------------------------------
+
+    def get_loop_protection(self):
+        """Return loop protection configuration and state."""
+        return asyncio.run(self._get_loop_protection_async())
+
+    async def _get_loop_protection_async(self):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+
+        scalars = await self._get_scalar(
+            OID_hm2KeepaliveState,
+            OID_hm2KeepaliveTransmitInterval,
+            OID_hm2KeepaliveRxThreshold,
+        )
+
+        port_rows = await self._walk_columns({
+            'state': OID_hm2KeepalivePortState,
+            'mode': OID_hm2KeepalivePortMode,
+            'action': OID_hm2KeepalivePortRxAction,
+            'vlan_id': OID_hm2KeepalivePortVlanId,
+            'tpid_type': OID_hm2KeepalivePortTpidType,
+            'loop_detected': OID_hm2KeepalivePortLoopDetected,
+            'loop_count': OID_hm2KeepalivePortLoopCount,
+            'last_loop_time': OID_hm2KeepalivePortLastLoopTime,
+            'tx_frames': OID_hm2KeepalivePortTxFrames,
+            'rx_frames': OID_hm2KeepalivePortRxFrames,
+            'discard_frames': OID_hm2KeepalivePortDiscardFrames,
+        }, engine)
+
+        interfaces = {}
+        for suffix, cols in port_rows.items():
+            name = ifmap.get(suffix, '')
+            if not name or name.startswith('cpu') or name.startswith('vlan'):
+                continue
+            action_code = _snmp_int(cols.get('action', 11))
+            mode_code = _snmp_int(cols.get('mode', 2))
+            tpid_code = _snmp_int(cols.get('tpid_type', 0))
+
+            # DateAndTime is OctetString — decode to ISO string
+            last_time_raw = cols.get('last_loop_time', None)
+            last_time = _decode_snmp_date_time(last_time_raw)
+
+            interfaces[name] = {
+                'enabled': _snmp_int(cols.get('state', 2)) == 1,
+                'mode': _LOOP_PROT_MODE.get(mode_code, 'passive'),
+                'action': _LOOP_PROT_ACTION.get(action_code, 'auto-disable'),
+                'vlan_id': _snmp_int(cols.get('vlan_id', 0)),
+                'tpid_type': _LOOP_PROT_TPID.get(tpid_code, 'none'),
+                'loop_detected': _snmp_int(cols.get('loop_detected', 2)) == 1,
+                'loop_count': _snmp_int(cols.get('loop_count', 0)),
+                'last_loop_time': last_time,
+                'tx_frames': _snmp_int(cols.get('tx_frames', 0)),
+                'rx_frames': _snmp_int(cols.get('rx_frames', 0)),
+                'discard_frames': _snmp_int(cols.get('discard_frames', 0)),
+            }
+
+        return {
+            'enabled': _snmp_int(scalars.get(OID_hm2KeepaliveState, 2)) == 1,
+            'transmit_interval': _snmp_int(
+                scalars.get(OID_hm2KeepaliveTransmitInterval, 5)),
+            'receive_threshold': _snmp_int(
+                scalars.get(OID_hm2KeepaliveRxThreshold, 1)),
+            'interfaces': interfaces,
+        }
+
+    def set_loop_protection(self, interface=None, enabled=None, mode=None,
+                            action=None, vlan_id=None,
+                            transmit_interval=None, receive_threshold=None):
+        """Set loop protection configuration."""
+        return asyncio.run(self._set_loop_protection_async(
+            interface, enabled, mode, action, vlan_id,
+            transmit_interval, receive_threshold,
+        ))
+
+    async def _set_loop_protection_async(self, interface, enabled, mode,
+                                          action, vlan_id,
+                                          transmit_interval, receive_threshold):
+        if interface is not None:
+            engine = SnmpEngine()
+            ifmap = await self._build_ifindex_map(engine)
+            name_to_idx = {name: idx for idx, name in ifmap.items()}
+            ifidx = name_to_idx.get(interface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{interface}'")
+
+            sets = []
+            if enabled is not None:
+                sets.append((f"{OID_hm2KeepalivePortState}.{ifidx}",
+                             Integer32(1 if enabled else 2)))
+            if mode is not None:
+                val = _LOOP_PROT_MODE_REV.get(mode)
+                if val is None:
+                    raise ValueError(
+                        f"Invalid mode '{mode}': use 'active' or 'passive'")
+                sets.append((f"{OID_hm2KeepalivePortMode}.{ifidx}",
+                             Integer32(val)))
+            if action is not None:
+                val = _LOOP_PROT_ACTION_REV.get(action)
+                if val is None:
+                    raise ValueError(
+                        f"Invalid action '{action}': use 'trap', "
+                        f"'auto-disable', or 'all'")
+                sets.append((f"{OID_hm2KeepalivePortRxAction}.{ifidx}",
+                             Integer32(val)))
+            if vlan_id is not None:
+                sets.append((f"{OID_hm2KeepalivePortVlanId}.{ifidx}",
+                             Integer32(int(vlan_id))))
+
+            for oid, val in sets:
+                await self._set_oids((oid, val))
+        else:
+            sets = []
+            if enabled is not None:
+                sets.append((OID_hm2KeepaliveState,
+                             Integer32(1 if enabled else 2)))
+            if transmit_interval is not None:
+                sets.append((OID_hm2KeepaliveTransmitInterval,
+                             Integer32(int(transmit_interval))))
+            if receive_threshold is not None:
+                sets.append((OID_hm2KeepaliveRxThreshold,
+                             Integer32(int(receive_threshold))))
+
+            for oid, val in sets:
+                await self._set_scalar(oid, val)
+
+    # ── RSTP ─────────────────────────────────────────────────────
+
+    def get_rstp(self):
+        """Return global STP/RSTP configuration and state."""
+        return asyncio.run(self._get_rstp_async())
+
+    async def _get_rstp_async(self):
+        # Global scalars — batch into one _get_scalar call
+        global_oids = (
+            OID_hm2AgentStpForceVersion, OID_hm2AgentStpAdminMode,
+            OID_hm2AgentStpBpduGuardMode, OID_hm2AgentStpBpduFilterDefault,
+            OID_hm2AgentStpCstHelloTime, OID_hm2AgentStpCstMaxAge,
+            OID_hm2AgentStpCstRootFwdDelay,
+            OID_hm2AgentStpCstBridgeFwdDelay, OID_hm2AgentStpCstBridgeHelloTime,
+            OID_hm2AgentStpCstBridgeMaxAge, OID_hm2AgentStpCstBridgeMaxHops,
+            OID_hm2AgentStpCstBridgePriority, OID_hm2AgentStpCstBridgeHoldCount,
+        )
+        scalars = await self._get_scalar(*global_oids)
+
+        # MST entry — instance 0 (CIST)
+        mst_keys = (
+            ('bridge_id', OID_hm2AgentStpMstBridgeIdentifier),
+            ('root_id', OID_hm2AgentStpMstDesignatedRootId),
+            ('root_port_id', OID_hm2AgentStpMstRootPortId),
+            ('root_path_cost', OID_hm2AgentStpMstRootPathCost),
+            ('topo_changes', OID_hm2AgentStpMstTopologyChangeCount),
+            ('time_since_topo', OID_hm2AgentStpMstTimeSinceTopologyChange),
+        )
+        mst_oids = [f"{oid}.0" for _, oid in mst_keys]
+        mst_vals = await self._get_scalar(*mst_oids)
+        mst = {key: mst_vals.get(oid) for (key, _), oid in zip(mst_keys, mst_oids)}
+
+        def _format_bridge_id(val):
+            if isinstance(val, bytes):
+                return ':'.join(f'{b:02x}' for b in val)
+            if hasattr(val, 'prettyPrint'):
+                raw = val.prettyPrint()
+                if raw.startswith('0x'):
+                    hex_str = raw[2:]
+                    return ':'.join(hex_str[i:i+2] for i in range(0, len(hex_str), 2))
+            return str(val)
+
+        def _root_port_num(val):
+            try:
+                if isinstance(val, bytes) and len(val) == 2:
+                    return ((val[0] << 8) | val[1]) & 0x0FFF
+                v = _snmp_int(val)
+                return v & 0x0FFF
+            except (ValueError, TypeError):
+                return 0
+
+        return {
+            'enabled': _snmp_int(scalars.get(OID_hm2AgentStpAdminMode, 2)) == 1,
+            'mode': _STP_VERSION.get(
+                _snmp_int(scalars.get(OID_hm2AgentStpForceVersion, 2)), 'rstp'),
+            'bridge_id': _format_bridge_id(mst.get('bridge_id', '')),
+            'priority': _snmp_int(scalars.get(OID_hm2AgentStpCstBridgePriority, 32768)),
+            'hello_time': _snmp_int(scalars.get(OID_hm2AgentStpCstBridgeHelloTime, 2)),
+            'max_age': _snmp_int(scalars.get(OID_hm2AgentStpCstBridgeMaxAge, 20)),
+            'forward_delay': _snmp_int(scalars.get(OID_hm2AgentStpCstBridgeFwdDelay, 15)),
+            'hold_count': _snmp_int(scalars.get(OID_hm2AgentStpCstBridgeHoldCount, 10)),
+            'max_hops': _snmp_int(scalars.get(OID_hm2AgentStpCstBridgeMaxHops, 0)),
+            'root_id': _format_bridge_id(mst.get('root_id', '')),
+            'root_port': _root_port_num(mst.get('root_port_id', 0)),
+            'root_path_cost': _snmp_int(mst.get('root_path_cost', 0)),
+            'topology_changes': _snmp_int(mst.get('topo_changes', 0)),
+            'time_since_topology_change': _snmp_int(
+                mst.get('time_since_topo', 0)) // 100,
+            'root_hello_time': _snmp_int(scalars.get(OID_hm2AgentStpCstHelloTime, 2)),
+            'root_max_age': _snmp_int(scalars.get(OID_hm2AgentStpCstMaxAge, 20)),
+            'root_forward_delay': _snmp_int(scalars.get(
+                OID_hm2AgentStpCstRootFwdDelay, 15)),
+            'bpdu_guard': _snmp_int(scalars.get(OID_hm2AgentStpBpduGuardMode, 2)) == 1,
+            'bpdu_filter': _snmp_int(
+                scalars.get(OID_hm2AgentStpBpduFilterDefault, 2)) == 1,
+        }
+
+    def get_rstp_port(self, interface=None):
+        """Return per-port STP/RSTP state."""
+        return asyncio.run(self._get_rstp_port_async(interface))
+
+    async def _get_rstp_port_async(self, interface):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+
+        # Walk STP port table + CST port table
+        stp_rows = await self._walk_columns({
+            'port_state': OID_hm2AgentStpPortState,
+            'rstp_rx': OID_hm2AgentStpPortStatsRstpBpduRx,
+            'rstp_tx': OID_hm2AgentStpPortStatsRstpBpduTx,
+            'stp_rx': OID_hm2AgentStpPortStatsStpBpduRx,
+            'stp_tx': OID_hm2AgentStpPortStatsStpBpduTx,
+        }, engine)
+
+        cst_rows = await self._walk_columns({
+            'edge': OID_hm2AgentStpCstPortEdge,
+            'oper_edge': OID_hm2AgentStpCstPortOperEdge,
+            'auto_edge': OID_hm2AgentStpCstPortAutoEdge,
+            'fwd_state': OID_hm2AgentStpCstPortForwardingState,
+            'path_cost': OID_hm2AgentStpCstPortPathCost,
+            'priority': OID_hm2AgentStpCstPortPriority,
+            'p2p': OID_hm2AgentStpCstPortOperPointToPoint,
+            'root_guard': OID_hm2AgentStpCstPortRootGuard,
+            'loop_guard': OID_hm2AgentStpCstPortLoopGuard,
+            'tcn_guard': OID_hm2AgentStpCstPortTCNGuard,
+            'bpdu_guard': OID_hm2AgentStpCstPortBpduGuardEffect,
+            'bpdu_filter': OID_hm2AgentStpCstPortBpduFilter,
+            'bpdu_flood': OID_hm2AgentStpCstPortBpduFlood,
+        }, engine)
+
+        ports = {}
+        for ifidx, name in ifmap.items():
+            if name.startswith('cpu'):
+                continue
+            if interface and name != interface:
+                continue
+
+            stp = stp_rows.get(ifidx, {})
+            cst = cst_rows.get(ifidx, {})
+
+            fwd_state = _snmp_int(cst.get('fwd_state', 4))
+            ports[name] = {
+                'enabled': _snmp_int(stp.get('port_state', 2)) == 1,
+                'state': _STP_FWD_STATE.get(fwd_state, 'disabled'),
+                'edge_port': _snmp_int(cst.get('edge', 2)) == 1,
+                'edge_port_oper': _snmp_int(cst.get('oper_edge', 2)) == 1,
+                'auto_edge': _snmp_int(cst.get('auto_edge', 2)) == 1,
+                'point_to_point': _snmp_int(cst.get('p2p', 2)) == 1,
+                'path_cost': _snmp_int(cst.get('path_cost', 0)),
+                'priority': _snmp_int(cst.get('priority', 128)),
+                'root_guard': _snmp_int(cst.get('root_guard', 2)) == 1,
+                'loop_guard': _snmp_int(cst.get('loop_guard', 2)) == 1,
+                'tcn_guard': _snmp_int(cst.get('tcn_guard', 2)) == 1,
+                'bpdu_guard': _snmp_int(cst.get('bpdu_guard', 2)) == 1,
+                'bpdu_filter': _snmp_int(cst.get('bpdu_filter', 2)) == 1,
+                'bpdu_flood': _snmp_int(cst.get('bpdu_flood', 2)) == 1,
+                'rstp_bpdu_rx': _snmp_int(stp.get('rstp_rx', 0)),
+                'rstp_bpdu_tx': _snmp_int(stp.get('rstp_tx', 0)),
+                'stp_bpdu_rx': _snmp_int(stp.get('stp_rx', 0)),
+                'stp_bpdu_tx': _snmp_int(stp.get('stp_tx', 0)),
+            }
+
+        return ports
+
+    def set_rstp(self, enabled=None, mode=None, priority=None,
+                 hello_time=None, max_age=None, forward_delay=None,
+                 hold_count=None, bpdu_guard=None, bpdu_filter=None):
+        """Set global STP/RSTP configuration."""
+        return asyncio.run(self._set_rstp_async(
+            enabled, mode, priority, hello_time, max_age,
+            forward_delay, hold_count, bpdu_guard, bpdu_filter))
+
+    async def _set_rstp_async(self, enabled, mode, priority, hello_time,
+                               max_age, forward_delay, hold_count,
+                               bpdu_guard, bpdu_filter):
+        sets = []
+        if enabled is not None:
+            sets.append((OID_hm2AgentStpAdminMode,
+                         Integer32(1 if enabled else 2)))
+        if mode is not None:
+            val = _STP_VERSION_REV.get(mode)
+            if val is None:
+                raise ValueError(
+                    f"Invalid mode '{mode}': use 'stp', 'rstp', or 'mstp'")
+            sets.append((OID_hm2AgentStpForceVersion, Integer32(val)))
+        if bpdu_guard is not None:
+            sets.append((OID_hm2AgentStpBpduGuardMode,
+                         Integer32(1 if bpdu_guard else 2)))
+        if bpdu_filter is not None:
+            sets.append((OID_hm2AgentStpBpduFilterDefault,
+                         Integer32(1 if bpdu_filter else 2)))
+        if priority is not None:
+            sets.append((OID_hm2AgentStpCstBridgePriority,
+                         Unsigned32(int(priority))))
+        if hello_time is not None:
+            sets.append((OID_hm2AgentStpCstBridgeHelloTime,
+                         Unsigned32(int(hello_time))))
+        if max_age is not None:
+            sets.append((OID_hm2AgentStpCstBridgeMaxAge,
+                         Unsigned32(int(max_age))))
+        if forward_delay is not None:
+            sets.append((OID_hm2AgentStpCstBridgeFwdDelay,
+                         Unsigned32(int(forward_delay))))
+        if hold_count is not None:
+            sets.append((OID_hm2AgentStpCstBridgeHoldCount,
+                         Unsigned32(int(hold_count))))
+
+        for oid, val in sets:
+            await self._set_scalar(oid, val)
+
+        return await self._get_rstp_async()
+
+    def set_rstp_port(self, interface, enabled=None, edge_port=None,
+                      auto_edge=None, path_cost=None, priority=None,
+                      root_guard=None, loop_guard=None, tcn_guard=None,
+                      bpdu_filter=None, bpdu_flood=None):
+        """Set per-port STP/RSTP configuration."""
+        return asyncio.run(self._set_rstp_port_async(
+            interface, enabled, edge_port, auto_edge, path_cost, priority,
+            root_guard, loop_guard, tcn_guard, bpdu_filter, bpdu_flood))
+
+    async def _set_rstp_port_async(self, interface, enabled, edge_port,
+                                    auto_edge, path_cost, priority,
+                                    root_guard, loop_guard, tcn_guard,
+                                    bpdu_filter, bpdu_flood):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        name_to_idx = {name: idx for idx, name in ifmap.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+
+        # Port enable/disable (hm2AgentStpPortEntry)
+        if enabled is not None:
+            await self._set_oids(
+                (f"{OID_hm2AgentStpPortState}.{ifidx}",
+                 Integer32(1 if enabled else 2)))
+
+        # CST port settings
+        sets = []
+        if edge_port is not None:
+            sets.append((f"{OID_hm2AgentStpCstPortEdge}.{ifidx}",
+                         Integer32(1 if edge_port else 2)))
+        if auto_edge is not None:
+            sets.append((f"{OID_hm2AgentStpCstPortAutoEdge}.{ifidx}",
+                         Integer32(1 if auto_edge else 2)))
+        if path_cost is not None:
+            sets.append((f"{OID_hm2AgentStpCstPortPathCost}.{ifidx}",
+                         Unsigned32(int(path_cost))))
+        if priority is not None:
+            sets.append((f"{OID_hm2AgentStpCstPortPriority}.{ifidx}",
+                         Unsigned32(int(priority))))
+        if root_guard is not None:
+            sets.append((f"{OID_hm2AgentStpCstPortRootGuard}.{ifidx}",
+                         Integer32(1 if root_guard else 2)))
+        if loop_guard is not None:
+            sets.append((f"{OID_hm2AgentStpCstPortLoopGuard}.{ifidx}",
+                         Integer32(1 if loop_guard else 2)))
+        if tcn_guard is not None:
+            sets.append((f"{OID_hm2AgentStpCstPortTCNGuard}.{ifidx}",
+                         Integer32(1 if tcn_guard else 2)))
+        if bpdu_filter is not None:
+            sets.append((f"{OID_hm2AgentStpCstPortBpduFilter}.{ifidx}",
+                         Integer32(1 if bpdu_filter else 2)))
+        if bpdu_flood is not None:
+            sets.append((f"{OID_hm2AgentStpCstPortBpduFlood}.{ifidx}",
+                         Integer32(1 if bpdu_flood else 2)))
+
+        for oid, val in sets:
+            await self._set_oids((oid, val))
+
+        return await self._get_rstp_port_async(interface)

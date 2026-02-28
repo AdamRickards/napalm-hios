@@ -1,5 +1,60 @@
 # Changelog
 
+## 1.6.0 — 2026-02-28
+
+### Auto-Disable — all 3 protocols
+
+Port auto-disable monitoring and control, implemented on MOPS, SNMP, and SSH:
+
+- **`get_auto_disable()`** — per-port timer/status/component and global reason enable/disable state. L2S devices return 7 reasons (vs 10 on L2A+). Live-tested on .117 (L2A), .127 (L2S), .254 (GRS1042).
+- **`set_auto_disable(interface, timer=0)`** — set auto-disable timer per port. SSH always sends `auto-disable timer {value}` explicitly — `no auto-disable timer` is a no-op on HiOS CLI.
+- **`reset_auto_disable(interface)`** — reset auto-disabled port back to active.
+- **`set_auto_disable_reason(reason, enabled=True)`** — enable/disable individual auto-disable trigger reasons globally.
+
+### Loop Protection — all 3 protocols
+
+Loop detection heartbeat protocol, implemented on MOPS, SNMP, and SSH:
+
+- **`get_loop_protection()`** — global settings (enabled, transmit_interval, receive_threshold, mode, action) plus per-port state (enabled, mode, action, vlan_id, tpid_type, last_loop_time). `tpid_type` is read-only — auto-derived by the device from `vlan_id` (0→none, >0→dot1q). L2S devices return empty result (SSH: `Error: Invalid command`, SNMP/MOPS: empty tables).
+- **`set_loop_protection(interface=None, ...)`** — global settings when `interface=None`, per-port settings when interface specified. `tpid_type` removed from setter — auto-populated by device.
+
+### RSTP — SNMP + SSH backends complete
+
+RSTP was MOPS-only since 1.4.2. Now all 3 protocols produce identical output:
+
+- **`get_rstp()`** — global STP/RSTP config and state (mode, bridge/root IDs, priority, timers, topology changes, BPDU guard/filter).
+- **`get_rstp_port(interface=None)`** — per-port state (enabled, forwarding state, edge port, guards, BPDU stats, path cost, priority).
+- **`set_rstp(...)`** — set global STP config (enabled, mode, priority, timers, BPDU guard/filter).
+- **`set_rstp_port(interface, ...)`** — set per-port config (enabled, edge port, auto edge, path cost, priority, guards, BPDU filter/flood).
+- SNMP: `Unsigned32` type required for priority, path_cost, and timer OIDs (wrongType fix).
+- SSH: parses `show spanning-tree global` (dot-keys) + `show spanning-tree mst port 0` (table) + `show spanning-tree port <port>` (dot-keys per port).
+
+### SNMP fixes
+
+- **`Unsigned32` for `hm2AutoDisableIntfTimer`**: SNMP SET with `Integer32` caused wrongType — fixed to `Unsigned32`.
+- **`Unsigned32` for STP OIDs**: bridge priority, port priority, path cost, hello time, max age, forward delay, hold count, max hops all require `Unsigned32`.
+- **`_decode_date_time()` / `_decode_snmp_date_time()`**: DateAndTime helpers for auto-disable timestamps. Epoch (all zeros) returns empty string.
+
+### SSH CLI quirks documented
+
+- **`auto-disable timer 0`** works but **`no auto-disable timer`** does NOT reset (CLI no-op). Always send explicit value.
+- **Loop protection on L2S**: `show loop-protection global` returns `Error: Invalid command` — gracefully handled as empty result.
+
+### Unit tests
+
+- 22 new tests (12 auto-disable + 10 loop protection), 344 total passing.
+
+### Documentation
+
+- **vendor_specific.md**: added Auto-Disable and Loop Protection sections with full getter/setter parameter tables.
+- **protocols.md**: added 6 methods to availability matrix, 4 new cross-protocol diffs (#12 tpid_type, #13 L2S loop prot, #14 L2S auto-disable reasons, #15 timer reset quirk).
+- **usage.md**: added 6 new methods to Available Methods.
+- **CLI_REFERENCE.md**: added §6 Auto Disable and §64 Loop Protection command mappings.
+
+### Version bump
+
+- `version.py` and `setup.py`: 1.5.0 → 1.6.0
+
 ## 1.5.0 — 2026-02-26
 
 ### Port admin control
