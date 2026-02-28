@@ -18,20 +18,25 @@ python aaron.py                    # CSV output (default)
 python aaron.py -j                 # JSON output
 python aaron.py -c my_site.cfg     # custom config file
 python aaron.py --dry-run          # show plan, no connections
+python aaron.py --debug            # verbose logging
 ```
 
 ## Port Classification
 
 | Type | Criteria |
 |------|----------|
-| **uplink** | Real LLDP neighbour detected (FDB-sourced entries filtered out) |
-| **edge** | No LLDP, has MACs, MACs not seen on non-uplink ports of other devices |
+| **uplink** | LLDP neighbour with system name, management IP, or port description (real switch/router) |
+| **edge** | No LLDP (or bare LLDP with only a MAC — e.g. Windows LLDP stack), MACs not seen on non-uplink ports of other devices |
 | **indirect** | No LLDP, has MACs, but MACs also appear on non-uplink ports of another device (unmanaged switch/hub between) |
 | **empty** | No LLDP, no MACs |
 
-## ARP Scan
+## ARP Resolution
 
-Optionally resolves edge device MACs to IP addresses via the local ARP cache. Runs in the background during device data gathering — no extra time cost.
+Three sources for resolving edge/indirect device MACs to IP addresses:
+
+### Local ARP cache
+
+Runs in the background during device data gathering — zero added latency.
 
 ```ini
 # Passive — read existing OS ARP cache only, no traffic generated
@@ -43,6 +48,24 @@ arp_scan = 192.168.1.0/24
 # Multiple subnets
 arp_scan = 192.168.1.0/24, 10.0.0.0/24
 ```
+
+### ARP gateway
+
+Query L3 HiOS switches for their ARP tables. Resolves MACs on remote subnets that the scanning machine can't see in its own ARP cache.
+
+```ini
+# Single L3 gateway
+arp_gateway = 10.0.0.1
+
+# Multiple L3 gateways
+arp_gateway = 10.0.0.1, 10.0.1.1
+```
+
+The gateway must be reachable with the same credentials and protocol as the target devices.
+
+### Local identity
+
+Automatically detects the scanning machine's own MAC and IP. If the machine is plugged into a managed switch port, that port's `resolved_ip` is populated automatically — no configuration needed. Cross-platform (Linux + Windows).
 
 ## Arguments
 
@@ -57,7 +80,6 @@ arp_scan = 192.168.1.0/24, 10.0.0.0/24
 ## Config File
 
 ```ini
-# AARON — Automated Asset Recognition On Network
 username = admin
 password = private
 protocol = mops
@@ -65,11 +87,12 @@ edge_threshold = 3
 hide_empty = true
 hide_uplinks = false
 # arp_scan = passive
+# arp_gateway = 10.0.0.1
 
 # Devices — one IP per line
-192.168.1.4
-192.168.1.117
-192.168.1.127
+10.0.0.2
+10.0.0.3
+10.0.0.4
 ```
 
 ## Config Settings
@@ -79,10 +102,11 @@ hide_uplinks = false
 | `username` | — | Device username (required) |
 | `password` | — | Device password (required) |
 | `protocol` | `mops` | `mops` / `snmp` / `ssh` |
-| `edge_threshold` | `3` | Max MACs for edge classification (higher = more tolerant of multi-MAC devices like VM hosts) |
+| `edge_threshold` | `3` | Max MACs for edge classification |
 | `hide_empty` | `false` | Exclude empty ports from output |
 | `hide_uplinks` | `false` | Exclude uplink ports from output |
 | `arp_scan` | off | `passive`, or CIDR subnet(s) for active scan |
+| `arp_gateway` | off | Comma-separated L3 HiOS switch IPs to query for ARP tables |
 
 ## CSV Output
 
@@ -95,7 +119,7 @@ hide_uplinks = false
 | `vlan` | VLAN(s) seen on port |
 | `mac_count` | Number of dynamic MACs learned |
 | `macs` | Pipe-separated MAC addresses |
-| `resolved_ip` | IP from ARP cache (if available) |
+| `resolved_ip` | IP from ARP resolution (local cache, gateway, or self-detection) |
 | `lldp_neighbor_ip` | LLDP neighbour management IP |
 | `lldp_neighbor_name` | LLDP neighbour hostname |
 | `lldp_neighbor_port` | LLDP neighbour port description |

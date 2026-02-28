@@ -89,6 +89,7 @@ def parse_config(config_file: str) -> dict:
         'hide_empty': False,
         'hide_uplinks': False,
         'arp_scan': [],
+        'arp_gateway': [],
         'devices': [],
     }
 
@@ -126,6 +127,11 @@ def parse_config(config_file: str) -> dict:
                             subnet = subnet.strip()
                             if subnet:
                                 config['arp_scan'].append(subnet)
+                elif key == 'arp_gateway':
+                    for gw in val.split(','):
+                        gw = gw.strip()
+                        if gw and is_valid_ipv4(gw):
+                            config['arp_gateway'].append(gw)
                 else:
                     logging.warning(f"Line {line_num}: unknown setting '{key}'")
                 continue
@@ -247,6 +253,45 @@ def expand_subnets(subnets):
     return ips
 
 
+def get_local_identity(target_ip):
+    """Detect our own IP + MACs. Returns (ip, [mac, ...]) or (None, [])."""
+    local_ip = None
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect((target_ip, 1))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        return None, []
+
+    local_macs = []
+    if platform.system() == 'Windows':
+        try:
+            # getmac /fo csv /v columns: Connection Name, Network Adapter, Physical Address, Transport Name
+            out = subprocess.run(['getmac', '/fo', 'csv', '/v'],
+                                 capture_output=True, text=True, timeout=10)
+            for line in out.stdout.splitlines()[1:]:
+                parts = line.replace('"', '').split(',')
+                if len(parts) >= 3:
+                    mac = parts[2].replace('-', ':').lower().strip()
+                    if mac and mac not in ('n/a', 'disabled') and ':' in mac:
+                        local_macs.append(mac)
+        except Exception:
+            pass
+    else:
+        import glob as globmod
+        for path in globmod.glob('/sys/class/net/*/address'):
+            try:
+                with open(path) as f:
+                    mac = f.read().strip().lower()
+                    if mac and mac != '00:00:00:00:00:00':
+                        local_macs.append(mac)
+            except Exception:
+                pass
+
+    return local_ip, local_macs
+
+
 def read_arp_cache():
     """Read the OS ARP cache. Returns {mac: ip} (mac in colon-separated lowercase)."""
     result = {}
@@ -296,13 +341,20 @@ def classify_ports(device_data: dict, mac_index: dict, threshold: int) -> list:
     """Classify every port on every device. Returns list of row dicts."""
     rows = []
 
-    # First pass: identify all uplink ports (have real LLDP neighbors)
+    # First pass: identify all uplink ports (have real LLDP neighbors).
+    # Bare LLDP (MAC only, no system name / mgmt IP / port desc) is treated
+    # as edge — typical of Windows LLDP stack, not a real switch.
     uplink_ports = set()  # (ip, interface) tuples
     for ip, data in device_data.items():
         for iface, neighbors in data['lldp'].items():
             real = [n for n in neighbors if n.get('remote_port', '').upper() != 'FDB']
             if real:
-                uplink_ports.add((ip, iface))
+                n = real[0]
+                has_detail = (n.get('remote_system_name', '')
+                              or n.get('remote_management_ipv4', '')
+                              or n.get('remote_port_description', ''))
+                if has_detail:
+                    uplink_ports.add((ip, iface))
 
     for ip, data in device_data.items():
         hostname = data['hostname']
@@ -341,7 +393,14 @@ def classify_ports(device_data: dict, mac_index: dict, threshold: int) -> list:
                          if n.get('remote_port', '').upper() != 'FDB']
             if neighbors:
                 n = neighbors[0]
-                row['type'] = 'uplink'
+                # Bare LLDP = only MAC, no system name, no management IP, no port
+                # description. Typical of Windows LLDP stack — classify as edge,
+                # not uplink. Real switches always report system name or mgmt IP.
+                has_name = bool(n.get('remote_system_name', ''))
+                has_mgmt = bool(n.get('remote_management_ipv4', ''))
+                has_port_desc = bool(n.get('remote_port_description', ''))
+                bare_lldp = not has_name and not has_mgmt and not has_port_desc
+                row['type'] = 'edge' if bare_lldp else 'uplink'
                 row['lldp_neighbor_ip'] = n.get('remote_management_ipv4', '')
                 row['lldp_neighbor_name'] = (n.get('remote_system_name', '')
                                              or n.get('remote_chassis_id', ''))
@@ -485,7 +544,7 @@ def main():
     )
 
     console = logging.StreamHandler()
-    console.setLevel(log_level)
+    console.setLevel(logging.DEBUG if args.debug else logging.WARNING)
     console.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
     logging.getLogger().addHandler(console)
 
@@ -521,7 +580,8 @@ def main():
             arp_label = ', '.join(config['arp_scan'])
         print(f"  Config: {args.c} | Protocol: {config['protocol']}"
               f" | Devices: {len(config['devices'])} | Edge threshold: \u2264{config['edge_threshold']}")
-        print(f"  ARP scan: {arp_label}")
+        gw_label = ', '.join(config['arp_gateway']) if config['arp_gateway'] else 'off'
+        print(f"  ARP scan: {arp_label} | ARP gateway: {gw_label}")
         print("=" * 60)
 
         if args.dry_run:
@@ -590,32 +650,93 @@ def main():
         print(f"\n  Cross-referencing MACs across {len(device_data)} devices...")
         print(f"  Unique MACs: {len(all_macs)} | Seen on multiple devices: {multi_device_macs}")
 
+        # --- Detect local machine identity ---
+        local_ip, local_macs = get_local_identity(config['devices'][0])
+        if local_ip and local_macs:
+            logging.info(f"Local identity: {local_ip} MACs: {local_macs}")
+
         # --- Collect ARP results ---
         mac_to_ip = {}
         if arp_future:
             arp_count = arp_future.result()
             bg_pool.shutdown(wait=False)
             mac_to_ip = read_arp_cache()
-            resolved = sum(1 for m in all_macs if m in mac_to_ip)
-            print(f"\n  ARP scan (active): {arp_count} IPs tickled | Cache: {len(mac_to_ip)} entries | Resolved: {resolved}/{len(all_macs)} MACs")
+            print(f"\n  ARP scan (active): {arp_count} IPs tickled | Cache: {len(mac_to_ip)} entries")
         elif arp_passive:
             mac_to_ip = read_arp_cache()
-            resolved = sum(1 for m in all_macs if m in mac_to_ip)
-            print(f"\n  ARP scan (passive): Cache: {len(mac_to_ip)} entries | Resolved: {resolved}/{len(all_macs)} MACs")
+            print(f"\n  ARP scan (passive): Cache: {len(mac_to_ip)} entries")
+
+        # Inject local machine MACs into ARP map (we know our own IP but
+        # our MAC isn't in our own ARP cache)
+        if local_ip and local_macs:
+            for mac in local_macs:
+                mac_to_ip[mac] = local_ip
+
+        # --- Query L3 gateway ARP tables ---
+        if config['arp_gateway']:
+            gw_total = 0
+            for gw_ip in config['arp_gateway']:
+                try:
+                    gw = driver(
+                        hostname=gw_ip,
+                        username=config['username'],
+                        password=config['password'],
+                        timeout=30,
+                        optional_args={'protocol_preference': [config['protocol']]},
+                    )
+                    gw.open()
+                    arp_table = gw.get_arp_table()
+                    gw.close()
+                    gw_count = 0
+                    for entry in arp_table:
+                        mac = entry.get('mac', '').lower()
+                        ip = entry.get('ip', '')
+                        if mac and ip and mac != 'ff:ff:ff:ff:ff:ff':
+                            mac_to_ip.setdefault(mac, ip)
+                            gw_count += 1
+                    gw_total += gw_count
+                    print(f"  ARP gateway {gw_ip}: {gw_count} entries")
+                except Exception as e:
+                    print(f"  ARP gateway {gw_ip}: FAILED ({e})")
+            logging.info(f"ARP gateway total: {gw_total} entries from {len(config['arp_gateway'])} gateway(s)")
+
+        # --- ARP diagnostic (--debug only) ---
+        if args.debug:
+            if local_ip:
+                logging.debug(f"Local IP: {local_ip} | Local MACs: {local_macs}")
+            if mac_to_ip:
+                logging.debug(f"ARP cache sample (first 5): {dict(list(mac_to_ip.items())[:5])}")
+                sample_macs = list(all_macs)[:5]
+                logging.debug(f"Switch MAC sample (first 5): {sample_macs}")
+                for m in all_macs:
+                    if m.lower() in mac_to_ip:
+                        logging.debug(f"ARP match: switch={m} -> ip={mac_to_ip[m.lower()]}")
 
         # --- Phase 3: Classify ports ---
         rows = classify_ports(device_data, mac_index, config['edge_threshold'])
 
         # Enrich edge/indirect ports with resolved IPs (uplinks already have lldp_neighbor_ip)
-        if mac_to_ip:
-            for row in rows:
-                if row['type'] not in ('edge', 'indirect'):
-                    continue
+        # ARP cache keys are lowercase, switch MACs may be uppercase — normalize
+        edge_indirect = [r for r in rows if r['type'] in ('edge', 'indirect')]
+        enriched_count = 0
+        if mac_to_ip and edge_indirect:
+            for row in edge_indirect:
+                if args.debug:
+                    logging.debug(f"Enrich: {row['switch_ip']} {row['interface']} type={row['type']} mac_count={row['mac_count']} macs={row['macs']}")
                 if row['mac_count'] == 1 and row['macs']:
-                    row['resolved_ip'] = mac_to_ip.get(row['macs'], '')
+                    mac_key = row['macs'].lower()
+                    resolved = mac_to_ip.get(mac_key, '')
+                    if args.debug:
+                        logging.debug(f"  Lookup: {mac_key} -> {'HIT: ' + resolved if resolved else 'MISS'}")
+                    row['resolved_ip'] = resolved
+                    if resolved:
+                        enriched_count += 1
                 elif row['mac_count'] > 1 and row['macs']:
-                    resolved = [mac_to_ip[m] for m in row['macs'].split('|') if m in mac_to_ip]
+                    resolved = [mac_to_ip[m] for m in (x.lower() for x in row['macs'].split('|')) if m in mac_to_ip]
                     row['resolved_ip'] = '|'.join(resolved)
+                    if resolved:
+                        enriched_count += 1
+            print(f"  Resolved: {enriched_count}/{len(edge_indirect)} edge/indirect ports")
 
         # --- Phase 4: Output ---
         print_summary(device_data, rows)
