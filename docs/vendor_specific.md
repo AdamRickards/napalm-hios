@@ -313,6 +313,133 @@ device.delete_mrp_sub_ring()
 
 ---
 
+## VLAN Ingress/Egress
+
+Per-port VLAN ingress settings (PVID, frame types, filtering) and per-VLAN
+egress membership (Tagged/Untagged/Forbidden) with full CRUD.
+
+### get_vlan_ingress(*ports)
+
+Returns per-port ingress settings. No args = all ports.
+
+```python
+result = device.get_vlan_ingress()
+result = device.get_vlan_ingress('1/1', '1/5')  # specific ports
+```
+
+```python
+{
+    '1/1': {'pvid': 1, 'frame_types': 'admit_all', 'ingress_filtering': False},
+    '1/5': {'pvid': 3, 'frame_types': 'admit_only_tagged', 'ingress_filtering': True},
+}
+```
+
+### get_vlan_egress(*ports)
+
+Returns per-VLAN-per-port membership. No args = all ports. Ports not in a
+VLAN's egress table are omitted (absence = not a member). VLANs with no
+matching ports are omitted when filtering.
+
+```python
+result = device.get_vlan_egress()
+result = device.get_vlan_egress('1/1')  # only port 1/1 data
+```
+
+```python
+{
+    1: {
+        'name': 'default',
+        'ports': {'1/1': 'untagged', '1/2': 'tagged', '1/3': 'forbidden'}
+    },
+    100: {
+        'name': 'MRP-VLAN',
+        'ports': {'1/5': 'tagged', '1/6': 'tagged'}
+    },
+}
+```
+
+| Mode | Meaning |
+|------|---------|
+| `tagged` | Port is in EgressPorts AND NOT in UntaggedPorts |
+| `untagged` | Port is in EgressPorts AND in UntaggedPorts |
+| `forbidden` | Port is in ForbiddenEgressPorts (prevents GVRP/MVRP override) |
+
+### set_vlan_ingress(port, pvid, frame_types, ingress_filtering)
+
+Set ingress parameters on a single port. `None` = don't change.
+
+```python
+device.set_vlan_ingress('1/1', pvid=100)
+device.set_vlan_ingress('1/1', frame_types='admit_only_tagged', ingress_filtering=True)
+device.set_vlan_ingress('1/1', pvid=1, frame_types='admit_all', ingress_filtering=False)
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `port` | interface name | required | Port to configure (e.g. `'1/1'`) |
+| `pvid` | `1`–`4042` | `None` | Port VLAN ID |
+| `frame_types` | `'admit_all'`, `'admit_only_tagged'` | `None` | Acceptable frame types |
+| `ingress_filtering` | `True`, `False` | `None` | Enable/disable ingress filtering |
+
+### set_vlan_egress(vlan_id, port, mode)
+
+Set one port's egress membership for one VLAN. The VLAN must already exist
+in the VLAN database — use `create_vlan()` first if needed.
+
+```python
+device.set_vlan_egress(100, '1/1', 'tagged')
+device.set_vlan_egress(100, '1/1', 'untagged')
+device.set_vlan_egress(100, '1/1', 'forbidden')
+device.set_vlan_egress(100, '1/1', 'none')       # remove from VLAN
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `vlan_id` | `1`–`4042` | required | VLAN ID |
+| `port` | interface name | required | Port to configure (e.g. `'1/1'`) |
+| `mode` | `'tagged'`, `'untagged'`, `'forbidden'`, `'none'` | required | Membership mode |
+
+### create_vlan(vlan_id, name)
+
+Create a VLAN in the VLAN database.
+
+```python
+device.create_vlan(100)
+device.create_vlan(100, name='Production')
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `vlan_id` | `2`–`4042` | required | VLAN ID to create |
+| `name` | string | `''` | Optional VLAN name |
+
+### update_vlan(vlan_id, name)
+
+Rename an existing VLAN.
+
+```python
+device.update_vlan(100, 'Production-v2')
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `vlan_id` | `1`–`4042` | required | VLAN ID to rename |
+| `name` | string | required | New VLAN name |
+
+### delete_vlan(vlan_id)
+
+Delete a VLAN from the VLAN database.
+
+```python
+device.delete_vlan(100)
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `vlan_id` | `2`–`4042` | required | VLAN ID to delete |
+
+---
+
 ## RSTP — Rapid Spanning Tree Protocol
 
 ### get_rstp()

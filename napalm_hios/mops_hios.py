@@ -260,6 +260,30 @@ def _decode_portlist_hex(hex_str, ifindex_map):
     return interfaces
 
 
+def _encode_portlist_hex(interfaces, ifindex_map):
+    """Encode interface names to PortList hex string for MOPS.
+
+    Reverse of _decode_portlist_hex(). Returns space-separated hex bytes
+    (e.g. "c0 00 00 00"). ifindex_map maps ifIndex/bridge port → name,
+    so we reverse it to name → bridge port.
+    """
+    name_to_bp = {name: int(bp) for bp, name in ifindex_map.items()}
+    bp_nums = []
+    for iface in interfaces:
+        bp = name_to_bp.get(iface)
+        if bp is None:
+            raise ValueError(f"Unknown interface '{iface}'")
+        bp_nums.append(bp)
+    max_port = max(bp_nums) if bp_nums else 0
+    num_bytes = (max_port + 7) // 8 if max_port else 0
+    bitmap = bytearray(num_bytes)
+    for bp in bp_nums:
+        byte_idx = (bp - 1) // 8
+        bit_idx = (bp - 1) % 8
+        bitmap[byte_idx] |= (0x80 >> bit_idx)
+    return " ".join(f"{b:02x}" for b in bitmap)
+
+
 def _decode_lldp_capabilities(hex_str):
     """Decode LLDP capability bitmap from hex string."""
     caps = []
@@ -1084,6 +1108,282 @@ class MOPSHIOS:
                 }
 
         return vlans
+
+    def get_vlan_ingress(self, *ports):
+        """Return per-port ingress settings from Q-BRIDGE-MIB via MOPS."""
+        bridge_map = self._get_bridge_port_map()
+
+        try:
+            entries = self.client.get("Q-BRIDGE-MIB", "dot1qPortVlanEntry",
+                                      ["dot1dBasePort", "dot1qPvid",
+                                       "dot1qPortAcceptableFrameTypes",
+                                       "dot1qPortIngressFiltering"],
+                                      decode_strings=False)
+        except MOPSError:
+            return {}
+
+        port_set = set(ports) if ports else None
+        result = {}
+        for entry in entries:
+            bp = entry.get("dot1dBasePort", "")
+            name = bridge_map.get(str(bp), f'port{bp}')
+            if port_set and name not in port_set:
+                continue
+            ft_val = _safe_int(entry.get("dot1qPortAcceptableFrameTypes", "1"))
+            filt_val = _safe_int(entry.get("dot1qPortIngressFiltering", "2"))
+            result[name] = {
+                'pvid': _safe_int(entry.get("dot1qPvid", "1")),
+                'frame_types': 'admit_only_tagged' if ft_val == 2 else 'admit_all',
+                'ingress_filtering': filt_val == 1,
+            }
+        return result
+
+    def get_vlan_egress(self, *ports):
+        """Return per-VLAN-per-port membership (T/U/F) via MOPS."""
+        bridge_map = self._get_bridge_port_map()
+
+        try:
+            entries = self.client.get("IEEE8021-Q-BRIDGE-MIB",
+                                      "ieee8021QBridgeVlanStaticEntry",
+                                      ["ieee8021QBridgeVlanStaticVlanIndex",
+                                       "ieee8021QBridgeVlanStaticName",
+                                       "ieee8021QBridgeVlanStaticEgressPorts",
+                                       "ieee8021QBridgeVlanStaticUntaggedPorts",
+                                       "ieee8021QBridgeVlanStaticForbiddenEgressPorts"],
+                                      decode_strings=False)
+        except MOPSError:
+            try:
+                entries = self.client.get_multi([
+                    ("Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+                     ["dot1qVlanIndex",
+                      "dot1qVlanStaticName",
+                      "dot1qVlanStaticEgressPorts",
+                      "dot1qVlanStaticUntaggedPorts",
+                      "dot1qVlanStaticForbiddenEgressPorts"]),
+                ], decode_strings=False)
+                entries = entries["mibs"].get("Q-BRIDGE-MIB", {}).get(
+                    "dot1qVlanStaticEntry", [])
+            except MOPSError:
+                return {}
+
+        port_set = set(ports) if ports else None
+        vlans = {}
+        for entry in entries:
+            vlan_id_raw = (entry.get("ieee8021QBridgeVlanStaticVlanIndex", "") or
+                           entry.get("dot1qVlanIndex", ""))
+            vlan_id = _safe_int(vlan_id_raw, 0)
+            if vlan_id <= 0:
+                continue
+
+            vlan_name = _decode_hex_string(
+                entry.get("ieee8021QBridgeVlanStaticName", "") or
+                entry.get("dot1qVlanStaticName", ""))
+
+            egress_raw = (entry.get("ieee8021QBridgeVlanStaticEgressPorts", "") or
+                          entry.get("dot1qVlanStaticEgressPorts", ""))
+            untagged_raw = (entry.get("ieee8021QBridgeVlanStaticUntaggedPorts", "") or
+                            entry.get("dot1qVlanStaticUntaggedPorts", ""))
+            forbidden_raw = (entry.get("ieee8021QBridgeVlanStaticForbiddenEgressPorts", "") or
+                             entry.get("dot1qVlanStaticForbiddenEgressPorts", ""))
+
+            egress_ifaces = set(_decode_portlist_hex(egress_raw, bridge_map))
+            untagged_ifaces = set(_decode_portlist_hex(untagged_raw, bridge_map))
+            forbidden_ifaces = set(_decode_portlist_hex(forbidden_raw, bridge_map))
+
+            port_modes = {}
+            for iface in egress_ifaces:
+                if port_set and iface not in port_set:
+                    continue
+                if iface in untagged_ifaces:
+                    port_modes[iface] = 'untagged'
+                else:
+                    port_modes[iface] = 'tagged'
+            for iface in forbidden_ifaces:
+                if iface not in egress_ifaces:
+                    if port_set and iface not in port_set:
+                        continue
+                    port_modes[iface] = 'forbidden'
+
+            if port_modes:
+                vlans[vlan_id] = {'name': vlan_name, 'ports': port_modes}
+
+        return vlans
+
+    def set_vlan_ingress(self, port, pvid=None, frame_types=None,
+                         ingress_filtering=None):
+        """Set ingress parameters on a single port via MOPS."""
+        bridge_map = self._get_bridge_port_map()
+        name_to_bp = {name: bp for bp, name in bridge_map.items()}
+        bp = name_to_bp.get(port)
+        if bp is None:
+            raise ValueError(f"Unknown interface '{port}'")
+
+        values = {}
+        if pvid is not None:
+            values["dot1qPvid"] = str(int(pvid))
+        if frame_types is not None:
+            if frame_types == 'admit_only_tagged':
+                values["dot1qPortAcceptableFrameTypes"] = "2"
+            elif frame_types == 'admit_all':
+                values["dot1qPortAcceptableFrameTypes"] = "1"
+            else:
+                raise ValueError(
+                    f"Invalid frame_types '{frame_types}': "
+                    f"use 'admit_all' or 'admit_only_tagged'")
+        if ingress_filtering is not None:
+            values["dot1qPortIngressFiltering"] = "1" if ingress_filtering else "2"
+
+        if values:
+            self.client.set_indexed("Q-BRIDGE-MIB", "dot1qPortVlanEntry",
+                                    index={"dot1dBasePort": bp},
+                                    values=values)
+
+    def set_vlan_egress(self, vlan_id, port, mode):
+        """Set one port's VLAN membership via MOPS.
+
+        Reads the current raw hex bitmaps, modifies the target port's bit,
+        and writes back. Uses Q-BRIDGE-MIB for SET (IEEE8021 SET fails on
+        HiOS despite GET working).
+        """
+        if mode not in ('tagged', 'untagged', 'forbidden', 'none'):
+            raise ValueError(
+                f"Invalid mode '{mode}': use 'tagged', 'untagged', "
+                f"'forbidden', or 'none'")
+
+        bridge_map = self._get_bridge_port_map()
+        name_to_bp = {name: int(bp) for bp, name in bridge_map.items()}
+        bp = name_to_bp.get(port)
+        if bp is None:
+            raise ValueError(f"Unknown interface '{port}'")
+
+        # Read current raw hex bitmaps for all VLANs
+        try:
+            entries = self.client.get("IEEE8021-Q-BRIDGE-MIB",
+                                      "ieee8021QBridgeVlanStaticEntry",
+                                      ["ieee8021QBridgeVlanStaticVlanIndex",
+                                       "ieee8021QBridgeVlanStaticEgressPorts",
+                                       "ieee8021QBridgeVlanStaticUntaggedPorts",
+                                       "ieee8021QBridgeVlanStaticForbiddenEgressPorts"],
+                                      decode_strings=False)
+            vid_key = "ieee8021QBridgeVlanStaticVlanIndex"
+            egress_key = "ieee8021QBridgeVlanStaticEgressPorts"
+            untagged_key = "ieee8021QBridgeVlanStaticUntaggedPorts"
+            forbidden_key = "ieee8021QBridgeVlanStaticForbiddenEgressPorts"
+        except MOPSError:
+            entries = self.client.get_multi([
+                ("Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+                 ["dot1qVlanIndex",
+                  "dot1qVlanStaticEgressPorts",
+                  "dot1qVlanStaticUntaggedPorts",
+                  "dot1qVlanStaticForbiddenEgressPorts"]),
+            ], decode_strings=False)
+            entries = entries["mibs"].get("Q-BRIDGE-MIB", {}).get(
+                "dot1qVlanStaticEntry", [])
+            vid_key = "dot1qVlanIndex"
+            egress_key = "dot1qVlanStaticEgressPorts"
+            untagged_key = "dot1qVlanStaticUntaggedPorts"
+            forbidden_key = "dot1qVlanStaticForbiddenEgressPorts"
+
+        # Find our VLAN's raw hex bitmaps
+        target = None
+        for entry in entries:
+            if _safe_int(entry.get(vid_key, ""), 0) == vlan_id:
+                target = entry
+                break
+        if target is None:
+            raise ValueError(f"VLAN {vlan_id} does not exist")
+
+        egress_hex = target.get(egress_key, "") or ""
+        untagged_hex = target.get(untagged_key, "") or ""
+        forbidden_hex = target.get(forbidden_key, "") or ""
+
+        # Parse hex to mutable bytearrays
+        def _hex_to_bytearray(h):
+            h = h.strip()
+            if not h:
+                return bytearray(4)  # default 4 bytes
+            try:
+                return bytearray(bytes.fromhex(h.replace(" ", "")))
+            except ValueError:
+                return bytearray(4)
+
+        egress = _hex_to_bytearray(egress_hex)
+        untagged = _hex_to_bytearray(untagged_hex)
+        forbidden = _hex_to_bytearray(forbidden_hex)
+
+        # Ensure arrays are long enough for target port
+        byte_idx = (bp - 1) // 8
+        bit_mask = 0x80 >> ((bp - 1) % 8)
+        for arr in (egress, untagged, forbidden):
+            while len(arr) <= byte_idx:
+                arr.append(0)
+
+        # Modify bits
+        if mode == 'tagged':
+            egress[byte_idx] |= bit_mask
+            untagged[byte_idx] &= ~bit_mask
+            forbidden[byte_idx] &= ~bit_mask
+        elif mode == 'untagged':
+            egress[byte_idx] |= bit_mask
+            untagged[byte_idx] |= bit_mask
+            forbidden[byte_idx] &= ~bit_mask
+        elif mode == 'forbidden':
+            egress[byte_idx] &= ~bit_mask
+            untagged[byte_idx] &= ~bit_mask
+            forbidden[byte_idx] |= bit_mask
+        elif mode == 'none':
+            egress[byte_idx] &= ~bit_mask
+            untagged[byte_idx] &= ~bit_mask
+            forbidden[byte_idx] &= ~bit_mask
+
+        # Encode back to space-separated hex
+        def _bytearray_to_hex(ba):
+            return " ".join(f"{b:02x}" for b in ba)
+
+        # SET via Q-BRIDGE (IEEE8021 SET fails on HiOS).
+        # EgressPorts + UntaggedPorts must be set together.
+        # ForbiddenEgressPorts must be set separately — combining all three
+        # in one request causes the device to silently reject the change.
+        idx = {"dot1qVlanIndex": str(vlan_id)}
+        self.client.set_indexed(
+            "Q-BRIDGE-MIB", "dot1qVlanStaticEntry", index=idx,
+            values={
+                "dot1qVlanStaticEgressPorts": _bytearray_to_hex(egress),
+                "dot1qVlanStaticUntaggedPorts": _bytearray_to_hex(untagged),
+            })
+        if mode == 'forbidden' or forbidden_hex.replace(' ', '').replace('0', ''):
+            self.client.set_indexed(
+                "Q-BRIDGE-MIB", "dot1qVlanStaticEntry", index=idx,
+                values={
+                    "dot1qVlanStaticForbiddenEgressPorts": _bytearray_to_hex(forbidden),
+                })
+
+    def create_vlan(self, vlan_id, name=''):
+        """Create a VLAN in the VLAN database via MOPS.
+
+        Uses Q-BRIDGE-MIB for SET (IEEE8021 SET fails on HiOS).
+        """
+        values = {"dot1qVlanStaticRowStatus": "4"}  # createAndGo
+        if name:
+            values["dot1qVlanStaticName"] = encode_string(name)
+        self.client.set_indexed(
+            "Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+            index={"dot1qVlanIndex": str(vlan_id)},
+            values=values)
+
+    def update_vlan(self, vlan_id, name):
+        """Rename an existing VLAN via MOPS."""
+        self.client.set_indexed(
+            "Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+            index={"dot1qVlanIndex": str(vlan_id)},
+            values={"dot1qVlanStaticName": encode_string(name)})
+
+    def delete_vlan(self, vlan_id):
+        """Delete a VLAN from the VLAN database via MOPS."""
+        self.client.set_indexed(
+            "Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+            index={"dot1qVlanIndex": str(vlan_id)},
+            values={"dot1qVlanStaticRowStatus": "6"})  # destroy
 
     def get_ntp_servers(self):
         """Return NTP/SNTP servers from HM2-TIMESYNC-MIB/hm2SntpClientServerAddrEntry.

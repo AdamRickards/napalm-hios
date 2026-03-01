@@ -330,6 +330,45 @@ class HIOSDriver(NetworkDriver):
             return vlans
         raise NotImplementedError("get_vlans is not implemented for this protocol")
 
+    def get_vlan_ingress(self, *ports):
+        if self.active_protocol in ('ssh', 'mops', 'snmp'):
+            return self._get_active_connection().get_vlan_ingress(*ports)
+        raise NotImplementedError("get_vlan_ingress requires SSH, MOPS or SNMP")
+
+    def get_vlan_egress(self, *ports):
+        if self.active_protocol in ('ssh', 'mops', 'snmp'):
+            return self._get_active_connection().get_vlan_egress(*ports)
+        raise NotImplementedError("get_vlan_egress requires SSH, MOPS or SNMP")
+
+    def set_vlan_ingress(self, port, pvid=None, frame_types=None,
+                         ingress_filtering=None):
+        if self.active_protocol in ('ssh', 'mops', 'snmp'):
+            return self._get_active_connection().set_vlan_ingress(
+                port, pvid=pvid, frame_types=frame_types,
+                ingress_filtering=ingress_filtering)
+        raise NotImplementedError("set_vlan_ingress requires SSH, MOPS or SNMP")
+
+    def set_vlan_egress(self, vlan_id, port, mode):
+        if self.active_protocol in ('ssh', 'mops', 'snmp'):
+            return self._get_active_connection().set_vlan_egress(
+                vlan_id, port, mode)
+        raise NotImplementedError("set_vlan_egress requires SSH, MOPS or SNMP")
+
+    def create_vlan(self, vlan_id, name=''):
+        if self.active_protocol in ('ssh', 'mops', 'snmp'):
+            return self._get_active_connection().create_vlan(vlan_id, name=name)
+        raise NotImplementedError("create_vlan requires SSH, MOPS or SNMP")
+
+    def update_vlan(self, vlan_id, name):
+        if self.active_protocol in ('ssh', 'mops', 'snmp'):
+            return self._get_active_connection().update_vlan(vlan_id, name)
+        raise NotImplementedError("update_vlan requires SSH, MOPS or SNMP")
+
+    def delete_vlan(self, vlan_id):
+        if self.active_protocol in ('ssh', 'mops', 'snmp'):
+            return self._get_active_connection().delete_vlan(vlan_id)
+        raise NotImplementedError("delete_vlan requires SSH, MOPS or SNMP")
+
     def ping(self, destination, source='', ttl=255, timeout=2, size=100, count=5, vrf='', source_interface=''):
         if self.active_protocol == 'ssh' or self._ensure_ssh():
             result = self.ssh.ping(destination, source, ttl, timeout, size, count, vrf, source_interface)

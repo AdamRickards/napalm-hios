@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.8.0 — 2026-03-01
+
+### VLAN Ingress/Egress API — all 3 protocols
+
+Full VLAN configuration and membership management, implemented on MOPS, SNMP, and SSH:
+
+- **`get_vlan_ingress(*ports)`** — per-port ingress settings: PVID, acceptable frame types (`admit_all`/`admit_only_tagged`), ingress filtering. Optional port filter. Source: Q-BRIDGE-MIB `dot1qPortVlanEntry`.
+- **`get_vlan_egress(*ports)`** — per-VLAN-per-port membership with Tagged/Untagged/Forbidden classification. Decodes three PortList bitmaps (`EgressPorts`, `UntaggedPorts`, `ForbiddenEgressPorts`). Optional port filter omits VLANs with no matching ports.
+- **`set_vlan_ingress(port, pvid, frame_types, ingress_filtering)`** — set any/all ingress parameters on a single port. `None` = don't change.
+- **`set_vlan_egress(vlan_id, port, mode)`** — set one port's membership for one VLAN. Modes: `tagged`, `untagged`, `forbidden`, `none` (remove from egress).
+- **`create_vlan(vlan_id, name)`** — create VLAN in database with optional name.
+- **`update_vlan(vlan_id, name)`** — rename an existing VLAN.
+- **`delete_vlan(vlan_id)`** — delete VLAN from database.
+
+### Protocol-specific details
+
+- **MOPS**: IEEE8021-Q-BRIDGE-MIB for GET, Q-BRIDGE-MIB for all SET operations (IEEE8021 SET returns HTTP 400). ForbiddenEgressPorts must be SET separately from EgressPorts+UntaggedPorts (combined request causes silent failure). Raw hex bitmap manipulation for egress modifications.
+- **SNMP**: Four new OIDs (`dot1qPvid`, `dot1qPortAcceptableFrameTypes`, `dot1qPortIngressFiltering`, `dot1qVlanStaticForbiddenEgressPorts`). RowStatus 4=createAndGo, 6=destroy for VLAN CRUD. pysnmp `OctetString.asOctets()` for PortList byte conversion.
+- **SSH**: `show vlan port` for ingress, `show vlan id N` for per-VLAN egress membership. `vlan database` context (from enable mode) for create/name/delete. Interface context for `vlan participation include|exclude|auto`, `vlan tagging`, `vlan pvid`, `vlan acceptframe all|vlanonly`, `vlan ingressfilter enable|disable`.
+
+### Helpers
+
+- **`_encode_portlist_hex()`** (MOPS) — reverse of `_decode_portlist_hex()`. Interface names → hex PortList bitmap string.
+- **`_encode_portlist()`** (SNMP) — reverse of `_decode_portlist()`. Interface names → bytes for SNMP SET.
+- **`_to_bytearray()`** (SNMP) — handles pysnmp `OctetString` objects that lack `.encode()`.
+
+### Unit tests
+
+- 57 new tests: 18 MOPS (getters, setters, CRUD, encode helper) + 18 SNMP (same coverage) + 16 dispatch (SSH/MOPS/SNMP routing, port filter passthrough) + 5 encode helper edge cases.
+- 413 total passing.
+
+### Documentation
+
+- **vendor_specific.md**: new VLAN Ingress/Egress section with full getter/setter parameter tables.
+- **protocols.md**: added 7 methods to availability matrix.
+- **usage.md**: added 7 new methods to vendor-specific read/write lists.
+- **README.md**: added VLAN methods to supported methods lists, updated test count.
+
+### Version bump
+
+- `version.py` and `setup.py`: 1.7.0 → 1.8.0
+
 ## 1.7.0 — 2026-03-01
 
 ### MRP Sub-Ring (SRM) — all 3 protocols

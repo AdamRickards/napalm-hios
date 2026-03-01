@@ -106,6 +106,8 @@ device.close()
 - `get_rstp_port()` — per-port STP/RSTP state
 - `get_auto_disable()` — per-port auto-disable status and reason configuration
 - `get_loop_protection()` — global and per-port loop detection state
+- `get_vlan_ingress()` — per-port VLAN ingress settings (PVID, frame types, filtering)
+- `get_vlan_egress()` — per-VLAN-per-port membership (Tagged/Untagged/Forbidden)
 - `get_lldp_neighbors_detail_extended()` — LLDP with 802.1/802.3 extensions
 - `get_config_status()` — check if running config is saved to NVM
 - `get_profiles()` — list NVM/ENVM config profiles
@@ -125,6 +127,11 @@ device.close()
 - `reset_auto_disable()` — re-enable an auto-disabled port
 - `set_auto_disable_reason()` — enable/disable auto-disable per reason
 - `set_loop_protection()` — configure loop protection (global or per-port)
+- `set_vlan_ingress()` — set per-port VLAN ingress parameters
+- `set_vlan_egress()` — set per-port VLAN egress membership
+- `create_vlan()` — create VLAN in database
+- `update_vlan()` — rename a VLAN
+- `delete_vlan()` — delete VLAN from database
 - `save_config()` — save running config to NVM
 - `clear_config()` — clear running config (warm restart)
 - `clear_factory()` — full factory reset (reboot)

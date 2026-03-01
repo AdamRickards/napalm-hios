@@ -1956,5 +1956,327 @@ class TestSNMPHIOS(unittest.TestCase):
         self.assertEqual(status['remaining'], 0)
 
 
+    # ------------------------------------------------------------------
+    # VLAN ingress/egress getters
+    # ------------------------------------------------------------------
+
+    def test_get_vlan_ingress(self):
+        """get_vlan_ingress returns PVID, frame_types, ingress_filtering per port."""
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '2': '1/2', '5': '1/5'}
+            return self.snmp._ifindex_map
+
+        async def mock_walk(oid, engine=None):
+            if oid == OID_dot1dBasePortIfIndex:
+                return {'1': '1', '2': '2', '5': '5'}
+            return {}
+
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '1': {'pvid': 1, 'frame_types': 1, 'ingress_filtering': 2},
+                '2': {'pvid': 5, 'frame_types': 2, 'ingress_filtering': 1},
+                '5': {'pvid': 3, 'frame_types': 1, 'ingress_filtering': 2},
+            }
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            result = self.snmp.get_vlan_ingress()
+
+        self.assertEqual(result['1/1']['pvid'], 1)
+        self.assertEqual(result['1/1']['frame_types'], 'admit_all')
+        self.assertFalse(result['1/1']['ingress_filtering'])
+        self.assertEqual(result['1/2']['pvid'], 5)
+        self.assertEqual(result['1/2']['frame_types'], 'admit_only_tagged')
+        self.assertTrue(result['1/2']['ingress_filtering'])
+        self.assertEqual(result['1/5']['pvid'], 3)
+
+    def test_get_vlan_ingress_port_filter(self):
+        """get_vlan_ingress with port args filters to those ports only."""
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '2': '1/2'}
+            return self.snmp._ifindex_map
+
+        async def mock_walk(oid, engine=None):
+            return {'1': '1', '2': '2'}
+
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '1': {'pvid': 1, 'frame_types': 1, 'ingress_filtering': 2},
+                '2': {'pvid': 5, 'frame_types': 2, 'ingress_filtering': 1},
+            }
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            result = self.snmp.get_vlan_ingress('1/2')
+
+        self.assertEqual(len(result), 1)
+        self.assertIn('1/2', result)
+
+    def test_get_vlan_egress(self):
+        """get_vlan_egress classifies T/U/F correctly."""
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '2': '1/2', '3': '1/3'}
+            return self.snmp._ifindex_map
+
+        async def mock_walk(oid, engine=None):
+            return {'1': '1', '2': '2', '3': '3'}
+
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '1': {
+                    'name': 'default',
+                    'egress': b'\xe0',     # 1/1, 1/2, 1/3
+                    'untagged': b'\x60',   # 1/2, 1/3
+                    'forbidden': b'\x00',
+                },
+                '100': {
+                    'name': 'MRP',
+                    'egress': b'\xc0',     # 1/1, 1/2
+                    'untagged': b'\x00',
+                    'forbidden': b'\x00',
+                },
+            }
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            result = self.snmp.get_vlan_egress()
+
+        self.assertEqual(result[1]['ports']['1/1'], 'tagged')
+        self.assertEqual(result[1]['ports']['1/2'], 'untagged')
+        self.assertEqual(result[1]['ports']['1/3'], 'untagged')
+        self.assertEqual(result[100]['ports']['1/1'], 'tagged')
+        self.assertEqual(result[100]['ports']['1/2'], 'tagged')
+
+    def test_get_vlan_egress_forbidden(self):
+        """Ports in forbidden bitmap show as 'forbidden'."""
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '2': '1/2'}
+            return self.snmp._ifindex_map
+
+        async def mock_walk(oid, engine=None):
+            return {'1': '1', '2': '2'}
+
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '10': {
+                    'name': 'TEST',
+                    'egress': b'\x80',     # 1/1 only
+                    'untagged': b'\x80',
+                    'forbidden': b'\x40',  # 1/2 forbidden
+                },
+            }
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            result = self.snmp.get_vlan_egress()
+
+        self.assertEqual(result[10]['ports']['1/1'], 'untagged')
+        self.assertEqual(result[10]['ports']['1/2'], 'forbidden')
+
+    # ------------------------------------------------------------------
+    # VLAN ingress/egress setters
+    # ------------------------------------------------------------------
+
+    def test_set_vlan_ingress_pvid(self):
+        """SET dot1qPvid for a bridge port."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        async def mock_ifmap(engine=None):
+            return {'3': '1/3'}
+        async def mock_walk(oid, engine=None):
+            return {'3': '3'}
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk):
+            self.snmp.set_vlan_ingress('1/3', pvid=100)
+
+        self.assertEqual(len(set_calls), 1)
+        from napalm_hios.snmp_hios import OID_dot1qPvid
+        self.assertIn(OID_dot1qPvid, set_calls[0][0])
+        self.assertEqual(int(set_calls[0][1]), 100)
+
+    def test_set_vlan_ingress_all_params(self):
+        """SET PVID + frame_types + ingress_filtering."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        async def mock_ifmap(engine=None):
+            return {'3': '1/3'}
+        async def mock_walk(oid, engine=None):
+            return {'3': '3'}
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk):
+            self.snmp.set_vlan_ingress('1/3', pvid=5,
+                                       frame_types='admit_only_tagged',
+                                       ingress_filtering=True)
+
+        self.assertEqual(len(set_calls), 3)
+        from napalm_hios.snmp_hios import OID_dot1qPortAcceptableFrameTypes, OID_dot1qPortIngressFiltering
+        oid_strs = [c[0] for c in set_calls]
+        self.assertTrue(any(OID_dot1qPortAcceptableFrameTypes in o for o in oid_strs))
+        self.assertTrue(any(OID_dot1qPortIngressFiltering in o for o in oid_strs))
+
+    def test_set_vlan_ingress_unknown_port(self):
+        async def mock_ifmap(engine=None):
+            return {'3': '1/3'}
+        async def mock_walk(oid, engine=None):
+            return {'3': '3'}
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk):
+            with self.assertRaises(ValueError):
+                self.snmp.set_vlan_ingress('99/99', pvid=1)
+
+    def test_set_vlan_egress_tagged(self):
+        """SET egress bitmap with port added as tagged."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '3': '1/3'}
+        async def mock_walk(oid, engine=None):
+            return {'1': '1', '3': '3'}
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '10': {
+                    'egress': b'\x00\x00',
+                    'untagged': b'\xff\xff',
+                    'forbidden': b'\x00\x00',
+                },
+            }
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            self.snmp.set_vlan_egress(10, '1/3', 'tagged')
+
+        # Should have set egress, untagged, forbidden
+        self.assertEqual(len(set_calls), 3)
+        from napalm_hios.snmp_hios import OID_dot1qVlanStaticEgressPorts
+        egress_oid = [c for c in set_calls if OID_dot1qVlanStaticEgressPorts in c[0]]
+        self.assertEqual(len(egress_oid), 1)
+        # Port 3 bit should be set in egress (0x20 at byte 0)
+        egress_bytes = bytes(egress_oid[0][1])
+        self.assertTrue(egress_bytes[0] & 0x20)
+
+    def test_set_vlan_egress_nonexistent_vlan(self):
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        async def mock_walk(oid, engine=None):
+            return {'1': '1'}
+        async def mock_walk_columns(oid_map, engine=None):
+            return {'1': {'egress': b'\xff', 'untagged': b'\xff', 'forbidden': b'\x00'}}
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            with self.assertRaises(ValueError) as ctx:
+                self.snmp.set_vlan_egress(999, '1/1', 'tagged')
+            self.assertIn('does not exist', str(ctx.exception))
+
+    def test_set_vlan_egress_invalid_mode(self):
+        with self.assertRaises(ValueError):
+            self.snmp.set_vlan_egress(10, '1/1', 'invalid')
+
+    # ------------------------------------------------------------------
+    # VLAN CRUD
+    # ------------------------------------------------------------------
+
+    def test_create_vlan(self):
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids):
+            self.snmp.create_vlan(100, 'MGMT')
+        self.assertEqual(len(set_calls), 2)
+        from napalm_hios.snmp_hios import OID_dot1qVlanStaticRowStatus, OID_dot1qVlanStaticName
+        # RowStatus=4 (createAndGo)
+        row_status = [c for c in set_calls if OID_dot1qVlanStaticRowStatus in c[0]]
+        self.assertEqual(int(row_status[0][1]), 4)
+        # Name
+        name_set = [c for c in set_calls if OID_dot1qVlanStaticName in c[0]]
+        self.assertEqual(str(name_set[0][1]), 'MGMT')
+
+    def test_create_vlan_no_name(self):
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids):
+            self.snmp.create_vlan(200)
+        self.assertEqual(len(set_calls), 1)
+
+    def test_update_vlan(self):
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids):
+            self.snmp.update_vlan(100, 'NEW-NAME')
+        from napalm_hios.snmp_hios import OID_dot1qVlanStaticName
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_dot1qVlanStaticName, set_calls[0][0])
+
+    def test_delete_vlan(self):
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids):
+            self.snmp.delete_vlan(100)
+        from napalm_hios.snmp_hios import OID_dot1qVlanStaticRowStatus
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_dot1qVlanStaticRowStatus, set_calls[0][0])
+        self.assertEqual(int(set_calls[0][1]), 6)  # destroy
+
+
+class TestEncodePortlist(unittest.TestCase):
+    """Test _encode_portlist helper."""
+
+    def test_encode_single_port(self):
+        from napalm_hios.snmp_hios import _encode_portlist
+        name_to_bp = {'1/1': '1', '1/2': '2'}
+        result = _encode_portlist(['1/1'], name_to_bp)
+        self.assertEqual(result, b'\x80')
+
+    def test_encode_multiple_ports(self):
+        from napalm_hios.snmp_hios import _encode_portlist
+        name_to_bp = {'1/1': '1', '1/2': '2', '1/3': '3'}
+        result = _encode_portlist(['1/1', '1/3'], name_to_bp)
+        self.assertEqual(result, b'\xa0')  # 10100000
+
+    def test_encode_empty(self):
+        from napalm_hios.snmp_hios import _encode_portlist
+        result = _encode_portlist([], {'1/1': '1'})
+        self.assertEqual(result, b'')
+
+    def test_encode_unknown_port_raises(self):
+        from napalm_hios.snmp_hios import _encode_portlist
+        with self.assertRaises(ValueError):
+            _encode_portlist(['99/99'], {'1/1': '1'})
+
+    def test_roundtrip(self):
+        """encode → decode should return the same ports."""
+        from napalm_hios.snmp_hios import _encode_portlist
+        bp_to_name = {'1': '1/1', '2': '1/2', '3': '1/3', '5': '1/5'}
+        name_to_bp = {v: k for k, v in bp_to_name.items()}
+        original = ['1/1', '1/3', '1/5']
+        encoded = _encode_portlist(original, name_to_bp)
+        decoded = _decode_portlist(encoded, bp_to_name)
+        self.assertEqual(sorted(decoded), sorted(original))
+
+
 if __name__ == '__main__':
     unittest.main()
