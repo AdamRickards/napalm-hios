@@ -138,6 +138,13 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `set_auto_disable_reason` | Yes | Yes | Yes | Vendor write |
 | `get_loop_protection` | Yes | Yes | Yes | Vendor |
 | `set_loop_protection` | Yes | Yes | Yes | Vendor write |
+| `get_vlan_ingress` | Yes | Yes | Yes | Vendor |
+| `get_vlan_egress` | Yes | Yes | Yes | Vendor |
+| `set_vlan_ingress` | Yes | Yes | Yes | Vendor write |
+| `set_vlan_egress` | Yes | Yes | Yes | Vendor write |
+| `create_vlan` | Yes | Yes | Yes | Vendor write |
+| `update_vlan` | Yes | Yes | Yes | Vendor write |
+| `delete_vlan` | Yes | Yes | Yes | Vendor write |
 | `is_factory_default` | Yes | Yes | No (gated) | Vendor |
 | `onboard` | Yes | Yes | No (gated) | Vendor |
 

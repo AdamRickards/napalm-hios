@@ -1837,5 +1837,292 @@ class TestLoopProtection(unittest.TestCase):
             {"hm2AgentSwitchKeepaliveState": "2"})
 
 
+    # ------------------------------------------------------------------
+    # VLAN ingress/egress getters
+    # ------------------------------------------------------------------
+
+    def test_get_vlan_ingress(self):
+        """get_vlan_ingress returns per-port PVID, frame_types, ingress_filtering."""
+        self.backend._ifindex_map = {
+            "1": "1/1", "2": "1/2", "3": "1/3", "4": "1/4", "5": "1/5",
+        }
+        self.backend.client.get.return_value = [
+            {"dot1dBasePort": "1", "dot1qPvid": "1",
+             "dot1qPortAcceptableFrameTypes": "1", "dot1qPortIngressFiltering": "2"},
+            {"dot1dBasePort": "2", "dot1qPvid": "5",
+             "dot1qPortAcceptableFrameTypes": "2", "dot1qPortIngressFiltering": "1"},
+            {"dot1dBasePort": "5", "dot1qPvid": "3",
+             "dot1qPortAcceptableFrameTypes": "1", "dot1qPortIngressFiltering": "2"},
+        ]
+
+        result = self.backend.get_vlan_ingress()
+        self.assertEqual(result["1/1"]["pvid"], 1)
+        self.assertEqual(result["1/1"]["frame_types"], "admit_all")
+        self.assertFalse(result["1/1"]["ingress_filtering"])
+        self.assertEqual(result["1/2"]["pvid"], 5)
+        self.assertEqual(result["1/2"]["frame_types"], "admit_only_tagged")
+        self.assertTrue(result["1/2"]["ingress_filtering"])
+        self.assertEqual(result["1/5"]["pvid"], 3)
+
+    def test_get_vlan_ingress_port_filter(self):
+        """get_vlan_ingress with port filtering returns only requested ports."""
+        self.backend._ifindex_map = {"1": "1/1", "2": "1/2", "3": "1/3"}
+        self.backend.client.get.return_value = [
+            {"dot1dBasePort": "1", "dot1qPvid": "1",
+             "dot1qPortAcceptableFrameTypes": "1", "dot1qPortIngressFiltering": "2"},
+            {"dot1dBasePort": "2", "dot1qPvid": "5",
+             "dot1qPortAcceptableFrameTypes": "2", "dot1qPortIngressFiltering": "1"},
+            {"dot1dBasePort": "3", "dot1qPvid": "10",
+             "dot1qPortAcceptableFrameTypes": "1", "dot1qPortIngressFiltering": "2"},
+        ]
+
+        result = self.backend.get_vlan_ingress("1/2")
+        self.assertEqual(len(result), 1)
+        self.assertIn("1/2", result)
+        self.assertEqual(result["1/2"]["pvid"], 5)
+
+    def test_get_vlan_egress(self):
+        """get_vlan_egress returns T/U/F per port per VLAN."""
+        self.backend._ifindex_map = {
+            "1": "1/1", "2": "1/2", "3": "1/3", "5": "1/5", "6": "1/6",
+        }
+        self.backend.client.get.return_value = [
+            {"ieee8021QBridgeVlanStaticVlanIndex": "1",
+             "ieee8021QBridgeVlanStaticName": "default",
+             "ieee8021QBridgeVlanStaticEgressPorts": "e0 00 00 00",  # ports 1,2,3
+             "ieee8021QBridgeVlanStaticUntaggedPorts": "60 00 00 00",  # ports 2,3
+             "ieee8021QBridgeVlanStaticForbiddenEgressPorts": ""},
+            {"ieee8021QBridgeVlanStaticVlanIndex": "100",
+             "ieee8021QBridgeVlanStaticName": "MRP",
+             "ieee8021QBridgeVlanStaticEgressPorts": "c0 00 00 00",  # ports 1,2
+             "ieee8021QBridgeVlanStaticUntaggedPorts": "00 00 00 00",
+             "ieee8021QBridgeVlanStaticForbiddenEgressPorts": ""},
+        ]
+
+        result = self.backend.get_vlan_egress()
+        # VLAN 1: 1/1=tagged (in egress, not in untagged), 1/2=untagged, 1/3=untagged
+        self.assertEqual(result[1]["name"], "default")
+        self.assertEqual(result[1]["ports"]["1/1"], "tagged")
+        self.assertEqual(result[1]["ports"]["1/2"], "untagged")
+        self.assertEqual(result[1]["ports"]["1/3"], "untagged")
+        # VLAN 100: 1/1=tagged, 1/2=tagged
+        self.assertEqual(result[100]["name"], "MRP")
+        self.assertEqual(result[100]["ports"]["1/1"], "tagged")
+        self.assertEqual(result[100]["ports"]["1/2"], "tagged")
+
+    def test_get_vlan_egress_port_filter(self):
+        """get_vlan_egress with port filtering only includes requested ports."""
+        self.backend._ifindex_map = {"1": "1/1", "2": "1/2", "3": "1/3"}
+        self.backend.client.get.return_value = [
+            {"ieee8021QBridgeVlanStaticVlanIndex": "1",
+             "ieee8021QBridgeVlanStaticName": "default",
+             "ieee8021QBridgeVlanStaticEgressPorts": "e0 00",
+             "ieee8021QBridgeVlanStaticUntaggedPorts": "60 00",
+             "ieee8021QBridgeVlanStaticForbiddenEgressPorts": ""},
+        ]
+
+        result = self.backend.get_vlan_egress("1/1")
+        self.assertEqual(result[1]["ports"], {"1/1": "tagged"})
+        self.assertNotIn("1/2", result[1]["ports"])
+
+    def test_get_vlan_egress_forbidden(self):
+        """Ports in ForbiddenEgressPorts (not in Egress) show as 'forbidden'."""
+        self.backend._ifindex_map = {"1": "1/1", "2": "1/2"}
+        self.backend.client.get.return_value = [
+            {"ieee8021QBridgeVlanStaticVlanIndex": "10",
+             "ieee8021QBridgeVlanStaticName": "TEST",
+             "ieee8021QBridgeVlanStaticEgressPorts": "80 00",  # 1/1 only
+             "ieee8021QBridgeVlanStaticUntaggedPorts": "80 00",
+             "ieee8021QBridgeVlanStaticForbiddenEgressPorts": "40 00"},  # 1/2 forbidden
+        ]
+
+        result = self.backend.get_vlan_egress()
+        self.assertEqual(result[10]["ports"]["1/1"], "untagged")
+        self.assertEqual(result[10]["ports"]["1/2"], "forbidden")
+
+    def test_get_vlan_egress_empty_vlan_omitted(self):
+        """VLANs with no matching ports after filtering are omitted."""
+        self.backend._ifindex_map = {"1": "1/1", "2": "1/2"}
+        self.backend.client.get.return_value = [
+            {"ieee8021QBridgeVlanStaticVlanIndex": "50",
+             "ieee8021QBridgeVlanStaticName": "EMPTY",
+             "ieee8021QBridgeVlanStaticEgressPorts": "80 00",  # 1/1
+             "ieee8021QBridgeVlanStaticUntaggedPorts": "80 00",
+             "ieee8021QBridgeVlanStaticForbiddenEgressPorts": ""},
+        ]
+
+        result = self.backend.get_vlan_egress("1/2")
+        self.assertNotIn(50, result)
+
+    # ------------------------------------------------------------------
+    # VLAN ingress/egress setters
+    # ------------------------------------------------------------------
+
+    def test_set_vlan_ingress_pvid(self):
+        """Set PVID on a port."""
+        self.backend._ifindex_map = {"3": "1/3"}
+        self.backend.client.set_indexed.return_value = True
+
+        self.backend.set_vlan_ingress("1/3", pvid=100)
+
+        self.backend.client.set_indexed.assert_called_once_with(
+            "Q-BRIDGE-MIB", "dot1qPortVlanEntry",
+            index={"dot1dBasePort": "3"},
+            values={"dot1qPvid": "100"})
+
+    def test_set_vlan_ingress_all_params(self):
+        """Set PVID, frame_types, and ingress_filtering together."""
+        self.backend._ifindex_map = {"3": "1/3"}
+        self.backend.client.set_indexed.return_value = True
+
+        self.backend.set_vlan_ingress("1/3", pvid=5,
+                                      frame_types="admit_only_tagged",
+                                      ingress_filtering=True)
+
+        self.backend.client.set_indexed.assert_called_once_with(
+            "Q-BRIDGE-MIB", "dot1qPortVlanEntry",
+            index={"dot1dBasePort": "3"},
+            values={
+                "dot1qPvid": "5",
+                "dot1qPortAcceptableFrameTypes": "2",
+                "dot1qPortIngressFiltering": "1",
+            })
+
+    def test_set_vlan_ingress_invalid_frame_types(self):
+        self.backend._ifindex_map = {"3": "1/3"}
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.set_vlan_ingress("1/3", frame_types="invalid")
+        self.assertIn("Invalid frame_types", str(ctx.exception))
+
+    def test_set_vlan_ingress_unknown_port(self):
+        self.backend._ifindex_map = {"3": "1/3"}
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.set_vlan_ingress("99/99", pvid=1)
+        self.assertIn("Unknown interface", str(ctx.exception))
+
+    def test_set_vlan_egress_tagged(self):
+        """set_vlan_egress modifies bitmap and writes back via Q-BRIDGE."""
+        self.backend._ifindex_map = {"1": "1/1", "2": "1/2", "3": "1/3"}
+        # Mock get_vlan_egress read path
+        self.backend.client.get.return_value = [
+            {"ieee8021QBridgeVlanStaticVlanIndex": "10",
+             "ieee8021QBridgeVlanStaticName": "TEST",
+             "ieee8021QBridgeVlanStaticEgressPorts": "00 00 00 00",
+             "ieee8021QBridgeVlanStaticUntaggedPorts": "ff ff ff ff",
+             "ieee8021QBridgeVlanStaticForbiddenEgressPorts": ""},
+        ]
+        self.backend.client.set_indexed.return_value = True
+
+        self.backend.set_vlan_egress(10, "1/3", "tagged")
+
+        calls = self.backend.client.set_indexed.call_args_list
+        # Egress + Untagged in first call
+        vals = calls[0].kwargs["values"]
+        self.assertIn("dot1qVlanStaticEgressPorts", vals)
+        self.assertIn("dot1qVlanStaticUntaggedPorts", vals)
+        # Port 3 bit set in egress (0x20), cleared in untagged
+        egress_hex = vals["dot1qVlanStaticEgressPorts"]
+        self.assertTrue(egress_hex.startswith("20"))
+
+    def test_set_vlan_egress_invalid_mode(self):
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.set_vlan_egress(10, "1/1", "invalid")
+        self.assertIn("Invalid mode", str(ctx.exception))
+
+    def test_set_vlan_egress_unknown_port(self):
+        self.backend._ifindex_map = {"1": "1/1"}
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.set_vlan_egress(10, "99/99", "tagged")
+        self.assertIn("Unknown interface", str(ctx.exception))
+
+    def test_set_vlan_egress_nonexistent_vlan(self):
+        """set_vlan_egress raises ValueError for non-existent VLAN."""
+        self.backend._ifindex_map = {"1": "1/1"}
+        self.backend.client.get.return_value = [
+            {"ieee8021QBridgeVlanStaticVlanIndex": "1",
+             "ieee8021QBridgeVlanStaticName": "default",
+             "ieee8021QBridgeVlanStaticEgressPorts": "ff f0 00 00",
+             "ieee8021QBridgeVlanStaticUntaggedPorts": "ff f0 00 00",
+             "ieee8021QBridgeVlanStaticForbiddenEgressPorts": ""},
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.set_vlan_egress(999, "1/1", "tagged")
+        self.assertIn("does not exist", str(ctx.exception))
+
+    # ------------------------------------------------------------------
+    # VLAN CRUD
+    # ------------------------------------------------------------------
+
+    def test_create_vlan(self):
+        self.backend.client.set_indexed.return_value = True
+        self.backend.create_vlan(100, "MGMT")
+        self.backend.client.set_indexed.assert_called_once_with(
+            "Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+            index={"dot1qVlanIndex": "100"},
+            values={
+                "dot1qVlanStaticRowStatus": "4",
+                "dot1qVlanStaticName": "4d 47 4d 54",  # hex "MGMT"
+            })
+
+    def test_create_vlan_no_name(self):
+        self.backend.client.set_indexed.return_value = True
+        self.backend.create_vlan(200)
+        self.backend.client.set_indexed.assert_called_once_with(
+            "Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+            index={"dot1qVlanIndex": "200"},
+            values={"dot1qVlanStaticRowStatus": "4"})
+
+    def test_update_vlan(self):
+        self.backend.client.set_indexed.return_value = True
+        self.backend.update_vlan(100, "NEW-NAME")
+        self.backend.client.set_indexed.assert_called_once_with(
+            "Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+            index={"dot1qVlanIndex": "100"},
+            values={"dot1qVlanStaticName": "4e 45 57 2d 4e 41 4d 45"})
+
+    def test_delete_vlan(self):
+        self.backend.client.set_indexed.return_value = True
+        self.backend.delete_vlan(100)
+        self.backend.client.set_indexed.assert_called_once_with(
+            "Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+            index={"dot1qVlanIndex": "100"},
+            values={"dot1qVlanStaticRowStatus": "6"})
+
+
+class TestEncodePortlistHex(unittest.TestCase):
+    """Test _encode_portlist_hex helper."""
+
+    def test_encode_single_port(self):
+        from napalm_hios.mops_hios import _encode_portlist_hex
+        ifmap = {"1": "1/1", "2": "1/2", "3": "1/3"}
+        result = _encode_portlist_hex(["1/1"], ifmap)
+        self.assertEqual(result, "80")
+
+    def test_encode_multiple_ports(self):
+        from napalm_hios.mops_hios import _encode_portlist_hex
+        ifmap = {"1": "1/1", "2": "1/2", "3": "1/3"}
+        result = _encode_portlist_hex(["1/1", "1/2"], ifmap)
+        self.assertEqual(result, "c0")
+
+    def test_encode_empty(self):
+        from napalm_hios.mops_hios import _encode_portlist_hex
+        result = _encode_portlist_hex([], {"1": "1/1"})
+        self.assertEqual(result, "")
+
+    def test_encode_unknown_port_raises(self):
+        from napalm_hios.mops_hios import _encode_portlist_hex
+        with self.assertRaises(ValueError):
+            _encode_portlist_hex(["99/99"], {"1": "1/1"})
+
+    def test_roundtrip(self):
+        """encode → decode should return the same ports."""
+        from napalm_hios.mops_hios import _encode_portlist_hex
+        ifmap = {"1": "1/1", "2": "1/2", "3": "1/3", "5": "1/5", "6": "1/6"}
+        original = ["1/1", "1/3", "1/5"]
+        encoded = _encode_portlist_hex(original, ifmap)
+        decoded = _decode_portlist_hex(encoded, ifmap)
+        self.assertEqual(sorted(decoded), sorted(original))
+
+
 if __name__ == '__main__':
     unittest.main()

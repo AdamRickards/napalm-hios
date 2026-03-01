@@ -485,6 +485,96 @@ class TestHIOSDriver(unittest.TestCase):
             with self.assertRaises((NotImplementedError, ConnectionException), msg=f"{name}"):
                 getattr(self.device, name)()
 
+    # --- VLAN ingress/egress dispatch ---
+
+    def test_get_vlan_ingress_mops(self):
+        self.device.active_protocol = 'mops'
+        self.mock_connection.get_vlan_ingress.return_value = {
+            '1/1': {'pvid': 1, 'frame_types': 'admit_all', 'ingress_filtering': False},
+        }
+        result = self.device.get_vlan_ingress()
+        self.assertEqual(result['1/1']['pvid'], 1)
+        self.mock_connection.get_vlan_ingress.assert_called_once_with()
+
+    def test_get_vlan_ingress_with_ports(self):
+        self.device.active_protocol = 'snmp'
+        self.mock_connection.get_vlan_ingress.return_value = {
+            '1/5': {'pvid': 3, 'frame_types': 'admit_all', 'ingress_filtering': False},
+        }
+        result = self.device.get_vlan_ingress('1/5')
+        self.mock_connection.get_vlan_ingress.assert_called_once_with('1/5')
+
+    def test_get_vlan_ingress_ssh(self):
+        self.device.active_protocol = 'ssh'
+        self.device.get_vlan_ingress('1/1')
+        self.mock_connection.get_vlan_ingress.assert_called_once_with('1/1')
+
+    def test_get_vlan_egress_mops(self):
+        self.device.active_protocol = 'mops'
+        self.mock_connection.get_vlan_egress.return_value = {
+            1: {'name': 'default', 'ports': {'1/1': 'tagged'}},
+        }
+        result = self.device.get_vlan_egress()
+        self.assertEqual(result[1]['ports']['1/1'], 'tagged')
+
+    def test_get_vlan_egress_ssh(self):
+        self.device.active_protocol = 'ssh'
+        self.device.get_vlan_egress('1/1')
+        self.mock_connection.get_vlan_egress.assert_called_once_with('1/1')
+
+    def test_set_vlan_ingress_mops(self):
+        self.device.active_protocol = 'mops'
+        self.device.set_vlan_ingress('1/3', pvid=100, frame_types='admit_only_tagged')
+        self.mock_connection.set_vlan_ingress.assert_called_once_with(
+            '1/3', pvid=100, frame_types='admit_only_tagged', ingress_filtering=None)
+
+    def test_set_vlan_ingress_ssh(self):
+        self.device.active_protocol = 'ssh'
+        self.device.set_vlan_ingress('1/1', pvid=1)
+        self.mock_connection.set_vlan_ingress.assert_called_once_with(
+            '1/1', pvid=1, frame_types=None, ingress_filtering=None)
+
+    def test_set_vlan_egress_snmp(self):
+        self.device.active_protocol = 'snmp'
+        self.device.set_vlan_egress(100, '1/5', 'tagged')
+        self.mock_connection.set_vlan_egress.assert_called_once_with(100, '1/5', 'tagged')
+
+    def test_set_vlan_egress_ssh(self):
+        self.device.active_protocol = 'ssh'
+        self.device.set_vlan_egress(100, '1/1', 'tagged')
+        self.mock_connection.set_vlan_egress.assert_called_once_with(
+            100, '1/1', 'tagged')
+
+    def test_create_vlan_mops(self):
+        self.device.active_protocol = 'mops'
+        self.device.create_vlan(100, name='MGMT')
+        self.mock_connection.create_vlan.assert_called_once_with(100, name='MGMT')
+
+    def test_create_vlan_ssh(self):
+        self.device.active_protocol = 'ssh'
+        self.device.create_vlan(100, name='TEST')
+        self.mock_connection.create_vlan.assert_called_once_with(100, name='TEST')
+
+    def test_update_vlan_snmp(self):
+        self.device.active_protocol = 'snmp'
+        self.device.update_vlan(100, 'NEW-NAME')
+        self.mock_connection.update_vlan.assert_called_once_with(100, 'NEW-NAME')
+
+    def test_update_vlan_ssh(self):
+        self.device.active_protocol = 'ssh'
+        self.device.update_vlan(100, 'X')
+        self.mock_connection.update_vlan.assert_called_once_with(100, 'X')
+
+    def test_delete_vlan_mops(self):
+        self.device.active_protocol = 'mops'
+        self.device.delete_vlan(100)
+        self.mock_connection.delete_vlan.assert_called_once_with(100)
+
+    def test_delete_vlan_ssh(self):
+        self.device.active_protocol = 'ssh'
+        self.device.delete_vlan(100)
+        self.mock_connection.delete_vlan.assert_called_once_with(100)
+
 
 if __name__ == '__main__':
     unittest.main()

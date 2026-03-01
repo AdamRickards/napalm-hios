@@ -2444,6 +2444,192 @@ class SSHHIOS:
             self._exit_config_mode()
         return self.get_rstp_port(interface)
 
+    def get_vlan_ingress(self, *ports):
+        """Get per-port ingress settings via ``show vlan port``.
+
+        Returns::
+
+            {'1/1': {'pvid': 1, 'frame_types': 'admit_all', 'ingress_filtering': False}}
+        """
+        output = self.cli('show vlan port')['show vlan port']
+        result = {}
+        for fields in parse_table(output, min_fields=4):
+            interface = fields[0]
+            if ports and interface not in ports:
+                continue
+            try:
+                pvid = int(fields[1])
+            except ValueError:
+                continue
+            frame_raw = ' '.join(fields[2:-2])  # "admit all" or "vlan only"
+            if 'vlan only' in frame_raw.lower():
+                frame_types = 'admit_only_tagged'
+            else:
+                frame_types = 'admit_all'
+            filt_raw = fields[-2].lower()
+            ingress_filtering = filt_raw == 'enable'
+            result[interface] = {
+                'pvid': pvid,
+                'frame_types': frame_types,
+                'ingress_filtering': ingress_filtering,
+            }
+        return result
+
+    def get_vlan_egress(self, *ports):
+        """Get per-VLAN-per-port egress membership via ``show vlan id N``.
+
+        Returns::
+
+            {1: {'name': 'default', 'ports': {'1/1': 'untagged', '1/2': 'tagged'}}}
+        """
+        brief_output = self.cli('show vlan brief')['show vlan brief']
+        vlan_ids = []
+        for fields in parse_table(brief_output, min_fields=2):
+            try:
+                vlan_ids.append(int(fields[0]))
+            except ValueError:
+                continue
+
+        result = {}
+        for vlan_id in vlan_ids:
+            cmd = f'show vlan id {vlan_id}'
+            output = self.cli(cmd)[cmd]
+            # Parse VLAN name from header: "VLAN Name...................................ADAM"
+            name = ''
+            for line in output.splitlines():
+                if line.startswith('VLAN Name'):
+                    name = line.split('.')[-1].strip() if '...' in line else ''
+                    break
+            vlan_ports = {}
+            for fields in parse_table(output, min_fields=4):
+                interface = fields[0]
+                if ports and interface not in ports:
+                    continue
+                current = fields[1]
+                configured = fields[2]
+                tagging = fields[3].lower()
+                if current == 'Include':
+                    mode = 'tagged' if tagging == 'tagged' else 'untagged'
+                    vlan_ports[interface] = mode
+                elif configured == 'Exclude':
+                    vlan_ports[interface] = 'forbidden'
+            if vlan_ports:
+                result[vlan_id] = {'name': name, 'ports': vlan_ports}
+        return result
+
+    def set_vlan_ingress(self, port, pvid=None, frame_types=None,
+                         ingress_filtering=None):
+        """Set ingress parameters on a single port.
+
+        Args:
+            port: interface name (e.g. ``'1/1'``)
+            pvid: PVID integer, or None to skip
+            frame_types: ``'admit_all'`` or ``'admit_only_tagged'``, or None
+            ingress_filtering: True/False, or None to skip
+        """
+        self._config_mode()
+        try:
+            output = self.cli(f'interface {port}')
+            resp = output.get(f'interface {port}', '')
+            if 'Error' in resp or 'Invalid' in resp:
+                raise ValueError(f"Unknown interface '{port}'")
+            if pvid is not None:
+                self.cli(f'vlan pvid {pvid}')
+            if frame_types is not None:
+                if frame_types == 'admit_only_tagged':
+                    self.cli('vlan acceptframe vlanonly')
+                else:
+                    self.cli('vlan acceptframe all')
+            if ingress_filtering is not None:
+                if ingress_filtering:
+                    self.cli('vlan ingressfilter enable')
+                else:
+                    self.cli('vlan ingressfilter disable')
+            self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    def set_vlan_egress(self, vlan_id, port, mode):
+        """Set one port's egress membership for one VLAN.
+
+        Args:
+            vlan_id: VLAN ID integer
+            port: interface name (e.g. ``'1/1'``)
+            mode: ``'tagged'``, ``'untagged'``, ``'forbidden'``, or ``'none'``
+        """
+        self._config_mode()
+        try:
+            output = self.cli(f'interface {port}')
+            resp = output.get(f'interface {port}', '')
+            if 'Error' in resp or 'Invalid' in resp:
+                raise ValueError(f"Unknown interface '{port}'")
+            if mode == 'tagged':
+                self.cli(f'vlan participation include {vlan_id}')
+                self.cli(f'vlan tagging {vlan_id}')
+            elif mode == 'untagged':
+                self.cli(f'vlan participation include {vlan_id}')
+                self.cli(f'no vlan tagging {vlan_id}')
+            elif mode == 'forbidden':
+                self.cli(f'vlan participation exclude {vlan_id}')
+            elif mode == 'none':
+                self.cli(f'vlan participation auto {vlan_id}')
+            self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    def _vlan_database(self):
+        """Enter VLAN database context from enable mode.
+
+        Prompt changes from ``#`` to ``(Vlan)#``.
+        """
+        self._enable()
+        self.cli('vlan database')
+
+    def _exit_vlan_database(self):
+        """Exit VLAN database context back to enable mode."""
+        self.cli('exit')
+        self._disable()
+
+    def create_vlan(self, vlan_id, name=''):
+        """Create a VLAN in the VLAN database.
+
+        Args:
+            vlan_id: VLAN ID integer
+            name: optional VLAN name string
+        """
+        self._vlan_database()
+        try:
+            self.cli(f'vlan add {vlan_id}')
+            if name:
+                self.cli(f'name {vlan_id} {name}')
+        finally:
+            self._exit_vlan_database()
+
+    def update_vlan(self, vlan_id, name):
+        """Rename an existing VLAN.
+
+        Args:
+            vlan_id: VLAN ID integer
+            name: new VLAN name string
+        """
+        self._vlan_database()
+        try:
+            self.cli(f'name {vlan_id} {name}')
+        finally:
+            self._exit_vlan_database()
+
+    def delete_vlan(self, vlan_id):
+        """Delete a VLAN from the VLAN database.
+
+        Args:
+            vlan_id: VLAN ID integer
+        """
+        self._vlan_database()
+        try:
+            self.cli(f'vlan delete {vlan_id}')
+        finally:
+            self._exit_vlan_database()
+
     def _parse_speed(self, speed_str):
         speed_map = {
             '10': 10,

@@ -85,7 +85,14 @@ OID_dot1qTpFdbStatus = '1.3.6.1.2.1.17.7.1.2.2.1.3'
 # Q-BRIDGE-MIB VLAN  1.3.6.1.2.1.17.7.1.4.3.1.*
 OID_dot1qVlanStaticName        = '1.3.6.1.2.1.17.7.1.4.3.1.1'
 OID_dot1qVlanStaticEgressPorts = '1.3.6.1.2.1.17.7.1.4.3.1.2'
+OID_dot1qVlanStaticForbiddenEgressPorts = '1.3.6.1.2.1.17.7.1.4.3.1.3'
 OID_dot1qVlanStaticUntaggedPorts = '1.3.6.1.2.1.17.7.1.4.3.1.4'
+OID_dot1qVlanStaticRowStatus = '1.3.6.1.2.1.17.7.1.4.3.1.5'
+
+# Q-BRIDGE-MIB port VLAN  1.3.6.1.2.1.17.7.1.4.5.1.*
+OID_dot1qPvid = '1.3.6.1.2.1.17.7.1.4.5.1.1'
+OID_dot1qPortAcceptableFrameTypes = '1.3.6.1.2.1.17.7.1.4.5.1.2'
+OID_dot1qPortIngressFiltering = '1.3.6.1.2.1.17.7.1.4.5.1.3'
 
 # LLDP-MIB remote table  1.0.8802.1.1.2.1.4.1.1.*
 OID_lldpRemChassisIdSubtype = '1.0.8802.1.1.2.1.4.1.1.4'
@@ -460,6 +467,29 @@ def _decode_portlist(octets, bridge_port_to_name):
                 name = bridge_port_to_name.get(str(port_num), f'port{port_num}')
                 interfaces.append(name)
     return interfaces
+
+
+def _encode_portlist(interfaces, name_to_bp, total_ports=None):
+    """Encode interface names to Q-BRIDGE PortList bitmap (bytes).
+
+    Reverse of _decode_portlist(). Each bit = bridge port number (1-based,
+    MSB of first octet = port 1).
+    """
+    # Determine bitmap size
+    bp_nums = []
+    for iface in interfaces:
+        bp = name_to_bp.get(iface)
+        if bp is None:
+            raise ValueError(f"Unknown interface '{iface}'")
+        bp_nums.append(int(bp))
+    max_port = total_ports or (max(bp_nums) if bp_nums else 0)
+    num_bytes = (max_port + 7) // 8 if max_port else 0
+    bitmap = bytearray(num_bytes)
+    for bp in bp_nums:
+        byte_idx = (bp - 1) // 8
+        bit_idx = (bp - 1) % 8
+        bitmap[byte_idx] |= (0x80 >> bit_idx)
+    return bytes(bitmap)
 
 
 # MRP enum mappings
@@ -1227,6 +1257,241 @@ class SNMPHIOS:
                 'interfaces': interfaces,
             }
         return vlans
+
+    def get_vlan_ingress(self, *ports):
+        """Return per-port ingress settings from Q-BRIDGE-MIB."""
+        return asyncio.run(self._get_vlan_ingress_async(*ports))
+
+    async def _get_vlan_ingress_async(self, *ports):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
+        bp_to_name = {}
+        for bp_num, ifindex_val in bp_data.items():
+            bp_to_name[bp_num] = ifmap.get(str(ifindex_val), f'if{ifindex_val}')
+
+        rows = await self._walk_columns({
+            'pvid': OID_dot1qPvid,
+            'frame_types': OID_dot1qPortAcceptableFrameTypes,
+            'ingress_filtering': OID_dot1qPortIngressFiltering,
+        }, engine)
+
+        port_set = set(ports) if ports else None
+        result = {}
+        for bp_str, cols in rows.items():
+            name = bp_to_name.get(bp_str, f'port{bp_str}')
+            if port_set and name not in port_set:
+                continue
+            ft_val = int(cols.get('frame_types', 1))
+            filt_val = int(cols.get('ingress_filtering', 2))
+            result[name] = {
+                'pvid': int(cols.get('pvid', 1)),
+                'frame_types': 'admit_only_tagged' if ft_val == 2 else 'admit_all',
+                'ingress_filtering': filt_val == 1,
+            }
+        return result
+
+    def get_vlan_egress(self, *ports):
+        """Return per-VLAN-per-port membership (T/U/F) from Q-BRIDGE-MIB."""
+        return asyncio.run(self._get_vlan_egress_async(*ports))
+
+    async def _get_vlan_egress_async(self, *ports):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
+        bp_to_name = {}
+        for bp_num, ifindex_val in bp_data.items():
+            bp_to_name[bp_num] = ifmap.get(str(ifindex_val), f'if{ifindex_val}')
+
+        rows = await self._walk_columns({
+            'name': OID_dot1qVlanStaticName,
+            'egress': OID_dot1qVlanStaticEgressPorts,
+            'untagged': OID_dot1qVlanStaticUntaggedPorts,
+            'forbidden': OID_dot1qVlanStaticForbiddenEgressPorts,
+        }, engine)
+
+        port_set = set(ports) if ports else None
+        vlans = {}
+        for vlan_id_str, cols in rows.items():
+            try:
+                vlan_id = int(vlan_id_str)
+            except ValueError:
+                continue
+            name = str(cols.get('name', f'VLAN{vlan_id}'))
+            egress_ifaces = set(_decode_portlist(cols.get('egress', b''), bp_to_name))
+            untagged_ifaces = set(_decode_portlist(cols.get('untagged', b''), bp_to_name))
+            forbidden_ifaces = set(_decode_portlist(cols.get('forbidden', b''), bp_to_name))
+
+            port_modes = {}
+            for iface in egress_ifaces:
+                if port_set and iface not in port_set:
+                    continue
+                if iface in untagged_ifaces:
+                    port_modes[iface] = 'untagged'
+                else:
+                    port_modes[iface] = 'tagged'
+            for iface in forbidden_ifaces:
+                if iface not in egress_ifaces:
+                    if port_set and iface not in port_set:
+                        continue
+                    port_modes[iface] = 'forbidden'
+
+            if port_modes:
+                vlans[vlan_id] = {'name': name, 'ports': port_modes}
+        return vlans
+
+    def set_vlan_ingress(self, port, pvid=None, frame_types=None,
+                         ingress_filtering=None):
+        """Set ingress parameters on a single port via SNMP."""
+        return asyncio.run(self._set_vlan_ingress_async(
+            port, pvid, frame_types, ingress_filtering))
+
+    async def _set_vlan_ingress_async(self, port, pvid, frame_types,
+                                       ingress_filtering):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
+        name_to_bp = {}
+        for bp_num, ifindex_val in bp_data.items():
+            name = ifmap.get(str(ifindex_val), f'if{ifindex_val}')
+            name_to_bp[name] = bp_num
+
+        bp = name_to_bp.get(port)
+        if bp is None:
+            raise ValueError(f"Unknown interface '{port}'")
+
+        sets = []
+        if pvid is not None:
+            sets.append((f"{OID_dot1qPvid}.{bp}",
+                         Unsigned32(int(pvid))))
+        if frame_types is not None:
+            if frame_types == 'admit_only_tagged':
+                val = 2
+            elif frame_types == 'admit_all':
+                val = 1
+            else:
+                raise ValueError(
+                    f"Invalid frame_types '{frame_types}': "
+                    f"use 'admit_all' or 'admit_only_tagged'")
+            sets.append((f"{OID_dot1qPortAcceptableFrameTypes}.{bp}",
+                         Integer32(val)))
+        if ingress_filtering is not None:
+            sets.append((f"{OID_dot1qPortIngressFiltering}.{bp}",
+                         Integer32(1 if ingress_filtering else 2)))
+        if sets:
+            await self._set_oids(*sets)
+
+    def set_vlan_egress(self, vlan_id, port, mode):
+        """Set one port's VLAN membership via SNMP."""
+        return asyncio.run(self._set_vlan_egress_async(vlan_id, port, mode))
+
+    async def _set_vlan_egress_async(self, vlan_id, port, mode):
+        if mode not in ('tagged', 'untagged', 'forbidden', 'none'):
+            raise ValueError(
+                f"Invalid mode '{mode}': use 'tagged', 'untagged', "
+                f"'forbidden', or 'none'")
+
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
+        bp_to_name = {}
+        name_to_bp = {}
+        for bp_num, ifindex_val in bp_data.items():
+            name = ifmap.get(str(ifindex_val), f'if{ifindex_val}')
+            bp_to_name[bp_num] = name
+            name_to_bp[name] = bp_num
+
+        bp = name_to_bp.get(port)
+        if bp is None:
+            raise ValueError(f"Unknown interface '{port}'")
+        bp_int = int(bp)
+
+        # Read current bitmaps for this VLAN
+        vid = str(vlan_id)
+        rows = await self._walk_columns({
+            'egress': OID_dot1qVlanStaticEgressPorts,
+            'untagged': OID_dot1qVlanStaticUntaggedPorts,
+            'forbidden': OID_dot1qVlanStaticForbiddenEgressPorts,
+        }, engine)
+
+        if vid not in rows:
+            raise ValueError(f"VLAN {vlan_id} does not exist")
+
+        egress_raw = rows[vid].get('egress', b'')
+        untagged_raw = rows[vid].get('untagged', b'')
+        forbidden_raw = rows[vid].get('forbidden', b'')
+
+        # Convert to mutable bytearrays (handle pysnmp OctetString)
+        def _to_bytearray(val):
+            if isinstance(val, (bytes, bytearray)):
+                return bytearray(val)
+            if hasattr(val, 'asOctets'):
+                return bytearray(val.asOctets())
+            return bytearray(bytes(val))
+
+        egress = _to_bytearray(egress_raw)
+        untagged = _to_bytearray(untagged_raw)
+        forbidden = _to_bytearray(forbidden_raw)
+
+        # Ensure arrays are long enough
+        byte_idx = (bp_int - 1) // 8
+        bit_mask = 0x80 >> ((bp_int - 1) % 8)
+        for arr in (egress, untagged, forbidden):
+            while len(arr) <= byte_idx:
+                arr.append(0)
+
+        # Modify bitmaps based on mode
+        if mode == 'tagged':
+            egress[byte_idx] |= bit_mask
+            untagged[byte_idx] &= ~bit_mask
+            forbidden[byte_idx] &= ~bit_mask
+        elif mode == 'untagged':
+            egress[byte_idx] |= bit_mask
+            untagged[byte_idx] |= bit_mask
+            forbidden[byte_idx] &= ~bit_mask
+        elif mode == 'forbidden':
+            egress[byte_idx] &= ~bit_mask
+            untagged[byte_idx] &= ~bit_mask
+            forbidden[byte_idx] |= bit_mask
+        elif mode == 'none':
+            egress[byte_idx] &= ~bit_mask
+            untagged[byte_idx] &= ~bit_mask
+            forbidden[byte_idx] &= ~bit_mask
+
+        await self._set_oids(
+            (f"{OID_dot1qVlanStaticEgressPorts}.{vid}",
+             OctetString(bytes(egress))),
+            (f"{OID_dot1qVlanStaticUntaggedPorts}.{vid}",
+             OctetString(bytes(untagged))),
+            (f"{OID_dot1qVlanStaticForbiddenEgressPorts}.{vid}",
+             OctetString(bytes(forbidden))),
+        )
+
+    def create_vlan(self, vlan_id, name=''):
+        """Create a VLAN in the VLAN database via SNMP."""
+        return asyncio.run(self._create_vlan_async(vlan_id, name))
+
+    async def _create_vlan_async(self, vlan_id, name):
+        sets = [(f"{OID_dot1qVlanStaticRowStatus}.{vlan_id}",
+                 Integer32(4))]  # createAndGo
+        if name:
+            sets.append((f"{OID_dot1qVlanStaticName}.{vlan_id}",
+                         OctetString(name)))
+        await self._set_oids(*sets)
+
+    def update_vlan(self, vlan_id, name):
+        """Rename an existing VLAN via SNMP."""
+        return asyncio.run(self._set_oids(
+            (f"{OID_dot1qVlanStaticName}.{vlan_id}",
+             OctetString(name)),
+        ))
+
+    def delete_vlan(self, vlan_id):
+        """Delete a VLAN from the VLAN database via SNMP."""
+        return asyncio.run(self._set_oids(
+            (f"{OID_dot1qVlanStaticRowStatus}.{vlan_id}",
+             Integer32(6)),  # destroy
+        ))
 
     def get_snmp_information(self):
         """Return SNMP information from SNMPv2-MIB.

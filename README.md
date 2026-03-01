@@ -14,10 +14,11 @@ NAPALM driver for Hirschmann HiOS industrial switches by Belden. Three protocols
 - **Factory lifecycle** — detect and onboard factory-fresh HiOS 10.3+ devices, clear to defaults or full factory reset
 - **Config profiles** — list, activate, delete NVM/ENVM config profiles with fingerprint tracking
 - **HiDiscovery** — read/set discovery protocol mode (on/off/read-only) with blinking control
+- **VLAN Ingress/Egress** — per-port ingress settings (PVID, frame types, filtering), per-VLAN egress membership (T/U/F), VLAN CRUD
 - **Auto-Disable** — per-port timer/status monitoring, reason control, port reset
 - **Loop Protection** — heartbeat-based loop detection with per-port and global config
 - **Extended LLDP** — 802.1/802.3 org-specific TLVs, multiple management addresses, autoneg, VLAN membership
-- 344 unit tests and live device validation on BRS50 and GRS1042
+- 413 unit tests and live device validation on BRS50 and GRS1042
 
 ## Installation
 
@@ -70,10 +71,10 @@ device.close()
 ### Vendor-specific
 
 **Read:**
-`get_mrp` | `get_mrp_sub_ring` | `get_hidiscovery` | `get_rstp` | `get_rstp_port` | `get_auto_disable` | `get_loop_protection` | `get_lldp_neighbors_detail_extended` | `get_config_status` | `get_profiles` | `get_config_fingerprint` | `is_factory_default`
+`get_mrp` | `get_mrp_sub_ring` | `get_hidiscovery` | `get_rstp` | `get_rstp_port` | `get_auto_disable` | `get_loop_protection` | `get_vlan_ingress` | `get_vlan_egress` | `get_lldp_neighbors_detail_extended` | `get_config_status` | `get_profiles` | `get_config_fingerprint` | `is_factory_default`
 
 **Write:**
-`set_interface` | `set_mrp` | `delete_mrp` | `set_mrp_sub_ring` | `delete_mrp_sub_ring` | `set_hidiscovery` | `set_rstp` | `set_rstp_port` | `set_auto_disable` | `reset_auto_disable` | `set_auto_disable_reason` | `set_loop_protection` | `save_config` | `clear_config` | `clear_factory` | `activate_profile` | `delete_profile` | `onboard`
+`set_interface` | `set_mrp` | `delete_mrp` | `set_mrp_sub_ring` | `delete_mrp_sub_ring` | `set_hidiscovery` | `set_rstp` | `set_rstp_port` | `set_auto_disable` | `reset_auto_disable` | `set_auto_disable_reason` | `set_loop_protection` | `set_vlan_ingress` | `set_vlan_egress` | `create_vlan` | `update_vlan` | `delete_vlan` | `save_config` | `clear_config` | `clear_factory` | `activate_profile` | `delete_profile` | `onboard`
 
 See [docs/vendor_specific.md](docs/vendor_specific.md) for arguments, return values, and protocol behaviour.
 
@@ -92,7 +93,7 @@ MOPS is the default and preferred protocol. SSH lazy-connects on demand for SSH-
 ## Testing
 
 ```bash
-# Unit tests (375+)
+# Unit tests (413+)
 pytest tests/unit/ -v
 
 # Live device test

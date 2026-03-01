@@ -19,74 +19,53 @@
 15. Test PyPI-deployed version against local test environment
 16. Done
 
+## Vendor-specific methods (driver)
+
+- [ ] `get_sflow()` / `set_sflow()` — global sFlow config + per-port sampling. MIBs: SFLOW-MIB (RFC 3176) + HM2-PLATFORM-SFLOW-MIB. MOPS + SNMP, SSH stub. **Unlocks**: [SNOOP](tools/snoop/TODO.md)
+- [ ] `get_tftp()` / `set_tftp()` — TFTP config management. Two functions: manual config pull from TFTP server, and enable/disable auto-backup on save. **Unlocks**: [POLO](tools/polo/TODO.md), MOHAWC `--tftp-pull`
+
 ## CLAMPS
 
-- [ ] Zero-config discovery mode — LLDP-driven topology discovery, zero arguments needed. See [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
-- [ ] MOPS staging/commit for performance (one commit per phase, not per-port)
+See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 
-## AARON — auto-entry detection
+- [ ] MOPS staging/commit for performance (one commit per phase, not per-port → ~80% reduction in HTTP requests)
+- [ ] Zero-config discovery mode — LLDP-driven topology discovery
+- [ ] `--gather` mode — Phase 0 only, read-only audit
+- [ ] `-fi` support — read device list from [site index](tools/SITE_INDEX.md)
+- [ ] Site index enrichment — write ring/protection state back to site.json
 
-Local machine identity detection added (`get_local_identity()`): detects own IP via socket + own MACs via `/sys/class/net/*/address` (Linux) or `getmac` (Windows). Injects into ARP map so the scanning machine resolves on its edge port.
+## AARON
 
-Testing needed for auto-entry reliability:
-- [ ] Basic test: laptop plugged directly into managed switch — does it find itself on an edge port?
-- [ ] Through unmanaged switch: laptop behind dumb switch — does it find itself on an indirect port?
-- [ ] Multiple NICs: laptop with WiFi + Ethernet — does it match the right MAC (the one on the switch network)?
-- [ ] VPN/virtual adapters: do extra MACs from VPN/Docker/WSL cause false matches?
-- [ ] Cross-subnet: laptop on different VLAN/subnet from switch management — does socket trick still find the right IP?
-- [ ] Auto-entry: once we can reliably find our own switch+port, use it as `--entry` for MOHAWC/VINNY topology ordering
+- [ ] Auto-entry detection — `get_local_identity()` testing (direct, through unmanaged switch, multi-NIC, VPN adapters, cross-subnet)
+- [ ] `--seed IP` — LLDP BFS crawl, creates [site index](tools/SITE_INDEX.md) in one pass
 
 ## MOHAWC
 
-- [ ] `set-ip` subcommand — set management IP/netmask/gateway on a device via MOPS. Needs a new driver method (`set_management_ip()` or similar) since `set_hidiscovery()` only toggles mode, and `onboard()` only sets password. Currently no way to change IP over L3 without the web UI.
-- [ ] `reboot` subcommand — cold start (full power cycle) and warm start (software restart) options. Needs napalm-hios vendor methods (`cold_start()` / `warm_start()` or `reboot(mode='cold'|'warm')`).
+- [ ] `set-ip` subcommand — needs driver `set_management_ip()` or similar
+- [ ] `reboot` subcommand — cold/warm start, needs driver `cold_start()` / `warm_start()`
+- [ ] `--tftp-pull <switch> <tftp-server> <config-file>` — force config pull, wraps `set_tftp()`. Used by [POLO](tools/polo/TODO.md) escalation
 
-## Vendor-specific getters
+## Tool design docs
 
-- [ ] `get_vlan_ports()` — per-interface VLAN config: PVID, access/trunk mode, ingress filtering, acceptable frame types. Source: Q-BRIDGE-MIB (`dot1qPvid`, `dot1qVlanStaticEgressPorts`, `dot1qVlanStaticUntaggedPorts`). Needed for NILS edge port health checks and device type detection.
-- [ ] `set_vlan()` / `set_vlan_ports()` — create/delete VLANs, set per-port T/U/PVID membership. No port roles on Hirschmann (respects the ASIC) — tool must explicitly set Tagged/Untagged/PVID per port per VLAN.
-
-## VLAN deployment tool
-
-Fleet-wide VLAN provisioning. Depends on `get_vlan_ports()` + `set_vlan()` / `set_vlan_ports()`.
-
-- [ ] Find a name (backronym tradition)
-- [ ] Add VLAN: `tool.py --add-vlan 5 --name "Pizzagate"` — create VLAN table entry across fleet
-- [ ] Auto-trunk: `-T` flag — auto-tag on any port with LLDP neighbor to another switch in the device list. Hirschmann has no port roles — we explicitly set T per port, LLDP tells us which ports are inter-switch
-- [ ] Access port: `--access-port 5 1/1-1/8` — set PVID, set U, remove other VLAN membership for those ports. Port range syntax: `1/1-1/8`, `1/1,1/3,1/5`, `1/1-1/8,2/1-2/4`
-- [ ] CSV export: `tool.py --export vlans.csv` — dump all interfaces with current VLAN membership (PVID, T, U) from fleet to CSV
-- [ ] CSV import: `tool.py --import vlans.csv` — read edited CSV back in, diff against live state, apply changes. Same file format both ways — dump, edit, apply
-- [ ] Compact config format: `tool.py -f VLANset.cfg` — one line per interface: `ip interface pvid [vlan_id,T/U/-]` with multiple VLANs per interface on egress in one line
-- [ ] `--entry ip interface` — specify network entry point for topology-safe ordering:
-  - LLDP BFS from entry to map topology (same pattern as MOHAWC `--entry` reset ordering)
-  - Detect if changes affect connectivity from entry point (current PVID, management VLAN)
-  - Apply uplink changes in reverse order (furthest-first) if they affect our path
-- [ ] **Management VLAN migration** — the ultimate feature:
-  1. Add new VLAN structure across entire network first (safe — additive only)
-  2. Change management VLAN + PVID on furthest switches first, work backwards toward entry
-  3. At entry switch: set both current and new management VLAN as U on local port, then change management VLAN + port PVID in one MOPS exchange (atomic)
-  4. Never lose access from entry point at any step
-- [ ] Dry-run, protocol selection, banner/footer (standard tool patterns)
-- Working name idea: VINNY — VLAN Interactive Network N...Y?
+- [SNOOP](tools/snoop/TODO.md) — sFlow/syslog/traps passive listener, enrichment dicts, anomaly detection
+- [VIKTOR](tools/viktor/TODO.md) — fleet VLAN provisioning, `-m` ring selector, audit, management VLAN migration
+- [POLO](tools/polo/TODO.md) — dnsmasq registry, MARCO/POLO self-healing loop
+- [Site Index](tools/SITE_INDEX.md) — shared `-fi` cross-tool JSON, master CLI, PyPI extras
+- [Architecture](tools/ARCHITECTURE.md) — 8 key design insights
 
 ## CLI Reference Parser
 
 - [ ] Parse `local/RM_CLI_HiOS-10300_Overview_en.pdf` (500+ pages) into structured JSON
-- [ ] Per-command metadata: section, title, page, command string, mode (global_config/interface_range/privileged_exec), privilege level, negate form, params with allowed values, description
-- [ ] Separate `commands` vs `show_commands` per section
-- [ ] Output: `local/cli_reference.json` — grepping/filtering replaces reading PDF pages
-- [ ] Speeds up all future SSH backend work (auto-disable, loop prot, RSTP, VLANs, etc.)
+- [ ] Per-command metadata: section, title, page, command string, mode, privilege level, negate form, params
+- [ ] Output: `local/cli_reference.json` — speeds up all future SSH backend work
 
 ## Future — Config import/export + firmware update
 
 - [ ] Config export: download running config as XML/profile via MOPS HTTPS endpoints
 - [ ] Config import: upload profile/XML to device, activate as running config
 - [ ] Firmware update: upload firmware image, trigger install + reboot
-- Profile import is the high-value target — deploy a known-good config to fleet via napalm-hios
 
 ## Backburner
 
 ### get_config via SNMP
-Investigated extensively — walked the entire Hirschmann enterprise OID tree (17,132 OIDs) and found no config XML or text blob available via SNMP. The HiOS web UI (Industrial HiVision, MOPS) retrieves configuration via HTTPS/TLS, not SNMP — it uses a combination of HTTPS for config transfer and SNMP for individual value reads/writes. The running-config as a single retrievable object does not exist in any standard or private MIB.
-
-A future approach could replicate the HTTPS mechanism: authenticate to the device's web interface and download the config XML directly, then present it through `get_config()`. This would require understanding the exact HTTPS endpoints and authentication flow. For now, `get_config()` remains SSH-only.
+Investigated extensively — walked the entire Hirschmann enterprise OID tree (17,132 OIDs) and found no config XML or text blob available via SNMP. The running-config as a single retrievable object does not exist in any standard or private MIB. Future approach: replicate the HTTPS mechanism (authenticate to web interface, download config XML). For now, `get_config()` remains SSH-only.
