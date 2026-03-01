@@ -75,3 +75,8 @@ local/
 
 # Vendor MIB files (reference only, from firmware)
 MIBs/
+
+# Runtime artifacts
+.pytest_cache/
+.wrangler/
+logs/
