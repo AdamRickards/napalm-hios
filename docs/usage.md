@@ -100,6 +100,7 @@ device.close()
 ### Vendor-specific read methods (MOPS + SNMP + SSH)
 
 - `get_mrp()` — MRP ring redundancy status
+- `get_mrp_sub_ring()` — MRP sub-ring (SRM) configuration and state
 - `get_hidiscovery()` — HiDiscovery protocol status
 - `get_rstp()` — global STP/RSTP configuration and state
 - `get_rstp_port()` — per-port STP/RSTP state
@@ -115,6 +116,8 @@ device.close()
 
 - `set_mrp()` — configure MRP ring on default domain
 - `delete_mrp()` — disable and delete MRP domain
+- `set_mrp_sub_ring()` — configure MRP sub-ring (SRM) instance
+- `delete_mrp_sub_ring()` — delete sub-ring instance or disable SRM globally
 - `set_hidiscovery()` — set HiDiscovery mode (on/off/read-only)
 - `set_rstp()` — set global STP/RSTP configuration
 - `set_rstp_port()` — set per-port STP/RSTP configuration

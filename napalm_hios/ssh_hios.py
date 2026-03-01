@@ -1521,6 +1521,206 @@ class SSHHIOS:
 
         return self.get_mrp()
 
+    # SRM CLI mode values → API values
+    _SRM_MODE_MAP = {
+        'manager': 'manager',
+        'redundant-manager': 'redundantManager',
+        'redundantmanager': 'redundantManager',
+        'single-manager': 'singleManager',
+        'singlemanager': 'singleManager',
+    }
+    _SRM_MODE_REV = {
+        'manager': 'manager',
+        'redundantManager': 'redundant-manager',
+        'singleManager': 'single-manager',
+    }
+    _SRM_REDUNDANCY_MAP = {
+        'redguaranteed': True,
+        'rednotguaranteed': False,
+    }
+    _SRM_CONFIG_INFO_MAP = {
+        'noerror': 'no error',
+        'ringportlinkerror': 'ring port link error',
+        'multiplesrm': 'multiple SRM',
+        'nopartnermanager': 'no partner manager',
+        'concurrentvlan': 'concurrent VLAN',
+        'concurrentport': 'concurrent port',
+        'concurrentredundancy': 'concurrent redundancy',
+        'trunkmember': 'trunk member',
+        'sharedvlan': 'shared VLAN',
+    }
+
+    def get_mrp_sub_ring(self):
+        """Return MRP sub-ring (SRM) configuration and operating state."""
+        # Global scalars
+        global_out = self.cli('show sub-ring global')['show sub-ring global']
+        gdata = parse_dot_keys(global_out)
+        enabled = gdata.get('Global admin state', 'disabled').lower() == 'enabled'
+        try:
+            max_instances = int(gdata.get('Max instances', '8'))
+        except ValueError:
+            max_instances = 8
+
+        # Instance table
+        ring_out = self.cli('show sub-ring ring')['show sub-ring ring']
+        if 'No entry' in ring_out:
+            return {'enabled': enabled, 'max_instances': max_instances, 'instances': []}
+
+        # Extract ring IDs from the table — first number on data lines
+        ring_ids = []
+        for line in ring_out.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith('Index') or stripped.startswith('--') or stripped.startswith('Active'):
+                continue
+            # Data line 1 starts with the index number
+            parts = stripped.split()
+            if parts and parts[0].isdigit():
+                ring_ids.append(int(parts[0]))
+
+        instances = []
+        for rid in ring_ids:
+            detail_out = self.cli(f'show sub-ring ring {rid}')[f'show sub-ring ring {rid}']
+            d = parse_dot_keys(detail_out)
+
+            # Mode mapping
+            admin_raw = d.get('Administrative state', '').lower().replace(' ', '')
+            mode = self._SRM_MODE_MAP.get(admin_raw, admin_raw)
+            oper_raw = d.get('Operational state', '').lower().replace(' ', '')
+            mode_actual = self._SRM_MODE_MAP.get(oper_raw, oper_raw)
+            if oper_raw == 'disabled':
+                mode_actual = 'disabled'
+
+            # Domain ID: "255.255.255..." decimal dotted → "ff:ff:ff..." hex colon
+            domain_raw = d.get('MRP domain id', '')
+            if domain_raw:
+                try:
+                    domain_id = ':'.join(f'{int(b):02x}' for b in domain_raw.split('.'))
+                except (ValueError, AttributeError):
+                    domain_id = domain_raw
+            else:
+                domain_id = 'ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff'
+
+            # Redundancy
+            red_raw = d.get('Redundancy operational state', '').lower().replace(' ', '')
+            redundancy = self._SRM_REDUNDANCY_MAP.get(red_raw, False)
+
+            # Config info
+            info_raw = d.get('Configuration operational state', '').lower().replace(' ', '')
+            info = self._SRM_CONFIG_INFO_MAP.get(info_raw, d.get('Configuration operational state', ''))
+
+            # Active field: "[ ]" = False, "[X]" = True
+            active_raw = d.get('Active', '[ ]').strip()
+            # active = active_raw == '[X]'  # not used in return — global 'enabled' covers it
+
+            try:
+                vlan = int(d.get('Vlan id', '0'))
+            except ValueError:
+                vlan = 0
+
+            instances.append({
+                'ring_id': rid,
+                'mode': mode,
+                'mode_actual': mode_actual,
+                'vlan': vlan,
+                'domain_id': domain_id,
+                'partner_mac': d.get('Partner MAC', ''),
+                'protocol': d.get('Protocol', ''),
+                'name': d.get('Name', ''),
+                'port': d.get('Port', ''),
+                'port_state': d.get('Port operational state', ''),
+                'ring_state': d.get('Sub-ring operational state', ''),
+                'redundancy': redundancy,
+                'info': info,
+            })
+
+        return {'enabled': enabled, 'max_instances': max_instances, 'instances': instances}
+
+    def set_mrp_sub_ring(self, ring_id=None, enabled=None, mode='manager',
+                         port=None, vlan=None, name=None):
+        """Configure MRP sub-ring (SRM) via SSH.
+
+        Global operation (ring_id=None):
+            set_mrp_sub_ring(enabled=True)   — enable SRM globally
+            set_mrp_sub_ring(enabled=False)  — disable SRM globally
+
+        Instance operation (ring_id provided):
+            Creates/modifies an SRM instance. Auto-enables global SRM.
+        """
+        if mode not in self._SRM_MODE_REV:
+            raise ValueError(f"mode must be one of {list(self._SRM_MODE_REV)}, got '{mode}'")
+
+        self._config_mode()
+        try:
+            # Global enable/disable
+            if enabled is not None:
+                if enabled:
+                    self.cli('sub-ring operation')
+                else:
+                    self.cli('no sub-ring operation')
+
+            if ring_id is not None:
+                # Auto-enable global SRM
+                if enabled is None:
+                    self.cli('sub-ring operation')
+
+                # Check if instance already exists
+                instance_exists = False
+                try:
+                    check = self.cli(f'show sub-ring ring {ring_id}')[f'show sub-ring ring {ring_id}']
+                    if 'No entry' not in check and 'Index' in check:
+                        instance_exists = True
+                except Exception:
+                    pass
+
+                mode_cli = self._SRM_MODE_REV.get(mode, mode)
+                if instance_exists:
+                    # Modify existing
+                    cmd = f'sub-ring modify {ring_id}'
+                    if mode:
+                        cmd += f' mode {mode_cli}'
+                    if vlan is not None:
+                        cmd += f' vlan {vlan}'
+                    if port:
+                        cmd += f' port {port}'
+                    if name:
+                        cmd += f' name {name}'
+                    self.cli(cmd)
+                else:
+                    # Create new
+                    cmd = f'sub-ring add {ring_id}'
+                    cmd += f' mode {mode_cli}'
+                    if vlan is not None:
+                        cmd += f' vlan {vlan}'
+                    if port:
+                        cmd += f' port {port}'
+                    if name:
+                        cmd += f' name {name}'
+                    self.cli(cmd)
+
+                # Enable the instance
+                self.cli(f'sub-ring enable {ring_id}')
+        finally:
+            self._exit_config_mode()
+
+        return self.get_mrp_sub_ring()
+
+    def delete_mrp_sub_ring(self, ring_id=None):
+        """Delete sub-ring instance or disable SRM globally."""
+        self._config_mode()
+        try:
+            if ring_id is None:
+                self.cli('no sub-ring operation')
+            else:
+                try:
+                    self.cli(f'sub-ring disable {ring_id}')
+                except Exception:
+                    pass
+                self.cli(f'sub-ring delete {ring_id}')
+        finally:
+            self._exit_config_mode()
+
+        return self.get_mrp_sub_ring()
+
     def set_interface(self, interface, enabled=None, description=None):
         """Set interface admin state and/or description via SSH.
 

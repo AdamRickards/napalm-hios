@@ -226,6 +226,93 @@ result = device.delete_mrp()
 
 ---
 
+## MRP Sub-Ring (SRM)
+
+Sub-ring support for MRP. A sub-ring branches off a main MRP ring at two
+branch-point devices (SRM and RSRM). Sub-ring clients are configured as
+regular MRP clients on a different VLAN.
+
+**Protocols**: MOPS, SNMP, SSH.
+
+### get_mrp_sub_ring()
+
+Returns sub-ring (SRM) configuration and operating state.
+
+```python
+result = device.get_mrp_sub_ring()
+```
+
+```python
+{
+    'enabled': True,                  # global SRM admin state
+    'max_instances': 8,               # max sub-ring instances (read-only)
+    'instances': [
+        {
+            'ring_id': 1,
+            'mode': 'manager',            # admin: manager / redundantManager / singleManager
+            'mode_actual': 'manager',     # oper: manager / redundantManager / singleManager / disabled
+            'vlan': 200,
+            'domain_id': 'ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff',
+            'partner_mac': '00:80:63:A1:B2:C3',
+            'protocol': 'mrp',
+            'name': '',
+            'port': '1/3',
+            'port_state': 'forwarding',   # disabled / blocked / forwarding / not-connected
+            'ring_state': 'closed',       # undefined / open / closed
+            'redundancy': True,           # True = guaranteed, False = not guaranteed
+            'info': 'no error',
+        },
+    ]
+}
+
+# When nothing configured:
+{'enabled': False, 'max_instances': 8, 'instances': []}
+```
+
+### set_mrp_sub_ring(ring_id, enabled, mode, port, vlan, name)
+
+Configure SRM globally or create/modify a sub-ring instance.
+
+```python
+# Enable SRM globally
+device.set_mrp_sub_ring(enabled=True)
+
+# Create a sub-ring instance (auto-enables global SRM)
+device.set_mrp_sub_ring(
+    ring_id=1,
+    mode='manager',          # 'manager', 'redundantManager', or 'singleManager'
+    port='1/3',
+    vlan=200,
+    name='sub-ring-1',       # optional
+)
+
+# Configure redundant manager on the other branch-point device
+device.set_mrp_sub_ring(
+    ring_id=1,
+    mode='redundantManager',
+    port='1/3',
+    vlan=200,
+)
+```
+
+**Returns** the result of `get_mrp_sub_ring()` after configuration.
+
+### delete_mrp_sub_ring(ring_id)
+
+Delete a sub-ring instance or disable SRM globally.
+
+```python
+# Delete a specific instance
+device.delete_mrp_sub_ring(ring_id=1)
+
+# Disable SRM globally (no ring_id)
+device.delete_mrp_sub_ring()
+```
+
+**Returns** the result of `get_mrp_sub_ring()` after deletion.
+
+---
+
 ## RSTP — Rapid Spanning Tree Protocol
 
 ### get_rstp()

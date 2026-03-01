@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.7.0 — 2026-03-01
+
+### MRP Sub-Ring (SRM) — all 3 protocols
+
+Sub-ring management for MRP, implemented on MOPS, SNMP, and SSH:
+
+- **`get_mrp_sub_ring()`** — global SRM state (enabled, max_instances) and per-instance details (mode, vlan, port, ring_state, redundancy, partner_mac, domain_id, info). L2S devices return empty result gracefully on all protocols.
+- **`set_mrp_sub_ring(ring_id, enabled, mode, port, vlan, name)`** — enable SRM globally and/or create/modify sub-ring instances. Auto-enables global SRM when creating an instance. Modes: `manager`, `redundantManager`, `singleManager`.
+- **`delete_mrp_sub_ring(ring_id)`** — delete a specific instance or disable SRM globally. Idempotent — deleting a non-existent instance returns current state without error.
+
+### Protocol-specific fixes
+
+- **MOPS domain_id encoding**: `\xFF` bytes in `hm2SrmMRPDomainID` are mangled to U+FFFD by XML decoder (`decode_strings=False` pattern). Fixed with explicit `'\ufffd'` → `'ff'` mapping.
+- **MOPS partner_mac encoding**: same binary mangling — fixed via `_try_mac()` helper.
+- **SNMP L2S handling**: `createAndWait` on `hm2SrmRowStatus` returns `noSuchName` on L2S (OID doesn't exist). Wrapped in `try/except ConnectionException` for graceful early return.
+- **SSH domain_id format**: CLI shows decimal-dotted (`255.255.255...`), converted to hex-colon (`ff:ff:ff:...`) to match MOPS/SNMP output.
+
+### CLAMPS — sub-ring support
+
+The S in CLAMPS is no longer aspirational:
+
+- **Config format**: `SRM <vlan> <port>`, `RSRM <vlan> <port>`, `RC <vlan> [p1 p2]` lines in script.cfg. Devices grouped by VLAN into `config['rings']` dict.
+- **Deploy Phase 6**: Configure sub-ring RCs (standard `set_mrp` with sub-ring VLAN) + SRM/RSRM branch points (`set_mrp_sub_ring`), parallelised per sub-ring.
+- **Deploy Phase 7**: Verify sub-ring health on SRM device (ring_state=closed, redundancy=True) with 3x retry.
+- **Undeploy Step 1**: Sub-ring teardown before main ring — delete SRM instances, disable SRM globally, delete MRP on sub-ring RCs.
+- **Edge protection**: `get_ring_ports_for_device()` builds combined ring port set across all rings (main + sub-rings) for correct port classification.
+- **Banner**: Shows main ring and sub-rings with port layout and role labels.
+
+### Unit tests
+
+- 12 new tests (6 MOPS + 6 SNMP): empty/populated get, global enable, create instance, unknown port, delete.
+- 356 total passing.
+
+### Documentation
+
+- **vendor_specific.md**: new MRP Sub-Ring section, updated protocol line to include SSH.
+- **protocols.md**: added `get_mrp_sub_ring` and `set/delete_mrp_sub_ring` to availability matrix.
+- **usage.md**: added 3 SRM methods to vendor-specific read/write lists.
+- **README.md**: added SRM methods to supported methods lists.
+- **script.cfg**: updated with sub-ring config syntax and examples.
+
 ## 1.6.0 — 2026-02-28
 
 ### Auto-Disable — all 3 protocols
@@ -50,6 +91,10 @@ RSTP was MOPS-only since 1.4.2. Now all 3 protocols produce identical output:
 - **protocols.md**: added 6 methods to availability matrix, 4 new cross-protocol diffs (#12 tpid_type, #13 L2S loop prot, #14 L2S auto-disable reasons, #15 timer reset quirk).
 - **usage.md**: added 6 new methods to Available Methods.
 - **CLI_REFERENCE.md**: added §6 Auto Disable and §64 Loop Protection command mappings.
+
+### CLAMPS tool release
+
+- New tool: `tools/clamps/` — MRP ring deployment + edge protection (clamp.py, unclamp.py). See `tools/clamps/README.md`.
 
 ### Version bump
 

@@ -80,7 +80,15 @@ def is_port(s: str) -> bool:
 
 
 def parse_config(config_file: str) -> dict:
-    """Parse script.cfg into global settings and device list."""
+    """Parse script.cfg into global settings and device list.
+
+    Supports main ring devices and sub-ring devices:
+      <ip> [port1 port2] [RM]          — main ring (client or manager)
+      <ip> SRM <vlan> <port>           — sub-ring branch point (manager)
+      <ip> RSRM <vlan> <port>         — sub-ring branch point (redundant manager)
+      <ip> RC <vlan> [port1 port2]     — sub-ring client
+      <ip> [port1 port2]              — main ring client (no role = RC implied)
+    """
     if not os.path.exists(config_file):
         raise FileNotFoundError(f"Configuration file '{config_file}' not found")
 
@@ -97,8 +105,12 @@ def parse_config(config_file: str) -> dict:
         'edge_protection': 'rstp-full',
         'auto_disable_timer': None,
         'force': False,
-        'devices': [],
+        'devices': [],       # flat list (backward compat for connect/gather)
+        'rings': {},         # keyed by VLAN — built after parsing
     }
+
+    # Raw parsed entries before ring grouping
+    raw_entries = []
 
     with open(config_file, 'r') as f:
         for line_num, raw_line in enumerate(f, 1):
@@ -144,45 +156,169 @@ def parse_config(config_file: str) -> dict:
                     logging.warning(f"Line {line_num}: skipping invalid IP '{ip}'")
                     continue
 
+                rest = tokens[1:]
+                role = None
+                entry_vlan = None
                 ports = []
-                role = 'client'
-                for token in tokens[1:]:
-                    if token.upper() == 'RM':
-                        role = 'manager'
-                    elif is_port(token):
-                        ports.append(token)
-                    else:
-                        logging.warning(f"Line {line_num}: ignoring unknown token '{token}'")
 
-                config['devices'].append({
+                # Detect role keyword
+                i = 0
+                while i < len(rest):
+                    tok = rest[i]
+                    tok_upper = tok.upper()
+                    if tok_upper == 'RM':
+                        role = 'manager'
+                        i += 1
+                    elif tok_upper in ('SRM', 'RSRM'):
+                        role = tok_upper.lower()  # 'srm' or 'rsrm'
+                        # Next token must be VLAN
+                        if i + 1 < len(rest) and not is_port(rest[i + 1]):
+                            entry_vlan = int(rest[i + 1])
+                            i += 2
+                        else:
+                            raise ValueError(
+                                f"Line {line_num}: {tok_upper} requires a VLAN number")
+                    elif tok_upper == 'RC':
+                        role = 'client'
+                        # Next token might be VLAN
+                        if i + 1 < len(rest) and not is_port(rest[i + 1]):
+                            entry_vlan = int(rest[i + 1])
+                            i += 2
+                        else:
+                            i += 1
+                    elif is_port(tok):
+                        ports.append(tok)
+                        i += 1
+                    else:
+                        # Could be a bare VLAN number (for RC shorthand)
+                        try:
+                            entry_vlan = int(tok)
+                            role = role or 'client'
+                            i += 1
+                        except ValueError:
+                            logging.warning(f"Line {line_num}: ignoring unknown token '{tok}'")
+                            i += 1
+
+                if role is None:
+                    role = 'client'
+
+                raw_entries.append({
                     'ip': ip,
-                    'port1': ports[0] if len(ports) >= 1 else '',
-                    'port2': ports[1] if len(ports) >= 2 else '',
                     'role': role,
+                    'vlan': entry_vlan,
+                    'ports': ports,
+                    'line_num': line_num,
                 })
 
     if not config['username'] or not config['password']:
         raise ValueError("Configuration must contain both username and password")
-    if not config['devices']:
+    if not raw_entries:
         raise ValueError("No valid device IPs found in configuration")
 
-    for dev in config['devices']:
-        if not dev['port1']:
-            dev['port1'] = config['port1']
-        if not dev['port2']:
-            dev['port2'] = config['port2']
-        if not dev['port1'] or not dev['port2']:
-            raise ValueError(f"Device {dev['ip']}: no ring ports specified and no global defaults")
+    # ---------------------------------------------------------------
+    # Group entries into rings by VLAN
+    # ---------------------------------------------------------------
+    main_vlan = int(config['vlan'])
+    rings = {}
 
-    managers = [d for d in config['devices'] if d['role'] == 'manager']
+    for entry in raw_entries:
+        ip = entry['ip']
+        role = entry['role']
+        ports = entry['ports']
+        ev = entry['vlan']
+
+        if role in ('srm', 'rsrm'):
+            # Sub-ring branch point — VLAN required, exactly 1 port
+            if ev is None:
+                raise ValueError(f"Device {ip}: {role.upper()} requires a VLAN number")
+            if len(ports) != 1:
+                raise ValueError(
+                    f"Device {ip}: {role.upper()} requires exactly 1 port, got {len(ports)}")
+            vlan = ev
+            if vlan not in rings:
+                rings[vlan] = {'vlan': vlan, 'is_main': False,
+                               'srm': None, 'rsrm': None, 'devices': []}
+            ring = rings[vlan]
+            bp = {'ip': ip, 'port': ports[0]}
+            if role == 'srm':
+                if ring['srm'] is not None:
+                    raise ValueError(f"Sub-ring VLAN {vlan}: duplicate SRM (already {ring['srm']['ip']})")
+                ring['srm'] = bp
+            else:
+                if ring['rsrm'] is not None:
+                    raise ValueError(f"Sub-ring VLAN {vlan}: duplicate RSRM (already {ring['rsrm']['ip']})")
+                ring['rsrm'] = bp
+
+        elif ev is not None and ev != main_vlan:
+            # Sub-ring RC — client on a sub-ring VLAN
+            vlan = ev
+            if vlan not in rings:
+                rings[vlan] = {'vlan': vlan, 'is_main': False,
+                               'srm': None, 'rsrm': None, 'devices': []}
+            p1 = ports[0] if len(ports) >= 1 else config['port1']
+            p2 = ports[1] if len(ports) >= 2 else config['port2']
+            if not p1 or not p2:
+                raise ValueError(f"Device {ip} (sub-ring VLAN {vlan}): no ring ports specified")
+            rings[vlan]['devices'].append({
+                'ip': ip, 'port1': p1, 'port2': p2, 'role': 'client'})
+
+        else:
+            # Main ring device (RM or RC)
+            p1 = ports[0] if len(ports) >= 1 else config['port1']
+            p2 = ports[1] if len(ports) >= 2 else config['port2']
+            if not p1 or not p2:
+                raise ValueError(f"Device {ip}: no ring ports specified and no global defaults")
+            if main_vlan not in rings:
+                rings[main_vlan] = {'vlan': main_vlan, 'is_main': True, 'devices': []}
+            rings[main_vlan]['devices'].append({
+                'ip': ip, 'port1': p1, 'port2': p2, 'role': role})
+
+    # Validate main ring
+    if main_vlan not in rings:
+        raise ValueError("No main ring devices found in configuration")
+
+    main_ring = rings[main_vlan]
+    managers = [d for d in main_ring['devices'] if d['role'] == 'manager']
     if len(managers) == 0:
-        config['devices'][0]['role'] = 'manager'
+        main_ring['devices'][0]['role'] = 'manager'
         logging.warning(
-            f"No RM specified — auto-assigning {config['devices'][0]['ip']} as ring manager"
+            f"No RM specified — auto-assigning {main_ring['devices'][0]['ip']} as ring manager"
         )
     elif len(managers) > 1:
         ips = ', '.join(d['ip'] for d in managers)
         logging.warning(f"Multiple ring managers ({ips}) — MRP rings should have exactly one")
+
+    # Validate sub-rings
+    for vlan, ring in rings.items():
+        if ring.get('is_main'):
+            continue
+        if ring['srm'] is None or ring['rsrm'] is None:
+            missing = 'SRM' if ring['srm'] is None else 'RSRM'
+            raise ValueError(f"Sub-ring VLAN {vlan}: missing {missing} branch point")
+        if vlan == main_vlan:
+            raise ValueError(f"Sub-ring VLAN {vlan} conflicts with main ring VLAN")
+
+    config['rings'] = rings
+
+    # Build flat device list (unique IPs) for connect/gather phases
+    seen_ips = set()
+    for ring in rings.values():
+        for dev in ring.get('devices', []):
+            if dev['ip'] not in seen_ips:
+                config['devices'].append(dev)
+                seen_ips.add(dev['ip'])
+        # SRM/RSRM IPs (they're on the main ring too, but ensure present)
+        for bp_key in ('srm', 'rsrm'):
+            bp = ring.get(bp_key)
+            if bp and bp['ip'] not in seen_ips:
+                # Find their main ring entry for port1/port2
+                main_dev = next((d for d in main_ring['devices'] if d['ip'] == bp['ip']), None)
+                if main_dev:
+                    config['devices'].append(main_dev)
+                    seen_ips.add(bp['ip'])
+
+    if not config['devices']:
+        raise ValueError("No valid device IPs found in configuration")
 
     # Mode-aware auto-disable timer default (if not explicitly set in config)
     if config['auto_disable_timer'] is None:
@@ -206,24 +342,57 @@ def edge_str(config: dict) -> str:
         return "RSTP (per-port disable on ring ports)"
 
 
+def get_ring_ports_for_device(config, ip):
+    """Build combined set of ring ports for a device across all rings.
+
+    Used for edge protection — ring ports get different treatment from edge ports.
+    """
+    ring_ports = set()
+    for ring in config.get('rings', {}).values():
+        for dev in ring.get('devices', []):
+            if dev['ip'] == ip:
+                ring_ports.add(dev['port1'])
+                ring_ports.add(dev['port2'])
+        for bp_key in ('srm', 'rsrm'):
+            bp = ring.get(bp_key)
+            if bp and bp['ip'] == ip:
+                ring_ports.add(bp['port'])
+    return sorted(ring_ports)
+
+
 def print_plan(config: dict):
     """Print the deployment plan."""
+    rings = config.get('rings', {})
+    main_vlan = int(config['vlan'])
+    sub_ring_vlans = sorted(v for v in rings if v != main_vlan)
+
     print("\n" + "=" * 60)
-    print("  MRP DEPLOYMENT PLAN")
+    print("  MRP DEPLOYMENT PLAN — CLAMPS")
     print("=" * 60)
     print(f"  Protocol:        {config['protocol'].upper()}")
-    print(f"  VLAN:            {config['vlan']}")
-    print(f"  Recovery delay:  {config['recovery_delay']}")
     print(f"  Edge protection: {edge_str(config)}")
     print(f"  Save to NVM:     {'Yes (after ring verified)' if config['save'] else 'No (RAM only)'}")
-    print(f"  Devices:         {len(config['devices'])}")
     print("-" * 60)
 
-    for i, dev in enumerate(config['devices'], 1):
-        role_str = "MANAGER" if dev['role'] == 'manager' else "client"
-        print(f"  {i}. {dev['ip']:20s}  {dev['port1']} + {dev['port2']}  [{role_str}]")
+    # Main ring
+    main_ring = rings.get(main_vlan, {})
+    print(f"  Main Ring (VLAN {main_vlan}):")
+    for dev in main_ring.get('devices', []):
+        role_tag = f"  [RM]" if dev['role'] == 'manager' else ""
+        print(f"    {dev['ip']:20s} {dev['port1']} \u2194 {dev['port2']}{role_tag}")
 
-    print("=" * 60)
+    # Sub-rings
+    for sv in sub_ring_vlans:
+        ring = rings[sv]
+        print(f"  Sub-Ring (VLAN {sv}):")
+        if ring.get('srm'):
+            print(f"    {ring['srm']['ip']:20s} {ring['srm']['port']:14s}  [SRM]")
+        if ring.get('rsrm'):
+            print(f"    {ring['rsrm']['ip']:20s} {ring['rsrm']['port']:14s}  [RSRM]")
+        for dev in ring.get('devices', []):
+            print(f"    {dev['ip']:20s} {dev['port1']} \u2194 {dev['port2']}")
+
+    print("-" * 60)
     print()
 
 
@@ -565,6 +734,64 @@ def worker_teardown_rstp_full(device, dev, all_ports, ring_ports):
         return ip, False, str(e)
 
 
+# -- Sub-ring workers --
+
+def worker_configure_sub_ring_rc(device, dev, vlan, recovery_delay):
+    """Thread worker: configure MRP client on a sub-ring RC device."""
+    ip = dev['ip']
+    try:
+        t0 = time.time()
+        logging.info(f"[{ip}] Sub-ring RC: {dev['port1']}+{dev['port2']}, vlan={vlan}")
+        device.set_mrp(
+            operation='enable',
+            mode='client',
+            port_primary=dev['port1'],
+            port_secondary=dev['port2'],
+            vlan=vlan,
+            recovery_delay=recovery_delay,
+        )
+        dt = time.time() - t0
+        return ip, True, f"sub-ring RC vlan={vlan} ({dt:.1f}s)"
+    except Exception as e:
+        return ip, False, str(e)
+
+
+def worker_configure_srm(device, bp, vlan, mode, ring_id):
+    """Thread worker: configure SRM/RSRM on a branch-point device."""
+    ip = bp['ip']
+    try:
+        t0 = time.time()
+        logging.info(f"[{ip}] SRM: ring_id={ring_id}, mode={mode}, port={bp['port']}, vlan={vlan}")
+        device.set_mrp_sub_ring(
+            ring_id=ring_id,
+            mode=mode,
+            port=bp['port'],
+            vlan=vlan,
+        )
+        dt = time.time() - t0
+        return ip, True, f"SRM {mode} vlan={vlan} ring_id={ring_id} ({dt:.1f}s)"
+    except Exception as e:
+        return ip, False, str(e)
+
+
+def worker_delete_sub_ring(device, ip, ring_id):
+    """Thread worker: delete a sub-ring instance on one device."""
+    try:
+        device.delete_mrp_sub_ring(ring_id=ring_id)
+        return ip, True, f"SRM ring_id={ring_id} deleted"
+    except Exception as e:
+        return ip, False, str(e)
+
+
+def worker_disable_srm_global(device, ip):
+    """Thread worker: disable SRM globally on one device."""
+    try:
+        device.delete_mrp_sub_ring(ring_id=None)
+        return ip, True, "SRM disabled globally"
+    except Exception as e:
+        return ip, False, str(e)
+
+
 # -- Save worker --
 
 def worker_save(device, dev):
@@ -626,6 +853,32 @@ def verify_ring(rm_device, max_attempts=3, delay=1):
             log_print(f"  Attempt {attempt}/{max_attempts}: ring not ready (state={ring_state}), retrying...")
 
     return False, ring_state, redundancy
+
+
+def verify_sub_ring(srm_device, ring_id, vlan, max_attempts=3, delay=1):
+    """Check sub-ring health on SRM device with retries.
+
+    Returns: (healthy: bool, ring_state: str, redundancy: bool)
+    """
+    for attempt in range(1, max_attempts + 1):
+        time.sleep(delay)
+        srm = srm_device.get_mrp_sub_ring()
+        for inst in srm.get('instances', []):
+            if inst['ring_id'] == ring_id:
+                ring_state = inst.get('ring_state', 'unknown')
+                redundancy = inst.get('redundancy', False)
+                if ring_state == 'closed' and redundancy:
+                    return True, ring_state, redundancy
+                if attempt < max_attempts:
+                    log_print(f"  Attempt {attempt}/{max_attempts}: sub-ring VLAN {vlan} "
+                              f"not ready (state={ring_state}), retrying...")
+                return False if attempt == max_attempts else None, ring_state, redundancy
+
+        if attempt < max_attempts:
+            log_print(f"  Attempt {attempt}/{max_attempts}: sub-ring ring_id={ring_id} "
+                      f"not found on SRM, retrying...")
+
+    return False, 'not found', False
 
 
 # ---------------------------------------------------------------------------
@@ -740,7 +993,10 @@ def run_phase0(config, connections):
 # ---------------------------------------------------------------------------
 
 def deploy_edge_protection(config, connections, device_facts, l2s_devices):
-    """Deploy edge protection based on config['edge_protection']."""
+    """Deploy edge protection based on config['edge_protection'].
+
+    Ring ports include both main ring and sub-ring ports for each device.
+    """
     mode = config['edge_protection']
     timer = config['auto_disable_timer']
 
@@ -793,7 +1049,7 @@ def deploy_edge_protection(config, connections, device_facts, l2s_devices):
                     lp_results.append((ip, False, "L2S — skipped"))
                     continue
                 all_ports = device_facts.get(ip, {}).get('all_ports', [])
-                ring_ports = [dev['port1'], dev['port2']]
+                ring_ports = get_ring_ports_for_device(config, ip)
                 futures[pool.submit(
                     worker_setup_loop_protection, device, dev, all_ports, ring_ports
                 )] = dev
@@ -813,7 +1069,7 @@ def deploy_edge_protection(config, connections, device_facts, l2s_devices):
                     if not device or ip in l2s_devices:
                         continue
                     all_ports = device_facts.get(ip, {}).get('all_ports', [])
-                    ring_ports = [dev['port1'], dev['port2']]
+                    ring_ports = get_ring_ports_for_device(config, ip)
                     futures[pool.submit(
                         worker_setup_auto_disable, device, dev, all_ports, timer,
                         'loop-protection'
@@ -836,7 +1092,7 @@ def deploy_edge_protection(config, connections, device_facts, l2s_devices):
                 if not device:
                     continue
                 all_ports = device_facts.get(ip, {}).get('all_ports', [])
-                ring_ports = [dev['port1'], dev['port2']]
+                ring_ports = get_ring_ports_for_device(config, ip)
                 futures[pool.submit(
                     worker_setup_rstp_full, device, dev, all_ports, ring_ports, timer
                 )] = dev
@@ -1026,9 +1282,92 @@ def main():
                 log_print("\n  Ring NOT healthy. Configs NOT saved — power cycle to rollback.\n")
                 sys.exit(1)
 
-            # --- Phase 6: Save ---
+            # --- Phase 6+7: Sub-ring configuration and verification ---
+            main_vlan = int(config['vlan'])
+            sub_ring_vlans = sorted(v for v in config.get('rings', {}) if v != main_vlan)
+
+            if sub_ring_vlans:
+                log_print("\n  Phase 6: Configuring sub-rings...")
+                recovery_delay = config['recovery_delay']
+
+                for ring_id, sv in enumerate(sub_ring_vlans, 1):
+                    ring = config['rings'][sv]
+                    srm = ring.get('srm')
+                    rsrm = ring.get('rsrm')
+                    sub_rcs = ring.get('devices', [])
+
+                    log_print(f"\n  Phase 6 — Sub-Ring VLAN {sv} (ring_id={ring_id}):")
+
+                    # 6a: Configure sub-ring RCs (standard MRP client)
+                    if sub_rcs:
+                        rc_results = []
+                        with ThreadPoolExecutor(max_workers=max(1, len(sub_rcs))) as pool:
+                            futures = {}
+                            for dev in sub_rcs:
+                                device = connections.get(dev['ip'])
+                                if device:
+                                    futures[pool.submit(
+                                        worker_configure_sub_ring_rc, device, dev,
+                                        sv, recovery_delay
+                                    )] = dev
+                            for future in as_completed(futures):
+                                rc_results.append(future.result())
+                        print_results(f"Phase 6a — Sub-Ring RCs (VLAN {sv})", rc_results)
+
+                    # 6b: Configure SRM and RSRM
+                    srm_results = []
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        futures = {}
+                        if srm:
+                            srm_device = connections.get(srm['ip'])
+                            if srm_device:
+                                futures[pool.submit(
+                                    worker_configure_srm, srm_device, srm,
+                                    sv, 'manager', ring_id
+                                )] = 'srm'
+                        if rsrm:
+                            rsrm_device = connections.get(rsrm['ip'])
+                            if rsrm_device:
+                                futures[pool.submit(
+                                    worker_configure_srm, rsrm_device, rsrm,
+                                    sv, 'redundantManager', ring_id
+                                )] = 'rsrm'
+                        for future in as_completed(futures):
+                            srm_results.append(future.result())
+                    print_results(f"Phase 6b — SRM/RSRM (VLAN {sv})", srm_results)
+
+                    failures = [r for r in srm_results if not r[1]]
+                    if failures:
+                        log_print(f"\n  Sub-ring VLAN {sv} SRM config failed. Continuing with other rings...")
+
+                # Phase 7: Verify sub-rings
+                log_print("\n  Phase 7: Verifying sub-rings...")
+                all_sub_healthy = True
+                for ring_id, sv in enumerate(sub_ring_vlans, 1):
+                    ring = config['rings'][sv]
+                    srm = ring.get('srm')
+                    if not srm:
+                        continue
+                    srm_device = connections.get(srm['ip'])
+                    if not srm_device:
+                        log_print(f"  Sub-ring VLAN {sv}: no connection to SRM {srm['ip']}")
+                        all_sub_healthy = False
+                        continue
+
+                    healthy, ring_state, redundancy = verify_sub_ring(
+                        srm_device, ring_id, sv, max_attempts=3, delay=1)
+                    status_tag = "HEALTHY" if healthy else "UNHEALTHY"
+                    log_print(f"  Sub-ring VLAN {sv}: [{status_tag}] state={ring_state}, redundancy={redundancy}")
+                    if not healthy:
+                        all_sub_healthy = False
+
+                if not all_sub_healthy:
+                    log_print("\n  WARNING: One or more sub-rings not healthy.")
+
+            # --- Phase 8: Save ---
             if config['save']:
-                log_print("\n  Phase 6: Saving configs...")
+                phase_num = 8 if sub_ring_vlans else 6
+                log_print(f"\n  Phase {phase_num}: Saving configs...")
                 save_results = []
 
                 with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
@@ -1042,13 +1381,14 @@ def main():
                         ip, ok, detail = future.result()
                         save_results.append((ip, ok, detail))
 
-                print_results("Phase 6 — Config Save", save_results)
+                print_results(f"Phase {phase_num} — Config Save", save_results)
 
                 save_failures = [r for r in save_results if not r[1]]
                 if save_failures:
                     log_print(f"\n  WARNING: {len(save_failures)} device(s) failed to save.")
             else:
-                log_print("\n  Phase 6: Skipped (save=false)")
+                phase_num = 8 if sub_ring_vlans else 6
+                log_print(f"\n  Phase {phase_num}: Skipped (save=false)")
                 log_print("  Configs in RAM only — power cycle to rollback.")
 
             elapsed = time.time() - start_time

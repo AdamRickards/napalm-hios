@@ -28,6 +28,7 @@ from clamp import (
     worker_connect, worker_gather_facts, worker_save,
     worker_enable_rstp_global, worker_teardown_loop_protection,
     worker_teardown_auto_disable, worker_teardown_rstp_full,
+    worker_delete_sub_ring, worker_disable_srm_global,
     print_results, run_phase0, rm_ring_needs_breaking,
 )
 
@@ -169,10 +170,86 @@ def main():
                 for f in device_facts.values()
             )
 
-            # --- Step 1: Break ring (RM port2 DOWN) ---
+            # Detect sub-ring instances on any device
+            srm_instances = {}  # {ip: [(ring_id, device), ...]}
+            sub_ring_rc_ips = set()
+            main_vlan = int(config.get('vlan', '1'))
+            sub_ring_vlans = sorted(
+                v for v in config.get('rings', {}) if v != main_vlan)
+
+            for dev in config['devices']:
+                ip = dev['ip']
+                device = connections.get(ip)
+                if not device:
+                    continue
+                try:
+                    srm = device.get_mrp_sub_ring()
+                    if srm.get('enabled') and srm.get('instances'):
+                        srm_instances[ip] = [
+                            (inst['ring_id'], device) for inst in srm['instances']]
+                except (NotImplementedError, Exception) as e:
+                    logging.debug(f"[{ip}] get_mrp_sub_ring: {e}")
+
+            # Collect sub-ring RC IPs from config
+            for sv in sub_ring_vlans:
+                ring = config['rings'].get(sv, {})
+                for dev in ring.get('devices', []):
+                    sub_ring_rc_ips.add(dev['ip'])
+
+            has_sub_rings = bool(srm_instances)
+
+            # --- Step 1: Delete sub-rings (before touching main ring) ---
+            if has_sub_rings:
+                log_print("\n  Step 1: Deleting sub-rings...")
+
+                # 1a: Delete SRM instances
+                srm_results = []
+                with ThreadPoolExecutor(max_workers=max(1, len(srm_instances))) as pool:
+                    futures = {}
+                    for ip, instances in srm_instances.items():
+                        device = connections[ip]
+                        for ring_id, _ in instances:
+                            futures[pool.submit(
+                                worker_delete_sub_ring, device, ip, ring_id
+                            )] = (ip, ring_id)
+                    for future in as_completed(futures):
+                        srm_results.append(future.result())
+                print_results("Step 1a — Delete SRM Instances", srm_results)
+
+                # 1b: Disable SRM globally on those devices
+                disable_results = []
+                with ThreadPoolExecutor(max_workers=max(1, len(srm_instances))) as pool:
+                    futures = {}
+                    for ip in srm_instances:
+                        device = connections[ip]
+                        futures[pool.submit(
+                            worker_disable_srm_global, device, ip
+                        )] = ip
+                    for future in as_completed(futures):
+                        disable_results.append(future.result())
+                print_results("Step 1b — Disable SRM Global", disable_results)
+
+                # 1c: Delete MRP on sub-ring RCs
+                if sub_ring_rc_ips:
+                    rc_results = []
+                    with ThreadPoolExecutor(max_workers=max(1, len(sub_ring_rc_ips))) as pool:
+                        futures = {}
+                        for ip in sub_ring_rc_ips:
+                            device = connections.get(ip)
+                            if device:
+                                dev = next((d for d in config['devices'] if d['ip'] == ip), None)
+                                if dev:
+                                    futures[pool.submit(worker_delete_mrp, device, dev)] = ip
+                        for future in as_completed(futures):
+                            rc_results.append(future.result())
+                    print_results("Step 1c — Delete Sub-Ring RC MRP", rc_results)
+            else:
+                log_print("\n  Step 1: Skipped (no sub-rings detected)")
+
+            # --- Step 2: Break ring (RM port2 DOWN) ---
             broke_ring = rm_ring_needs_breaking(device_facts, rm_dev)
             if broke_ring:
-                log_print(f"\n  Step 1: Unclamping ring — RM port2 ({rm_dev['port2']}) on {rm_ip}...")
+                log_print(f"\n  Step 2: Unclamping ring — RM port2 ({rm_dev['port2']}) on {rm_ip}...")
                 try:
                     rm_device.set_interface(rm_dev['port2'], enabled=False)
                     log_print(f"  [{rm_ip}] port {rm_dev['port2']} admin DOWN — ring unclamped")
@@ -180,11 +257,11 @@ def main():
                     log_print(f"  WARNING: Cannot disable RM port2: {e}")
                     log_print("  Proceeding anyway...")
             else:
-                log_print(f"\n  Step 1: Skipped (ring ports not both up — no ring to break)")
+                log_print(f"\n  Step 2: Skipped (ring ports not both up — no ring to break)")
 
-            # --- Step 2: Tear down loop protection (if detected) ---
+            # --- Step 3: Tear down loop protection (if detected) ---
             if has_loop_prot:
-                log_print("\n  Step 2: Tearing down loop protection...")
+                log_print("\n  Step 3: Tearing down loop protection...")
 
                 ad_results = []
                 with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
@@ -201,7 +278,7 @@ def main():
                     for future in as_completed(futures):
                         ad_results.append(future.result())
                 if ad_results:
-                    print_results("Step 2a — Auto-Disable Teardown (loop-protection)", ad_results)
+                    print_results("Step 3a — Auto-Disable Teardown (loop-protection)", ad_results)
 
                 lp_results = []
                 with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
@@ -218,11 +295,11 @@ def main():
                     for future in as_completed(futures):
                         lp_results.append(future.result())
                 if lp_results:
-                    print_results("Step 2b — Loop Protection Teardown", lp_results)
+                    print_results("Step 3b — Loop Protection Teardown", lp_results)
 
-            # --- Step 3: Tear down RSTP Full (if detected) ---
+            # --- Step 4: Tear down RSTP Full (if detected) ---
             if has_bpdu_guard:
-                log_print("\n  Step 3: Tearing down RSTP Full...")
+                log_print("\n  Step 4: Tearing down RSTP Full...")
                 results = []
                 with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
                     futures = {}
@@ -239,14 +316,14 @@ def main():
                     for future in as_completed(futures):
                         results.append(future.result())
                 if results:
-                    print_results("Step 3 — RSTP Full Teardown", results)
+                    print_results("Step 4 — RSTP Full Teardown", results)
 
             if not has_loop_prot and not has_bpdu_guard:
-                log_print("\n  Steps 2-3: Skipped (no loop protection or BPDU Guard detected)")
+                log_print("\n  Steps 3-4: Skipped (no loop protection or BPDU Guard detected)")
 
-            # --- Step 4: Delete MRP ---
+            # --- Step 5: Delete MRP ---
             if has_mrp:
-                log_print("\n  Step 4: Deleting MRP...")
+                log_print("\n  Step 5: Deleting MRP...")
                 mrp_results = []
                 with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
                     futures = {}
@@ -256,12 +333,12 @@ def main():
                             futures[pool.submit(worker_delete_mrp, device, dev)] = dev
                     for future in as_completed(futures):
                         mrp_results.append(future.result())
-                print_results("Step 4 — MRP Delete", mrp_results)
+                print_results("Step 5 — MRP Delete", mrp_results)
             else:
-                log_print("\n  Step 4: Skipped (no MRP configured)")
+                log_print("\n  Step 5: Skipped (no MRP configured)")
 
-            # --- Step 5: Restore RSTP to factory default ---
-            log_print("\n  Step 5: Restoring RSTP...")
+            # --- Step 6: Restore RSTP to factory default ---
+            log_print("\n  Step 6: Restoring RSTP...")
 
             rstp_global_results = []
             with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
@@ -272,7 +349,7 @@ def main():
                         futures[pool.submit(worker_enable_rstp_global, device, dev)] = dev
                 for future in as_completed(futures):
                     rstp_global_results.append(future.result())
-            print_results("Step 5a — RSTP Global Enable", rstp_global_results)
+            print_results("Step 6a — RSTP Global Enable", rstp_global_results)
 
             rstp_port_results = []
             with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
@@ -283,22 +360,22 @@ def main():
                         futures[pool.submit(worker_enable_rstp_ports, device, dev)] = dev
                 for future in as_completed(futures):
                     rstp_port_results.append(future.result())
-            print_results("Step 5b — RSTP Ring Ports Enable", rstp_port_results)
+            print_results("Step 6b — RSTP Ring Ports Enable", rstp_port_results)
 
-            # --- Step 6: Restore RM port2 ---
+            # --- Step 7: Restore RM port2 ---
             if broke_ring:
-                log_print(f"\n  Step 6: Enabling RM port2 ({rm_dev['port2']}) on {rm_ip}...")
+                log_print(f"\n  Step 7: Enabling RM port2 ({rm_dev['port2']}) on {rm_ip}...")
                 try:
                     rm_device.set_interface(rm_dev['port2'], enabled=True)
                     log_print(f"  [{rm_ip}] port {rm_dev['port2']} admin UP")
                 except Exception as e:
                     log_print(f"  WARNING: Cannot re-enable RM port2: {e}")
             else:
-                log_print("\n  Step 6: Skipped (ring was not broken in Step 1)")
+                log_print("\n  Step 7: Skipped (ring was not broken in Step 2)")
 
-            # --- Step 7: Save if configured ---
+            # --- Step 8: Save if configured ---
             if config['save']:
-                log_print("\n  Step 7: Saving configs...")
+                log_print("\n  Step 8: Saving configs...")
                 save_results = []
                 with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
                     futures = {}
@@ -308,9 +385,9 @@ def main():
                             futures[pool.submit(worker_save, device, dev)] = dev
                     for future in as_completed(futures):
                         save_results.append(future.result())
-                print_results("Step 7 — Config Save", save_results)
+                print_results("Step 8 — Config Save", save_results)
             else:
-                log_print("\n  Step 7: Skipped (save=false)")
+                log_print("\n  Step 8: Skipped (save=false)")
                 log_print("  Configs in RAM only — power cycle to rollback.")
 
             elapsed = time.time() - start_time

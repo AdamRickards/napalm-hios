@@ -48,6 +48,11 @@ from napalm_hios.snmp_hios import (
     OID_hm2MrpRowStatus, OID_hm2MrpRingport2FixedBackup,
     OID_hm2MrpRecoveryDelaySupported, OID_hm2MrpFastMrp,
     MRP_DEFAULT_DOMAIN_SUFFIX, _MRP_ROLE_REV, _MRP_RECOVERY_DELAY_REV,
+    OID_hm2SrmGlobalAdminState, OID_hm2SrmMaxInstances,
+    OID_hm2SrmAdminState, OID_hm2SrmOperState, OID_hm2SrmVlanID,
+    OID_hm2SrmSubRingPortIfIndex, OID_hm2SrmSubRingPortOperState,
+    OID_hm2SrmSubRingOperState, OID_hm2SrmRedundancyOperState,
+    OID_hm2SrmConfigOperState, OID_hm2SrmRowStatus,
     OID_hm2HiDiscOper, OID_hm2HiDiscMode, OID_hm2HiDiscBlinking,
     OID_hm2HiDiscProtocol, OID_hm2HiDiscRelay,
     OID_lldpXdot3RemPortAutoNegSupported, OID_lldpXdot3RemPortAutoNegEnabled,
@@ -1483,6 +1488,152 @@ class TestSNMPHIOS(unittest.TestCase):
             self.assertEqual(set_calls[0][1], 2)  # notInService
             self.assertEqual(set_calls[1][1], 6)  # destroy
 
+    # ------------------------------------------------------------------
+    # MRP sub-ring (SRM)
+    # ------------------------------------------------------------------
+
+    def test_get_mrp_sub_ring_empty(self):
+        """No SRM instances configured."""
+        async def mock_scalar(*oids):
+            return {OID_hm2SrmGlobalAdminState: 2, OID_hm2SrmMaxInstances: 8}
+        async def mock_walk_columns(oid_map, engine=None):
+            return {}
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            result = self.snmp.get_mrp_sub_ring()
+
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['max_instances'], 8)
+        self.assertEqual(result['instances'], [])
+
+    def test_get_mrp_sub_ring_one_instance(self):
+        """One SRM instance configured and active."""
+        async def mock_scalar(*oids):
+            return {OID_hm2SrmGlobalAdminState: 1, OID_hm2SrmMaxInstances: 8}
+        async def mock_ifmap(engine=None):
+            return {'3': '1/3', '4': '1/4'}
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '1': {
+                    'admin_state': 1,  # manager
+                    'oper_state': 1,   # manager
+                    'vlan': 200,
+                    'domain_id': b'\xff' * 16,
+                    'partner_mac': b'\x00\x80\x63\xa1\xb2\xc3',
+                    'protocol': 'mrp',
+                    'name': 'sub1',
+                    'port_ifindex': '3',
+                    'port_oper': 3,    # forwarding
+                    'ring_oper': 3,    # closed
+                    'redundancy_oper': 1,  # True
+                    'config_oper': 1,  # no error
+                    'row_status': 1,   # active
+                },
+            }
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_mrp_sub_ring()
+
+        self.assertTrue(result['enabled'])
+        self.assertEqual(len(result['instances']), 1)
+        inst = result['instances'][0]
+        self.assertEqual(inst['ring_id'], 1)
+        self.assertEqual(inst['mode'], 'manager')
+        self.assertEqual(inst['vlan'], 200)
+        self.assertEqual(inst['port'], '1/3')
+        self.assertEqual(inst['port_state'], 'forwarding')
+        self.assertEqual(inst['ring_state'], 'closed')
+        self.assertTrue(inst['redundancy'])
+        self.assertEqual(inst['name'], 'sub1')
+
+    def test_set_mrp_sub_ring_global_enable(self):
+        """Global SRM enable only."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, int(val)))
+        async def mock_scalar(*oids):
+            return {OID_hm2SrmGlobalAdminState: 1, OID_hm2SrmMaxInstances: 8}
+        async def mock_walk_columns(oid_map, engine=None):
+            return {}
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            result = self.snmp.set_mrp_sub_ring(enabled=True)
+
+        self.assertEqual(set_calls[0][1], 1)  # enable
+        self.assertTrue(result['enabled'])
+
+    def test_set_mrp_sub_ring_create_instance(self):
+        """Create SRM instance: auto-enable, createAndWait, notInService, SET, active."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, int(val)))
+        async def mock_walk_columns(oid_map, engine=None):
+            return {}  # no existing instance
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2', '3': '1/3', '4': '1/4'}
+        async def mock_srm():
+            return {'enabled': True, 'max_instances': 8, 'instances': []}
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_get_mrp_sub_ring_async', side_effect=mock_srm):
+            result = self.snmp.set_mrp_sub_ring(
+                ring_id=1, mode='manager', port='1/3', vlan=200)
+
+        oids = [oid for oid, _ in set_calls]
+        # First: auto-enable global SRM (value=1)
+        self.assertEqual(set_calls[0][1], 1)
+        # Second: createAndWait(5)
+        self.assertIn(OID_hm2SrmRowStatus, oids[1])
+        self.assertEqual(set_calls[1][1], 5)
+        # Third: notInService(2)
+        self.assertEqual(set_calls[2][1], 2)
+        # Last: activate(1)
+        self.assertIn(OID_hm2SrmRowStatus, oids[-1])
+        self.assertEqual(set_calls[-1][1], 1)
+
+    def test_set_mrp_sub_ring_unknown_port(self):
+        """Unknown port raises ValueError."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, int(val)))
+        async def mock_walk_columns(oid_map, engine=None):
+            return {}
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            with self.assertRaises(ValueError) as ctx:
+                self.snmp.set_mrp_sub_ring(ring_id=1, port='9/9')
+            self.assertIn("Unknown port", str(ctx.exception))
+
+    def test_delete_mrp_sub_ring(self):
+        """Delete SRM instance: notInService(2) then destroy(6)."""
+        set_calls = []
+        async def mock_set_oids(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, int(val)))
+        async def mock_srm():
+            return {'enabled': True, 'max_instances': 8, 'instances': []}
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set_oids), \
+             patch.object(self.snmp, '_get_mrp_sub_ring_async', side_effect=mock_srm):
+            result = self.snmp.delete_mrp_sub_ring(ring_id=1)
+
+        self.assertEqual(len(set_calls), 2)
+        self.assertEqual(set_calls[0][1], 2)  # notInService
+        self.assertEqual(set_calls[1][1], 6)  # destroy
 
     # ------------------------------------------------------------------
     # get_profiles

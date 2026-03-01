@@ -70,10 +70,10 @@ device.close()
 ### Vendor-specific
 
 **Read:**
-`get_mrp` | `get_hidiscovery` | `get_rstp` | `get_rstp_port` | `get_auto_disable` | `get_loop_protection` | `get_lldp_neighbors_detail_extended` | `get_config_status` | `get_profiles` | `get_config_fingerprint` | `is_factory_default`
+`get_mrp` | `get_mrp_sub_ring` | `get_hidiscovery` | `get_rstp` | `get_rstp_port` | `get_auto_disable` | `get_loop_protection` | `get_lldp_neighbors_detail_extended` | `get_config_status` | `get_profiles` | `get_config_fingerprint` | `is_factory_default`
 
 **Write:**
-`set_interface` | `set_mrp` | `delete_mrp` | `set_hidiscovery` | `set_rstp` | `set_rstp_port` | `set_auto_disable` | `reset_auto_disable` | `set_auto_disable_reason` | `set_loop_protection` | `save_config` | `clear_config` | `clear_factory` | `activate_profile` | `delete_profile` | `onboard`
+`set_interface` | `set_mrp` | `delete_mrp` | `set_mrp_sub_ring` | `delete_mrp_sub_ring` | `set_hidiscovery` | `set_rstp` | `set_rstp_port` | `set_auto_disable` | `reset_auto_disable` | `set_auto_disable_reason` | `set_loop_protection` | `save_config` | `clear_config` | `clear_factory` | `activate_profile` | `delete_profile` | `onboard`
 
 See [docs/vendor_specific.md](docs/vendor_specific.md) for arguments, return values, and protocol behaviour.
 

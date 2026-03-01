@@ -45,6 +45,19 @@ _MRP_CONFIG_INFO = {'1': 'no error', '2': 'ring port link error', '3': 'multiple
 _MRP_RECOVERY_DELAY_REV = {'500ms': '1', '200ms': '2', '30ms': '3', '10ms': '4'}
 _MRP_ROLE_REV = {'client': '1', 'manager': '2'}
 
+# SRM (Sub-Ring Manager) enum mappings
+_SRM_ADMIN_STATE = {'1': 'manager', '2': 'redundantManager', '3': 'singleManager'}
+_SRM_OPER_STATE = {'1': 'manager', '2': 'redundantManager', '3': 'singleManager', '4': 'disabled'}
+_SRM_PORT_OPER_STATE = {'1': 'disabled', '2': 'blocked', '3': 'forwarding', '4': 'not-connected'}
+_SRM_RING_OPER_STATE = {'1': 'undefined', '2': 'open', '3': 'closed'}
+_SRM_REDUNDANCY = {'1': True, '2': False}
+_SRM_CONFIG_INFO = {
+    '1': 'no error', '2': 'ring port link error', '3': 'multiple SRM',
+    '4': 'no partner manager', '5': 'concurrent VLAN', '6': 'concurrent port',
+    '7': 'concurrent redundancy', '8': 'trunk member', '9': 'shared VLAN',
+}
+_SRM_ADMIN_STATE_REV = {'manager': '1', 'redundantManager': '2', 'singleManager': '3'}
+
 # Auto-disable error reason enum (hm2AutoDisableIntfErrorReason)
 _AUTO_DISABLE_REASONS = {
     '0': 'none', '1': 'link-flap', '2': 'crc-error', '3': 'duplex-mismatch',
@@ -2052,6 +2065,208 @@ class MOPSHIOS:
             pass
 
         return {'configured': False}
+
+    def get_mrp_sub_ring(self):
+        """Return MRP sub-ring (SRM) configuration and operating state."""
+        try:
+            # Global scalars
+            global_data = self.client.get("HM2-L2REDUNDANCY-MIB", "hm2SrmMibGroup", [
+                "hm2SrmGlobalAdminState",
+                "hm2SrmMaxInstances",
+            ])
+        except MOPSError:
+            global_data = []
+
+        enabled = False
+        max_instances = 8
+        if global_data:
+            g = global_data[0] if isinstance(global_data, list) else global_data
+            enabled = _safe_int(g.get("hm2SrmGlobalAdminState", "2")) == 1
+            max_instances = _safe_int(g.get("hm2SrmMaxInstances", "8"), 8)
+
+        try:
+            entries = self.client.get("HM2-L2REDUNDANCY-MIB", "hm2SrmEntry", [
+                "hm2SrmRingID",
+                "hm2SrmAdminState", "hm2SrmOperState",
+                "hm2SrmVlanID", "hm2SrmMRPDomainID",
+                "hm2SrmPartnerMAC", "hm2SrmSubRingProtocol",
+                "hm2SrmSubRingName",
+                "hm2SrmSubRingPortIfIndex", "hm2SrmSubRingPortOperState",
+                "hm2SrmSubRingOperState", "hm2SrmRedundancyOperState",
+                "hm2SrmConfigOperState",
+                "hm2SrmRowStatus",
+            ])
+        except MOPSError:
+            entries = []
+
+        instances = []
+        if entries:
+            ifindex_map = self._build_ifindex_map()
+            for e in entries:
+                row_status = _safe_int(e.get("hm2SrmRowStatus", "0"))
+                if row_status not in (1, 4):  # active(1) or createAndGo(4)
+                    continue
+
+                port_idx = e.get("hm2SrmSubRingPortIfIndex", "")
+                admin_state = e.get("hm2SrmAdminState", "1")
+                oper_state = e.get("hm2SrmOperState", "4")
+
+                # Domain ID: mangled binary (U+FFFD replaces \xFF during XML decode)
+                domain_raw = e.get("hm2SrmMRPDomainID", "")
+                if domain_raw and len(domain_raw) == 16:
+                    # U+FFFD (replacement char) → 0xFF (original byte)
+                    domain_id = ':'.join(
+                        'ff' if c == '\ufffd' else f'{ord(c):02x}'
+                        for c in domain_raw)
+                else:
+                    domain_id = 'ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff'
+
+                # Partner MAC: mangled binary → formatted MAC
+                partner_raw = e.get("hm2SrmPartnerMAC", "")
+                partner_mac = _try_mac(partner_raw) if partner_raw else ""
+
+                instances.append({
+                    'ring_id': _safe_int(e.get("hm2SrmRingID", "0")),
+                    'mode': _SRM_ADMIN_STATE.get(admin_state, 'manager'),
+                    'mode_actual': _SRM_OPER_STATE.get(oper_state, 'disabled'),
+                    'vlan': _safe_int(e.get("hm2SrmVlanID", "0")),
+                    'domain_id': domain_id,
+                    'partner_mac': partner_mac,
+                    'protocol': e.get("hm2SrmSubRingProtocol", "mrp"),
+                    'name': e.get("hm2SrmSubRingName", ""),
+                    'port': ifindex_map.get(port_idx, port_idx),
+                    'port_state': _SRM_PORT_OPER_STATE.get(
+                        e.get("hm2SrmSubRingPortOperState", "4"), 'not-connected'),
+                    'ring_state': _SRM_RING_OPER_STATE.get(
+                        e.get("hm2SrmSubRingOperState", "1"), 'undefined'),
+                    'redundancy': _SRM_REDUNDANCY.get(
+                        e.get("hm2SrmRedundancyOperState", "2"), False),
+                    'info': _SRM_CONFIG_INFO.get(
+                        e.get("hm2SrmConfigOperState", "1"), 'no error'),
+                })
+
+        return {
+            'enabled': enabled,
+            'max_instances': max_instances,
+            'instances': instances,
+        }
+
+    def set_mrp_sub_ring(self, ring_id=None, enabled=None, mode='manager',
+                         port=None, vlan=None, name=None):
+        """Configure MRP sub-ring (SRM) via MOPS.
+
+        Global operation (ring_id=None):
+            set_mrp_sub_ring(enabled=True)   — enable SRM globally
+            set_mrp_sub_ring(enabled=False)  — disable SRM globally
+
+        Instance operation (ring_id provided):
+            Creates/modifies an SRM instance. Auto-enables global SRM.
+
+        Args:
+            ring_id:  int — sub-ring instance ID (None = global only)
+            enabled:  bool — global SRM enable/disable
+            mode:     'manager', 'redundantManager', or 'singleManager'
+            port:     interface name (e.g. '1/3') — single sub-ring port
+            vlan:     VLAN for sub-ring (0-4042)
+            name:     sub-ring name string (optional)
+        """
+        if mode not in _SRM_ADMIN_STATE_REV:
+            raise ValueError(f"mode must be one of {list(_SRM_ADMIN_STATE_REV)}, got '{mode}'")
+
+        # Global enable/disable
+        if enabled is not None:
+            try:
+                self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2SrmMibGroup",
+                                        index={},
+                                        values={"hm2SrmGlobalAdminState": "1" if enabled else "2"})
+            except (MOPSError, ConnectionException):
+                pass
+
+        if ring_id is None:
+            return self.get_mrp_sub_ring()
+
+        # Auto-enable global SRM when creating an instance
+        if enabled is None:
+            try:
+                self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2SrmMibGroup",
+                                        index={},
+                                        values={"hm2SrmGlobalAdminState": "1"})
+            except (MOPSError, ConnectionException):
+                pass
+
+        idx = {"hm2SrmRingID": str(ring_id)}
+
+        # Try to create — if it already exists, just modify
+        try:
+            self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2SrmEntry",
+                                    index=idx,
+                                    values={"hm2SrmRowStatus": "5"})  # createAndWait
+        except (MOPSError, ConnectionException):
+            pass  # instance already exists
+
+        # notInService for modification
+        self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2SrmEntry",
+                                index=idx,
+                                values={"hm2SrmRowStatus": "2"})
+
+        values = {"hm2SrmAdminState": _SRM_ADMIN_STATE_REV[mode]}
+
+        if port:
+            ifindex_map = self._build_ifindex_map()
+            name_to_idx = {n: i for i, n in ifindex_map.items()}
+            pidx = name_to_idx.get(port)
+            if pidx is None:
+                raise ValueError(f"Unknown port '{port}'")
+            values["hm2SrmSubRingPortIfIndex"] = pidx
+
+        if vlan is not None:
+            values["hm2SrmVlanID"] = str(int(vlan))
+
+        if name is not None:
+            values["hm2SrmSubRingName"] = name
+
+        self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2SrmEntry",
+                                index=idx, values=values)
+
+        # Activate
+        self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2SrmEntry",
+                                index=idx,
+                                values={"hm2SrmRowStatus": "1"})  # active
+
+        return self.get_mrp_sub_ring()
+
+    def delete_mrp_sub_ring(self, ring_id=None):
+        """Delete sub-ring instance or disable SRM globally.
+
+        Args:
+            ring_id: int — specific instance to delete (None = disable globally)
+        """
+        if ring_id is None:
+            # Disable SRM globally
+            try:
+                self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2SrmMibGroup",
+                                        index={},
+                                        values={"hm2SrmGlobalAdminState": "2"})
+            except (MOPSError, ConnectionException):
+                pass
+            return self.get_mrp_sub_ring()
+
+        idx = {"hm2SrmRingID": str(ring_id)}
+
+        try:
+            self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2SrmEntry",
+                                    index=idx,
+                                    values={"hm2SrmRowStatus": "2"})  # notInService
+        except (MOPSError, ConnectionException):
+            pass
+        try:
+            self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2SrmEntry",
+                                    index=idx,
+                                    values={"hm2SrmRowStatus": "6"})  # destroy
+        except (MOPSError, ConnectionException):
+            pass
+
+        return self.get_mrp_sub_ring()
 
     def activate_profile(self, storage='nvm', index=1):
         """Activate a config profile. Note: causes a warm restart.

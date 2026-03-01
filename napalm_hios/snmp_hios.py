@@ -178,6 +178,23 @@ OID_hm2MrpRingport2FixedBackup = '1.3.6.1.4.1.248.11.40.1.1.1.1.27'
 OID_hm2MrpRecoveryDelaySupported = '1.3.6.1.4.1.248.11.40.1.1.1.1.12'
 OID_hm2MrpFastMrp             = '1.3.6.1.4.1.248.11.40.1.1.3'
 
+# HM2-L2REDUNDANCY-MIB — SRM (Sub-Ring Manager)  1.3.6.1.4.1.248.11.40.1.4.*
+OID_hm2SrmGlobalAdminState     = '1.3.6.1.4.1.248.11.40.1.4.1'
+OID_hm2SrmMaxInstances         = '1.3.6.1.4.1.248.11.40.1.4.2'
+OID_hm2SrmAdminState           = '1.3.6.1.4.1.248.11.40.1.4.3.1.2'
+OID_hm2SrmOperState            = '1.3.6.1.4.1.248.11.40.1.4.3.1.3'
+OID_hm2SrmVlanID               = '1.3.6.1.4.1.248.11.40.1.4.3.1.4'
+OID_hm2SrmMRPDomainID          = '1.3.6.1.4.1.248.11.40.1.4.3.1.5'
+OID_hm2SrmPartnerMAC           = '1.3.6.1.4.1.248.11.40.1.4.3.1.6'
+OID_hm2SrmSubRingProtocol      = '1.3.6.1.4.1.248.11.40.1.4.3.1.7'
+OID_hm2SrmSubRingName          = '1.3.6.1.4.1.248.11.40.1.4.3.1.8'
+OID_hm2SrmSubRingPortIfIndex   = '1.3.6.1.4.1.248.11.40.1.4.3.1.9'
+OID_hm2SrmSubRingPortOperState = '1.3.6.1.4.1.248.11.40.1.4.3.1.10'
+OID_hm2SrmSubRingOperState     = '1.3.6.1.4.1.248.11.40.1.4.3.1.11'
+OID_hm2SrmRedundancyOperState  = '1.3.6.1.4.1.248.11.40.1.4.3.1.12'
+OID_hm2SrmConfigOperState      = '1.3.6.1.4.1.248.11.40.1.4.3.1.13'
+OID_hm2SrmRowStatus            = '1.3.6.1.4.1.248.11.40.1.4.3.1.20'
+
 # HM2-DEVMGMT-MIB — Auto-Disable  1.3.6.1.4.1.248.11.10.1.9.*
 OID_hm2AutoDisableIntfTimer         = '1.3.6.1.4.1.248.11.10.1.9.1.1.4'
 OID_hm2AutoDisableIntfRemainingTime = '1.3.6.1.4.1.248.11.10.1.9.1.1.1'
@@ -454,6 +471,19 @@ _MRP_CONFIG_OPER_STATE = {1: 'noError', 2: 'linkError', 3: 'multipleMRM'}
 _MRP_CONFIG_INFO = {1: 'no error', 2: 'ring port link error', 3: 'multiple MRM detected'}
 _MRP_RECOVERY_DELAY_REV = {'500ms': 1, '200ms': 2, '30ms': 3, '10ms': 4}
 _MRP_ROLE_REV = {'client': 1, 'manager': 2}
+
+# SRM (Sub-Ring Manager) enum mappings
+_SRM_ADMIN_STATE = {1: 'manager', 2: 'redundantManager', 3: 'singleManager'}
+_SRM_OPER_STATE = {1: 'manager', 2: 'redundantManager', 3: 'singleManager', 4: 'disabled'}
+_SRM_PORT_OPER_STATE = {1: 'disabled', 2: 'blocked', 3: 'forwarding', 4: 'not-connected'}
+_SRM_RING_OPER_STATE = {1: 'undefined', 2: 'open', 3: 'closed'}
+_SRM_REDUNDANCY = {1: True, 2: False}
+_SRM_CONFIG_INFO = {
+    1: 'no error', 2: 'ring port link error', 3: 'multiple SRM',
+    4: 'no partner manager', 5: 'concurrent VLAN', 6: 'concurrent port',
+    7: 'concurrent redundancy', 8: 'trunk member', 9: 'shared VLAN',
+}
+_SRM_ADMIN_STATE_REV = {'manager': 1, 'redundantManager': 2, 'singleManager': 3}
 
 # Auto-disable reason enum
 _AUTO_DISABLE_REASONS = {
@@ -2011,6 +2041,233 @@ class SNMPHIOS:
         except ConnectionException:
             pass  # Row might not exist
         return await self._get_mrp_async()
+
+    def get_mrp_sub_ring(self):
+        """Return MRP sub-ring (SRM) configuration and operating state."""
+        return asyncio.run(self._get_mrp_sub_ring_async())
+
+    async def _get_mrp_sub_ring_async(self):
+        engine = SnmpEngine()
+
+        # Global scalars
+        enabled = False
+        max_instances = 8
+        try:
+            scalar_data = await self._get_scalar(
+                OID_hm2SrmGlobalAdminState, OID_hm2SrmMaxInstances)
+            enabled = int(scalar_data.get(OID_hm2SrmGlobalAdminState, 2)) == 1
+            max_instances = int(scalar_data.get(OID_hm2SrmMaxInstances, 8))
+        except Exception:
+            pass
+
+        # Table walk
+        rows = await self._walk_columns({
+            'admin_state': OID_hm2SrmAdminState,
+            'oper_state': OID_hm2SrmOperState,
+            'vlan': OID_hm2SrmVlanID,
+            'domain_id': OID_hm2SrmMRPDomainID,
+            'partner_mac': OID_hm2SrmPartnerMAC,
+            'protocol': OID_hm2SrmSubRingProtocol,
+            'name': OID_hm2SrmSubRingName,
+            'port_ifindex': OID_hm2SrmSubRingPortIfIndex,
+            'port_oper': OID_hm2SrmSubRingPortOperState,
+            'ring_oper': OID_hm2SrmSubRingOperState,
+            'redundancy_oper': OID_hm2SrmRedundancyOperState,
+            'config_oper': OID_hm2SrmConfigOperState,
+            'row_status': OID_hm2SrmRowStatus,
+        }, engine)
+
+        instances = []
+        if rows:
+            ifmap = await self._build_ifindex_map(engine)
+            for suffix, cols in rows.items():
+                row_status = int(cols.get('row_status', 0))
+                if row_status != 1:  # active only
+                    continue
+
+                # Index suffix is the ring_id (single integer)
+                ring_id = int(suffix.lstrip('.'))
+                port_idx = str(cols.get('port_ifindex', ''))
+                port_name = ifmap.get(port_idx, f'if{port_idx}')
+
+                admin_state = int(cols.get('admin_state', 1))
+                oper_state = int(cols.get('oper_state', 4))
+                port_oper = int(cols.get('port_oper', 4))
+                ring_oper = int(cols.get('ring_oper', 1))
+                redundancy = int(cols.get('redundancy_oper', 2))
+                config_oper = int(cols.get('config_oper', 1))
+
+                # Format domain ID from SNMP OctetString
+                domain_raw = cols.get('domain_id', '')
+                if domain_raw:
+                    try:
+                        domain_bytes = bytes(domain_raw)
+                        domain_id = ':'.join(f'{b:02x}' for b in domain_bytes)
+                    except (TypeError, ValueError):
+                        domain_id = str(domain_raw)
+                else:
+                    domain_id = 'ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff'
+
+                # Format partner MAC
+                partner_raw = cols.get('partner_mac', '')
+                if partner_raw:
+                    try:
+                        mac_bytes = bytes(partner_raw)
+                        partner_mac = ':'.join(f'{b:02X}' for b in mac_bytes)
+                    except (TypeError, ValueError):
+                        partner_mac = str(partner_raw)
+                else:
+                    partner_mac = ''
+
+                instances.append({
+                    'ring_id': ring_id,
+                    'mode': _SRM_ADMIN_STATE.get(admin_state, 'manager'),
+                    'mode_actual': _SRM_OPER_STATE.get(oper_state, 'disabled'),
+                    'vlan': int(cols.get('vlan', 0)),
+                    'domain_id': domain_id,
+                    'partner_mac': partner_mac,
+                    'protocol': str(cols.get('protocol', 'mrp')),
+                    'name': str(cols.get('name', '')),
+                    'port': port_name,
+                    'port_state': _SRM_PORT_OPER_STATE.get(port_oper, 'not-connected'),
+                    'ring_state': _SRM_RING_OPER_STATE.get(ring_oper, 'undefined'),
+                    'redundancy': _SRM_REDUNDANCY.get(redundancy, False),
+                    'info': _SRM_CONFIG_INFO.get(config_oper, 'no error'),
+                })
+
+        return {
+            'enabled': enabled,
+            'max_instances': max_instances,
+            'instances': instances,
+        }
+
+    def set_mrp_sub_ring(self, ring_id=None, enabled=None, mode='manager',
+                         port=None, vlan=None, name=None):
+        """Configure MRP sub-ring (SRM) via SNMP.
+
+        Args:
+            ring_id:  int — sub-ring instance ID (None = global only)
+            enabled:  bool — global SRM enable/disable
+            mode:     'manager', 'redundantManager', or 'singleManager'
+            port:     interface name (e.g. '1/3') — single sub-ring port
+            vlan:     VLAN for sub-ring (0-4042)
+            name:     sub-ring name string (optional)
+        """
+        if mode not in _SRM_ADMIN_STATE_REV:
+            raise ValueError(f"mode must be one of {list(_SRM_ADMIN_STATE_REV)}, got '{mode}'")
+        return asyncio.run(self._set_mrp_sub_ring_async(
+            ring_id, enabled, mode, port, vlan, name))
+
+    async def _set_mrp_sub_ring_async(self, ring_id, enabled, mode, port, vlan, name):
+        engine = SnmpEngine()
+
+        # Global enable/disable
+        if enabled is not None:
+            try:
+                await self._set_oids(
+                    (OID_hm2SrmGlobalAdminState + '.0', Integer32(1 if enabled else 2)),
+                )
+            except ConnectionException:
+                pass
+
+        if ring_id is None:
+            return await self._get_mrp_sub_ring_async()
+
+        # Auto-enable global SRM when creating an instance
+        if enabled is None:
+            try:
+                await self._set_oids(
+                    (OID_hm2SrmGlobalAdminState + '.0', Integer32(1)),
+                )
+            except ConnectionException:
+                pass
+
+        sfx = f'.{ring_id}'
+
+        # Check if instance exists
+        existing = await self._walk_columns({
+            'row_status': OID_hm2SrmRowStatus,
+        }, engine)
+        sfx_key = str(ring_id)
+        instance_exists = sfx_key in existing
+
+        if not instance_exists:
+            try:
+                await self._set_oids(
+                    (OID_hm2SrmRowStatus + sfx, Integer32(5)),  # createAndWait
+                )
+            except ConnectionException:
+                # OID doesn't exist (e.g. L2S) — can't create
+                return await self._get_mrp_sub_ring_async()
+
+        # notInService for modification
+        await self._set_oids(
+            (OID_hm2SrmRowStatus + sfx, Integer32(2)),
+        )
+
+        # Build SET pairs
+        sets = []
+        sets.append((OID_hm2SrmAdminState + sfx,
+                     Integer32(_SRM_ADMIN_STATE_REV[mode])))
+
+        if port:
+            ifmap = await self._build_ifindex_map(engine)
+            name_to_idx = {n: int(i) for i, n in ifmap.items()}
+            pidx = name_to_idx.get(port)
+            if pidx is None:
+                raise ValueError(f"Unknown port '{port}'")
+            sets.append((OID_hm2SrmSubRingPortIfIndex + sfx, Integer32(pidx)))
+
+        if vlan is not None:
+            sets.append((OID_hm2SrmVlanID + sfx, Integer32(int(vlan))))
+
+        if name is not None:
+            from pysnmp.proto.rfc1902 import OctetString
+            sets.append((OID_hm2SrmSubRingName + sfx, OctetString(name)))
+
+        for oid, val in sets:
+            await self._set_oids((oid, val))
+
+        # Activate
+        await self._set_oids(
+            (OID_hm2SrmRowStatus + sfx, Integer32(1)),  # active
+        )
+
+        return await self._get_mrp_sub_ring_async()
+
+    def delete_mrp_sub_ring(self, ring_id=None):
+        """Delete sub-ring instance or disable SRM globally via SNMP.
+
+        Args:
+            ring_id: int — specific instance to delete (None = disable globally)
+        """
+        return asyncio.run(self._delete_mrp_sub_ring_async(ring_id))
+
+    async def _delete_mrp_sub_ring_async(self, ring_id):
+        if ring_id is None:
+            # Disable SRM globally
+            try:
+                await self._set_oids(
+                    (OID_hm2SrmGlobalAdminState + '.0', Integer32(2)),
+                )
+            except ConnectionException:
+                pass
+            return await self._get_mrp_sub_ring_async()
+
+        sfx = f'.{ring_id}'
+        try:
+            await self._set_oids(
+                (OID_hm2SrmRowStatus + sfx, Integer32(2)),  # notInService
+            )
+        except ConnectionException:
+            pass
+        try:
+            await self._set_oids(
+                (OID_hm2SrmRowStatus + sfx, Integer32(6)),  # destroy
+            )
+        except ConnectionException:
+            pass
+        return await self._get_mrp_sub_ring_async()
 
     def get_lldp_neighbors_detail_extended(self, interface=''):
         """Return extended LLDP detail with 802.1/802.3 extension data."""

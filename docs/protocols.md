@@ -125,6 +125,8 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `delete_profile` | Yes | Yes | Yes | Vendor write |
 | `set_interface` | Yes | Yes | Yes | Vendor write |
 | `set_mrp` / `delete_mrp` | Yes | Yes | Yes | Vendor write |
+| `get_mrp_sub_ring` | Yes | Yes | Yes | Vendor |
+| `set_mrp_sub_ring` / `delete_mrp_sub_ring` | Yes | Yes | Yes | Vendor write |
 | `set_hidiscovery` | Yes | Yes | Yes | Vendor write |
 | `get_rstp` | Yes | Yes | Yes | Vendor |
 | `get_rstp_port` | Yes | Yes | Yes | Vendor |

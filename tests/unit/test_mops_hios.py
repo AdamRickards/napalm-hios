@@ -732,6 +732,121 @@ class TestMOPSHIOSSetters(unittest.TestCase):
         self.assertEqual(calls[1].kwargs['values'], {"hm2MrpRowStatus": "6"})
         self.assertFalse(result['configured'])
 
+    # --- MRP sub-ring (SRM) ---
+
+    def test_get_mrp_sub_ring_empty(self):
+        """No SRM instances configured."""
+        self.backend.client.get.side_effect = [
+            [{"hm2SrmGlobalAdminState": "2", "hm2SrmMaxInstances": "8"}],
+            [],  # no entries
+        ]
+        result = self.backend.get_mrp_sub_ring()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['max_instances'], 8)
+        self.assertEqual(result['instances'], [])
+
+    def test_get_mrp_sub_ring_one_instance(self):
+        """One SRM instance configured and active."""
+        self.backend.client.get.side_effect = [
+            [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
+            [{
+                "hm2SrmRingID": "1",
+                "hm2SrmAdminState": "1",  # manager
+                "hm2SrmOperState": "1",   # manager
+                "hm2SrmVlanID": "200",
+                "hm2SrmMRPDomainID": "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff",
+                "hm2SrmPartnerMAC": "00:80:63:A1:B2:C3",
+                "hm2SrmSubRingProtocol": "mrp",
+                "hm2SrmSubRingName": "sub1",
+                "hm2SrmSubRingPortIfIndex": "3",
+                "hm2SrmSubRingPortOperState": "3",  # forwarding
+                "hm2SrmSubRingOperState": "3",       # closed
+                "hm2SrmRedundancyOperState": "1",    # True
+                "hm2SrmConfigOperState": "1",        # no error
+                "hm2SrmRowStatus": "1",              # active
+            }],
+        ]
+        self.backend._build_ifindex_map = Mock(return_value={
+            "1": "1/1", "2": "1/2", "3": "1/3", "4": "1/4"})
+
+        result = self.backend.get_mrp_sub_ring()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(len(result['instances']), 1)
+        inst = result['instances'][0]
+        self.assertEqual(inst['ring_id'], 1)
+        self.assertEqual(inst['mode'], 'manager')
+        self.assertEqual(inst['vlan'], 200)
+        self.assertEqual(inst['port'], '1/3')
+        self.assertEqual(inst['port_state'], 'forwarding')
+        self.assertEqual(inst['ring_state'], 'closed')
+        self.assertTrue(inst['redundancy'])
+        self.assertEqual(inst['name'], 'sub1')
+
+    def test_set_mrp_sub_ring_global_enable(self):
+        """Global SRM enable only (no instance)."""
+        self.backend.client.set_indexed.return_value = True
+        self.backend.client.get.side_effect = [
+            [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
+            [],
+        ]
+
+        result = self.backend.set_mrp_sub_ring(enabled=True)
+
+        calls = self.backend.client.set_indexed.call_args_list
+        self.assertEqual(calls[0].kwargs['values'], {"hm2SrmGlobalAdminState": "1"})
+        self.assertTrue(result['enabled'])
+
+    def test_set_mrp_sub_ring_create_instance(self):
+        """Create SRM instance — 4-step RowStatus lifecycle."""
+        self.backend._build_ifindex_map = Mock(return_value={
+            "1": "1/1", "2": "1/2", "3": "1/3", "4": "1/4"})
+        self.backend.client.set_indexed.return_value = True
+        self.backend.client.get.side_effect = [
+            [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
+            [],
+        ]
+
+        self.backend.set_mrp_sub_ring(ring_id=1, mode='manager',
+                                       port='1/3', vlan=200)
+
+        calls = self.backend.client.set_indexed.call_args_list
+        # Call 1: auto-enable global SRM
+        self.assertEqual(calls[0].kwargs['values'], {"hm2SrmGlobalAdminState": "1"})
+        # Call 2: createAndWait(5)
+        self.assertEqual(calls[1].kwargs['values'], {"hm2SrmRowStatus": "5"})
+        # Call 3: notInService(2)
+        self.assertEqual(calls[2].kwargs['values'], {"hm2SrmRowStatus": "2"})
+        # Call 4: set parameters
+        params = calls[3].kwargs['values']
+        self.assertEqual(params["hm2SrmAdminState"], "1")  # manager
+        self.assertEqual(params["hm2SrmSubRingPortIfIndex"], "3")
+        self.assertEqual(params["hm2SrmVlanID"], "200")
+        # Call 5: activate(1)
+        self.assertEqual(calls[4].kwargs['values'], {"hm2SrmRowStatus": "1"})
+
+    def test_set_mrp_sub_ring_unknown_port(self):
+        """Unknown port raises ValueError."""
+        self.backend._build_ifindex_map = Mock(return_value={"1": "1/1"})
+        self.backend.client.set_indexed.return_value = True
+
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.set_mrp_sub_ring(ring_id=1, port='9/9')
+        self.assertIn("Unknown port", str(ctx.exception))
+
+    def test_delete_mrp_sub_ring(self):
+        """Delete SRM instance: notInService → destroy."""
+        self.backend.client.set_indexed.return_value = True
+        self.backend.client.get.side_effect = [
+            [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
+            [],
+        ]
+
+        result = self.backend.delete_mrp_sub_ring(ring_id=1)
+
+        calls = self.backend.client.set_indexed.call_args_list
+        self.assertEqual(calls[0].kwargs['values'], {"hm2SrmRowStatus": "2"})
+        self.assertEqual(calls[1].kwargs['values'], {"hm2SrmRowStatus": "6"})
+
     # --- activate_profile ---
 
     def test_activate_profile_nvm(self):

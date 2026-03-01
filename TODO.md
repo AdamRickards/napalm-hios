@@ -1,9 +1,5 @@
 # TODO
 
-## Documentation update
-
-- [x] README.md — updated: added auto-disable + loop protection to features + method lists, updated test count
-
 ## Release Process Checklist
 
 1. Pull clean from GitHub
@@ -23,6 +19,11 @@
 15. Test PyPI-deployed version against local test environment
 16. Done
 
+## CLAMPS
+
+- [ ] Zero-config discovery mode — LLDP-driven topology discovery, zero arguments needed. See [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
+- [ ] MOPS staging/commit for performance (one commit per phase, not per-port)
+
 ## AARON — auto-entry detection
 
 Local machine identity detection added (`get_local_identity()`): detects own IP via socket + own MACs via `/sys/class/net/*/address` (Linux) or `getmac` (Windows). Injects into ARP map so the scanning machine resolves on its edge port.
@@ -35,23 +36,15 @@ Testing needed for auto-entry reliability:
 - [ ] Cross-subnet: laptop on different VLAN/subnet from switch management — does socket trick still find the right IP?
 - [ ] Auto-entry: once we can reliably find our own switch+port, use it as `--entry` for MOHAWC/VINNY topology ordering
 
-## deploy_mrp improvements
+## MOHAWC
 
-- [ ] Find a name (backronym tradition: AARON, MOHAWC, MARCO, STONE)
-- [ ] Sub-Ring support
-- [ ] Gather-facts stage: parallel connect, read current state (MRP, RSTP, loop prot, auto-disable), diff against target, apply playbook, verify loop (1s retry), save
-- [ ] L2S safety: check getter before setter (SNMP raises noCreation on L2S devices that lack loop prot / auto-disable)
-- [ ] Loop protection as alternative to RSTP disable (driver getters/setters done — MOPS + SNMP)
-- [ ] Auto-disable integration (driver getters/setters done — MOPS + SNMP)
-- [ ] Phase 5 ring verification: retry 3 times with short delay before declaring unhealthy (ring needs a beat to converge after port enable)
-- [ ] Logging: all screen output should also go to log file (phase steps, per-device results, ring status). Log folder should be PWD, not fixed path
+- [ ] `set-ip` subcommand — set management IP/netmask/gateway on a device via MOPS. Needs a new driver method (`set_management_ip()` or similar) since `set_hidiscovery()` only toggles mode, and `onboard()` only sets password. Currently no way to change IP over L3 without the web UI.
+- [ ] `reboot` subcommand — cold start (full power cycle) and warm start (software restart) options. Needs napalm-hios vendor methods (`cold_start()` / `warm_start()` or `reboot(mode='cold'|'warm')`).
 
 ## Vendor-specific getters
 
 - [ ] `get_vlan_ports()` — per-interface VLAN config: PVID, access/trunk mode, ingress filtering, acceptable frame types. Source: Q-BRIDGE-MIB (`dot1qPvid`, `dot1qVlanStaticEgressPorts`, `dot1qVlanStaticUntaggedPorts`). Needed for NILS edge port health checks and device type detection.
 - [ ] `set_vlan()` / `set_vlan_ports()` — create/delete VLANs, set per-port T/U/PVID membership. No port roles on Hirschmann (respects the ASIC) — tool must explicitly set Tagged/Untagged/PVID per port per VLAN.
-- [x] `get_loop_protection()` / `set_loop_protection()` — MOPS + SNMP (SSH pending)
-- [x] `get_auto_disable()` / `set_auto_disable()` / `reset_auto_disable()` / `set_auto_disable_reason()` — MOPS + SNMP (SSH pending)
 
 ## VLAN deployment tool
 

@@ -588,6 +588,24 @@ class HIOSDriver(NetworkDriver):
             return self._get_active_connection().delete_mrp()
         raise NotImplementedError("delete_mrp is not implemented for this protocol")
 
+    def get_mrp_sub_ring(self):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
+            return self._get_active_connection().get_mrp_sub_ring()
+        raise NotImplementedError("get_mrp_sub_ring is not implemented for this protocol")
+
+    def set_mrp_sub_ring(self, ring_id=None, enabled=None, mode='manager',
+                         port=None, vlan=None, name=None):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
+            return self._get_active_connection().set_mrp_sub_ring(
+                ring_id, enabled, mode, port, vlan, name,
+            )
+        raise NotImplementedError("set_mrp_sub_ring is not implemented for this protocol")
+
+    def delete_mrp_sub_ring(self, ring_id=None):
+        if self.active_protocol in ('ssh', 'snmp', 'mops'):
+            return self._get_active_connection().delete_mrp_sub_ring(ring_id)
+        raise NotImplementedError("delete_mrp_sub_ring is not implemented for this protocol")
+
     def set_interface(self, interface, enabled=None, description=None):
         if enabled is None and description is None:
             return
