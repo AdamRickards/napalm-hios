@@ -29,7 +29,7 @@ from clamp import (
     worker_enable_rstp_global, worker_teardown_loop_protection,
     worker_teardown_auto_disable, worker_teardown_rstp_full,
     worker_delete_sub_ring, worker_disable_srm_global,
-    print_results, run_phase0, rm_ring_needs_breaking,
+    print_results, run_phase0, rm_ring_needs_breaking, get_ring_ports_for_device,
 )
 
 
@@ -198,11 +198,46 @@ def main():
 
             has_sub_rings = bool(srm_instances)
 
-            # --- Step 1: Delete sub-rings (before touching main ring) ---
-            if has_sub_rings:
-                log_print("\n  Step 1: Deleting sub-rings...")
+            # --- Step 1: Break all ring paths (prevent loops during teardown) ---
+            log_print("\n  Step 1: Breaking ring paths...")
 
-                # 1a: Delete SRM instances
+            # 1a: Break sub-ring paths (RSRM ports DOWN)
+            broke_sub_ports = []
+            if has_sub_rings:
+                for sv in sub_ring_vlans:
+                    ring = config['rings'].get(sv, {})
+                    rsrm = ring.get('rsrm')
+                    if rsrm:
+                        rsrm_device = connections.get(rsrm['ip'])
+                        if rsrm_device:
+                            try:
+                                rsrm_device.set_interface(rsrm['port'], enabled=False)
+                                log_print(f"  Step 1a: [{rsrm['ip']}] port {rsrm['port']} admin DOWN (RSRM, VLAN {sv})")
+                                broke_sub_ports.append((rsrm['ip'], rsrm['port'], sv))
+                            except Exception as e:
+                                log_print(f"  WARNING: Cannot disable RSRM port {rsrm['port']} on {rsrm['ip']}: {e}")
+            if not broke_sub_ports:
+                log_print("  Step 1a: Skipped (no sub-ring paths to break)")
+
+            # 1b: Break main ring (RM port2 DOWN)
+            broke_ring = rm_ring_needs_breaking(device_facts, rm_dev)
+            if broke_ring:
+                log_print(f"  Step 1b: [{rm_ip}] port {rm_dev['port2']} admin DOWN (RM port2)")
+                try:
+                    rm_device.set_interface(rm_dev['port2'], enabled=False)
+                except Exception as e:
+                    log_print(f"  WARNING: Cannot disable RM port2: {e}")
+                    log_print("  Proceeding anyway...")
+            else:
+                log_print(f"  Step 1b: Skipped (ring ports not both up — no ring to break)")
+
+            log_print("  All paths broken — safe to tear down.")
+
+            # --- Step 2: Delete sub-rings ---
+            if has_sub_rings:
+                log_print("\n  Step 2: Deleting sub-rings...")
+
+                # 2a: Delete SRM instances
                 srm_results = []
                 with ThreadPoolExecutor(max_workers=max(1, len(srm_instances))) as pool:
                     futures = {}
@@ -214,9 +249,9 @@ def main():
                             )] = (ip, ring_id)
                     for future in as_completed(futures):
                         srm_results.append(future.result())
-                print_results("Step 1a — Delete SRM Instances", srm_results)
+                print_results("Step 2a — Delete SRM Instances", srm_results)
 
-                # 1b: Disable SRM globally on those devices
+                # 2b: Disable SRM globally on those devices
                 disable_results = []
                 with ThreadPoolExecutor(max_workers=max(1, len(srm_instances))) as pool:
                     futures = {}
@@ -227,9 +262,9 @@ def main():
                         )] = ip
                     for future in as_completed(futures):
                         disable_results.append(future.result())
-                print_results("Step 1b — Disable SRM Global", disable_results)
+                print_results("Step 2b — Disable SRM Global", disable_results)
 
-                # 1c: Delete MRP on sub-ring RCs
+                # 2c: Delete MRP on sub-ring RCs
                 if sub_ring_rc_ips:
                     rc_results = []
                     with ThreadPoolExecutor(max_workers=max(1, len(sub_ring_rc_ips))) as pool:
@@ -242,22 +277,9 @@ def main():
                                     futures[pool.submit(worker_delete_mrp, device, dev)] = ip
                         for future in as_completed(futures):
                             rc_results.append(future.result())
-                    print_results("Step 1c — Delete Sub-Ring RC MRP", rc_results)
+                    print_results("Step 2c — Delete Sub-Ring RC MRP", rc_results)
             else:
-                log_print("\n  Step 1: Skipped (no sub-rings detected)")
-
-            # --- Step 2: Break ring (RM port2 DOWN) ---
-            broke_ring = rm_ring_needs_breaking(device_facts, rm_dev)
-            if broke_ring:
-                log_print(f"\n  Step 2: Unclamping ring — RM port2 ({rm_dev['port2']}) on {rm_ip}...")
-                try:
-                    rm_device.set_interface(rm_dev['port2'], enabled=False)
-                    log_print(f"  [{rm_ip}] port {rm_dev['port2']} admin DOWN — ring unclamped")
-                except Exception as e:
-                    log_print(f"  WARNING: Cannot disable RM port2: {e}")
-                    log_print("  Proceeding anyway...")
-            else:
-                log_print(f"\n  Step 2: Skipped (ring ports not both up — no ring to break)")
+                log_print("\n  Step 2: Skipped (no sub-rings detected)")
 
             # --- Step 3: Tear down loop protection (if detected) ---
             if has_loop_prot:
@@ -306,10 +328,10 @@ def main():
                     for dev in config['devices']:
                         ip = dev['ip']
                         device = connections.get(ip)
-                        if not device or ip in l2s_devices:
+                        if not device:
                             continue
                         all_ports = device_facts.get(ip, {}).get('all_ports', [])
-                        ring_ports = [dev['port1'], dev['port2']]
+                        ring_ports = get_ring_ports_for_device(config, ip)
                         futures[pool.submit(
                             worker_teardown_rstp_full, device, dev, all_ports, ring_ports
                         )] = dev
@@ -362,16 +384,21 @@ def main():
                     rstp_port_results.append(future.result())
             print_results("Step 6b — RSTP Ring Ports Enable", rstp_port_results)
 
-            # --- Step 7: Restore RM port2 ---
-            if broke_ring:
-                log_print(f"\n  Step 7: Enabling RM port2 ({rm_dev['port2']}) on {rm_ip}...")
-                try:
-                    rm_device.set_interface(rm_dev['port2'], enabled=True)
-                    log_print(f"  [{rm_ip}] port {rm_dev['port2']} admin UP")
-                except Exception as e:
-                    log_print(f"  WARNING: Cannot re-enable RM port2: {e}")
-            else:
-                log_print("\n  Step 7: Skipped (ring was not broken in Step 2)")
+            # --- Step 7: Restore all broken ports ---
+            log_print(f"\n  Step 7: Restoring ports...")
+            try:
+                rm_device.set_interface(rm_dev['port2'], enabled=True)
+                log_print(f"  [{rm_ip}] port {rm_dev['port2']} admin UP (RM port2)")
+            except Exception as e:
+                log_print(f"  WARNING: Cannot re-enable RM port2: {e}")
+            for rsrm_ip, rsrm_port, sv in broke_sub_ports:
+                rsrm_device = connections.get(rsrm_ip)
+                if rsrm_device:
+                    try:
+                        rsrm_device.set_interface(rsrm_port, enabled=True)
+                        log_print(f"  [{rsrm_ip}] port {rsrm_port} admin UP (RSRM, VLAN {sv})")
+                    except Exception as e:
+                        log_print(f"  WARNING: Cannot re-enable RSRM port {rsrm_port} on {rsrm_ip}: {e}")
 
             # --- Step 8: Save if configured ---
             if config['save']:

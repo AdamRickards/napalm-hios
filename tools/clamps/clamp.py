@@ -438,7 +438,8 @@ def worker_gather_facts(device, dev, is_l2s_possible=True):
     """Thread worker: gather current state from one device.
 
     Returns: (ip, facts_dict, error_str)
-    facts_dict has keys: sw_level, mrp, rstp, auto_disable, loop_protection, all_ports
+    facts_dict has keys: sw_level, mrp, rstp, auto_disable, loop_protection,
+                         all_ports, srm_ports
     """
     ip = dev['ip']
     result = {
@@ -449,6 +450,7 @@ def worker_gather_facts(device, dev, is_l2s_possible=True):
         'loop_protection': None,
         'all_ports': [],
         'interfaces': {},
+        'srm_ports': set(),
     }
     try:
         facts = device.get_facts()
@@ -457,6 +459,17 @@ def worker_gather_facts(device, dev, is_l2s_possible=True):
 
         result['mrp'] = device.get_mrp()
         result['rstp'] = device.get_rstp()
+
+        # Discover sub-ring ports from live device state
+        try:
+            srm = device.get_mrp_sub_ring()
+            for instance in srm.values():
+                if isinstance(instance, dict):
+                    port = instance.get('port')
+                    if port:
+                        result['srm_ports'].add(port)
+        except Exception as e:
+            logging.warning(f"[{ip}] get_mrp_sub_ring failed: {e}")
 
         if not is_l2s:
             try:
@@ -476,10 +489,20 @@ def worker_gather_facts(device, dev, is_l2s_possible=True):
             logging.warning(f"[{ip}] get_interfaces failed: {e}")
 
         # Build all_ports list from loop_protection interfaces or get_interfaces
+        # Filter out non-switchports — MOPS/SNMP include cpu/1 (management)
+        # and vlan/N (L3 routing interfaces) which have no RSTP CST entry,
+        # loop protection, or auto-disable support.
+        def _is_switchport(p):
+            return not (p.startswith('cpu/') or p.startswith('vlan/'))
+
         if result['loop_protection'] and result['loop_protection'].get('interfaces'):
-            result['all_ports'] = sorted(result['loop_protection']['interfaces'].keys())
+            result['all_ports'] = sorted(
+                p for p in result['loop_protection']['interfaces']
+                if _is_switchport(p))
         elif result['interfaces']:
-            result['all_ports'] = sorted(result['interfaces'].keys())
+            result['all_ports'] = sorted(
+                p for p in result['interfaces']
+                if _is_switchport(p))
         else:
             result['all_ports'] = []
 
@@ -511,14 +534,24 @@ def worker_configure_mrp(device, dev, vlan, recovery_delay):
         return ip, False, None, str(e)
 
 
+# -- Staging helper --
+
+def _start_staging(device):
+    """Try to enter MOPS staging mode. Returns True if staging is active."""
+    try:
+        device.start_staging()
+        return True
+    except (NotImplementedError, AttributeError):
+        return False
+
+
 # -- RSTP workers --
 
 def worker_disable_rstp(device, dev):
     """Thread worker: disable RSTP on ring ports for one device."""
     ip = dev['ip']
     try:
-        for port in [dev['port1'], dev['port2']]:
-            device.set_rstp_port(port, enabled=False)
+        device.set_rstp_port([dev['port1'], dev['port2']], enabled=False)
         return ip, True, "RSTP disabled on ring ports"
     except (AttributeError, NotImplementedError):
         return ip, False, "set_rstp_port not available"
@@ -566,29 +599,32 @@ def worker_setup_loop_protection(device, dev, all_ports, ring_ports):
     """
     ip = dev['ip']
     try:
-        # Global enable + fastest detection
-        device.set_loop_protection(enabled=True, transmit_interval=1)
-
         ring_set = set(ring_ports)
         edge_ports = [p for p in all_ports if p not in ring_set]
 
+        staging = _start_staging(device)
+
+        # Global enable + fastest detection
+        device.set_loop_protection(enabled=True, transmit_interval=1)
+
         # Ring ports: passive + auto-disable on loop detection
-        for port in ring_ports:
-            device.set_loop_protection(
-                interface=port,
-                enabled=True,
-                mode='passive',
-                action='auto-disable',
-            )
+        device.set_loop_protection(
+            interface=ring_ports,
+            enabled=True,
+            mode='passive',
+            action='auto-disable',
+        )
 
         # Edge ports: active + auto-disable (detect and kill loops)
-        for port in edge_ports:
-            device.set_loop_protection(
-                interface=port,
-                enabled=True,
-                mode='active',
-                action='auto-disable',
-            )
+        device.set_loop_protection(
+            interface=edge_ports,
+            enabled=True,
+            mode='active',
+            action='auto-disable',
+        )
+
+        if staging:
+            device.commit_staging()
 
         return ip, True, f"loop protection on {len(edge_ports)} edge + {len(ring_ports)} ring ports (tx=1s)"
     except Exception as e:
@@ -604,11 +640,16 @@ def worker_setup_auto_disable(device, dev, all_ports, timer, reason='loop-protec
     """
     ip = dev['ip']
     try:
-        device.set_auto_disable_reason(reason, enabled=True)
         exclude = set(exclude_ports) if exclude_ports else set()
         ports = [p for p in all_ports if p not in exclude]
-        for port in ports:
-            device.set_auto_disable(interface=port, timer=timer)
+
+        staging = _start_staging(device)
+
+        device.set_auto_disable_reason(reason, enabled=True)
+        device.set_auto_disable(interface=ports, timer=timer)
+
+        if staging:
+            device.commit_staging()
 
         return ip, True, f"auto-disable ({reason}) timer={timer}s on {len(ports)} ports"
     except Exception as e:
@@ -616,11 +657,13 @@ def worker_setup_auto_disable(device, dev, all_ports, timer, reason='loop-protec
 
 
 def worker_teardown_loop_protection(device, dev, all_ports):
-    """Thread worker: disable loop protection on all ports of one device."""
+    """Thread worker: disable loop protection on all ports of one device.
+
+    No staging on teardown — order matters more than speed.
+    """
     ip = dev['ip']
     try:
-        for port in all_ports:
-            device.set_loop_protection(interface=port, enabled=False)
+        device.set_loop_protection(interface=all_ports, enabled=False)
         device.set_loop_protection(enabled=False)
         return ip, True, f"loop protection disabled on {len(all_ports)} ports"
     except Exception as e:
@@ -631,20 +674,21 @@ def worker_teardown_auto_disable(device, dev, all_ports, reason='loop-protection
     """Thread worker: reset auto-disable for a reason on all ports.
 
     Also clears any ports still held down by auto-disable (reset_auto_disable).
+    No staging on teardown — order matters more than speed.
     """
     ip = dev['ip']
     try:
-        for port in all_ports:
-            device.set_auto_disable(interface=port, timer=0)
+        device.set_auto_disable(interface=all_ports, timer=0)
         device.set_auto_disable_reason(reason, enabled=False)
 
         # Clear any ports still stuck in auto-disabled state
         ad = device.get_auto_disable()
-        released = []
-        for port, state in ad.get('interfaces', {}).items():
-            if state.get('active') and state.get('reason') == reason:
-                device.reset_auto_disable(port)
-                released.append(port)
+        released = [
+            port for port, state in ad.get('interfaces', {}).items()
+            if state.get('active') and state.get('reason') == reason
+        ]
+        if released:
+            device.reset_auto_disable(released)
 
         detail = f"auto-disable ({reason}) reset on {len(all_ports)} ports"
         if released:
@@ -664,27 +708,31 @@ def worker_setup_rstp_full(device, dev, all_ports, ring_ports, timer):
     - Admin edge port on all edge ports
     - Auto-disable reason bpdu-rate enabled
     - Auto-disable timer on all ports
+
+    Uses MOPS staging when available — all mutations in one atomic POST.
     """
     ip = dev['ip']
     try:
         ring_set = set(ring_ports)
         edge_ports = [p for p in all_ports if p not in ring_set]
 
+        staging = _start_staging(device)
+
         # Disable RSTP on ring ports
-        for port in ring_ports:
-            device.set_rstp_port(port, enabled=False)
+        device.set_rstp_port(ring_ports, enabled=False)
 
         # Enable BPDU Guard globally
         device.set_rstp(bpdu_guard=True)
 
         # Force admin edge on all edge ports
-        for port in edge_ports:
-            device.set_rstp_port(port, edge_port=True)
+        device.set_rstp_port(edge_ports, edge_port=True)
 
         # Auto-disable for bpdu-rate
         device.set_auto_disable_reason('bpdu-rate', enabled=True)
-        for port in all_ports:
-            device.set_auto_disable(interface=port, timer=timer)
+        device.set_auto_disable(interface=all_ports, timer=timer)
+
+        if staging:
+            device.commit_staging()
 
         return ip, True, f"RSTP Full on {len(edge_ports)} edge ports, BPDU Guard on, timer={timer}s"
     except Exception as e:
@@ -696,35 +744,41 @@ def worker_teardown_rstp_full(device, dev, all_ports, ring_ports):
 
     Reverses: admin edge, BPDU Guard, auto-disable for bpdu-rate,
     releases stuck ports, re-enables RSTP on ring ports.
+
+    Safe to stage — runs while RSTP is still globally on (Phase 1a).
+    get_auto_disable + reset happen AFTER commit (can't stage getters).
     """
     ip = dev['ip']
     try:
         ring_set = set(ring_ports)
         edge_ports = [p for p in all_ports if p not in ring_set]
 
+        staging = _start_staging(device)
+
         # Reset auto-disable timers
-        for port in all_ports:
-            device.set_auto_disable(interface=port, timer=0)
+        device.set_auto_disable(interface=all_ports, timer=0)
         device.set_auto_disable_reason('bpdu-rate', enabled=False)
 
-        # Clear stuck ports
-        ad = device.get_auto_disable()
-        released = []
-        for port, state in ad.get('interfaces', {}).items():
-            if state.get('active') and state.get('reason') == 'bpdu-rate':
-                device.reset_auto_disable(port)
-                released.append(port)
-
         # Remove admin edge on edge ports
-        for port in edge_ports:
-            device.set_rstp_port(port, edge_port=False)
+        device.set_rstp_port(edge_ports, edge_port=False)
 
         # Disable BPDU Guard globally
         device.set_rstp(bpdu_guard=False)
 
         # Re-enable RSTP on ring ports
-        for port in ring_ports:
-            device.set_rstp_port(port, enabled=True)
+        device.set_rstp_port(ring_ports, enabled=True)
+
+        if staging:
+            device.commit_staging()
+
+        # After commit: clear any ports stuck in auto-disable
+        ad = device.get_auto_disable()
+        released = [
+            port for port, state in ad.get('interfaces', {}).items()
+            if state.get('active') and state.get('reason') == 'bpdu-rate'
+        ]
+        if released:
+            device.reset_auto_disable(released)
 
         detail = f"RSTP Full torn down on {len(edge_ports)} edge ports"
         if released:
@@ -1205,10 +1259,14 @@ def main():
             # L2S safety check
             check_l2s_safety(config, device_facts, l2s_devices)
 
-            # --- Phase 1: Disable RM port2 (break ring before configuring) ---
+            # --- Phase 1: Break rings (disable ports to prevent loops) ---
             broke_ring = rm_ring_needs_breaking(device_facts, rm_dev)
+            main_vlan = int(config['vlan'])
+            sub_ring_vlans = sorted(v for v in config.get('rings', {}) if v != main_vlan)
+
+            # 1a: Break main ring (RM port2 DOWN)
             if broke_ring:
-                log_print(f"\n  Phase 1: Disabling RM port2 ({rm_dev['port2']}) on {rm_ip}...")
+                log_print(f"\n  Phase 1a: Disabling RM port2 ({rm_dev['port2']}) on {rm_ip}...")
                 try:
                     rm_device.set_interface(rm_dev['port2'], enabled=False)
                     log_print(f"  [{rm_ip}] port {rm_dev['port2']} admin DOWN")
@@ -1216,28 +1274,48 @@ def main():
                     log_print(f"  FATAL: Cannot disable RM port2: {e}\n")
                     sys.exit(1)
             else:
-                log_print(f"\n  Phase 1: Skipped (ring ports not both up — no ring to break)")
+                log_print(f"\n  Phase 1a: Skipped (ring ports not both up — no ring to break)")
 
-            # --- Phase 2: Configure MRP in parallel ---
+            # 1b: Break sub-ring paths (RSRM ports DOWN)
+            # When MRP takes over main ring ports, RSTP can no longer see the
+            # parallel path through sub-ring devices. Admin-down RSRM ports to
+            # prevent loops until sub-rings are configured in Phase 6.
+            broke_sub_ports = []
+            for sv in sub_ring_vlans:
+                ring = config['rings'][sv]
+                rsrm = ring.get('rsrm')
+                if rsrm:
+                    rsrm_device = connections.get(rsrm['ip'])
+                    if rsrm_device:
+                        try:
+                            rsrm_device.set_interface(rsrm['port'], enabled=False)
+                            log_print(f"  Phase 1b: [{rsrm['ip']}] port {rsrm['port']} admin DOWN (RSRM, VLAN {sv})")
+                            broke_sub_ports.append((rsrm['ip'], rsrm['port'], sv))
+                        except Exception as e:
+                            log_print(f"  WARNING: Cannot disable RSRM port {rsrm['port']} on {rsrm['ip']}: {e}")
+            if not broke_sub_ports and sub_ring_vlans:
+                log_print(f"  Phase 1b: Skipped (no RSRM ports to break)")
+
+            # --- Phase 2: Configure MRP on main ring devices ---
+            main_ring_devs = config['rings'][main_vlan]['devices']
             log_print("\n  Phase 2: Configuring MRP...")
-            vlan = int(config['vlan'])
             recovery_delay = config['recovery_delay']
             mrp_results = []
 
-            with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
+            with ThreadPoolExecutor(max_workers=len(main_ring_devs)) as pool:
                 futures = {}
-                for dev in config['devices']:
+                for dev in main_ring_devs:
                     device = connections.get(dev['ip'])
                     if device:
                         futures[pool.submit(
-                            worker_configure_mrp, device, dev, vlan, recovery_delay
+                            worker_configure_mrp, device, dev, main_vlan, recovery_delay
                         )] = dev
                     else:
                         mrp_results.append((dev['ip'], False, "no connection"))
 
                 for future in as_completed(futures):
                     ip, ok, _mrp_data, detail = future.result()
-                    role = [d for d in config['devices'] if d['ip'] == ip][0]['role']
+                    role = [d for d in main_ring_devs if d['ip'] == ip][0]['role']
                     mrp_results.append((ip, ok, f"MRP {role}, {detail}"))
 
             print_results("Phase 2 — MRP Configuration", mrp_results)
@@ -1283,9 +1361,6 @@ def main():
                 sys.exit(1)
 
             # --- Phase 6+7: Sub-ring configuration and verification ---
-            main_vlan = int(config['vlan'])
-            sub_ring_vlans = sorted(v for v in config.get('rings', {}) if v != main_vlan)
-
             if sub_ring_vlans:
                 log_print("\n  Phase 6: Configuring sub-rings...")
                 recovery_delay = config['recovery_delay']
@@ -1339,6 +1414,18 @@ def main():
                     failures = [r for r in srm_results if not r[1]]
                     if failures:
                         log_print(f"\n  Sub-ring VLAN {sv} SRM config failed. Continuing with other rings...")
+
+                # 6c: Restore RSRM ports (close sub-rings)
+                if broke_sub_ports:
+                    log_print("")
+                    for rsrm_ip, rsrm_port, sv in broke_sub_ports:
+                        rsrm_device = connections.get(rsrm_ip)
+                        if rsrm_device:
+                            try:
+                                rsrm_device.set_interface(rsrm_port, enabled=True)
+                                log_print(f"  Phase 6c: [{rsrm_ip}] port {rsrm_port} admin UP (RSRM, VLAN {sv})")
+                            except Exception as e:
+                                log_print(f"  WARNING: Cannot re-enable RSRM port {rsrm_port} on {rsrm_ip}: {e}")
 
                 # Phase 7: Verify sub-rings
                 log_print("\n  Phase 7: Verifying sub-rings...")
@@ -1481,6 +1568,18 @@ def run_migrate_edge(args, config, log_filename):
         # Phase 0: Gather facts
         device_facts, l2s_devices = run_phase0(config, connections)
 
+        # Build ring port map: config ring ports + live SRM ports per device
+        ring_ports_map = {}
+        for dev in config['devices']:
+            ip = dev['ip']
+            ports = set(get_ring_ports_for_device(config, ip))
+            # Merge in sub-ring ports discovered from live device state
+            srm_ports = device_facts.get(ip, {}).get('srm_ports', set())
+            ports.update(srm_ports)
+            ring_ports_map[ip] = sorted(ports)
+            if srm_ports:
+                logging.info(f"[{ip}] SRM ports discovered: {sorted(srm_ports)}")
+
         # Verify MRP is configured
         rm_facts = device_facts.get(rm_ip, {})
         rm_mrp = rm_facts.get('mrp', {})
@@ -1521,6 +1620,42 @@ def run_migrate_edge(args, config, log_filename):
         log_print("\n  Phase 1: Deploying new edge protection...")
 
         if target == 'loop':
+            # Tear down old RSTP Full settings BEFORE disabling RSTP.
+            # BPDU Guard + admin edge + auto-disable bpdu-rate must be off
+            # while RSTP is still on — firmware puts edge ports in discarding
+            # if these are active when RSTP global goes off.
+            if has_bpdu_guard:
+                log_print("\n  Clearing RSTP Full settings (RSTP stays on)...")
+                results = []
+                with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
+                    futures = {}
+                    for dev in config['devices']:
+                        ip = dev['ip']
+                        device = connections.get(ip)
+                        if not device:
+                            continue
+                        all_ports = device_facts.get(ip, {}).get('all_ports', [])
+                        ring_ports = ring_ports_map.get(ip, [dev['port1'], dev['port2']])
+                        futures[pool.submit(
+                            worker_teardown_rstp_full, device, dev, all_ports, ring_ports
+                        )] = dev
+                    for future in as_completed(futures):
+                        results.append(future.result())
+                print_results("Phase 1a — RSTP Full Teardown", results)
+
+            # Now safe to disable RSTP globally
+            log_print("\n  Disabling RSTP globally...")
+            rstp_results = []
+            with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
+                futures = {}
+                for dev in config['devices']:
+                    device = connections.get(dev['ip'])
+                    if device:
+                        futures[pool.submit(worker_disable_rstp_global, device, dev)] = dev
+                for future in as_completed(futures):
+                    rstp_results.append(future.result())
+            print_results("Phase 1b — RSTP Disable (global)", rstp_results)
+
             # Deploy loop protection
             lp_results = []
             with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
@@ -1531,13 +1666,13 @@ def run_migrate_edge(args, config, log_filename):
                     if not device or ip in l2s_devices:
                         continue
                     all_ports = device_facts.get(ip, {}).get('all_ports', [])
-                    ring_ports = [dev['port1'], dev['port2']]
+                    ring_ports = ring_ports_map.get(ip, [dev['port1'], dev['port2']])
                     futures[pool.submit(
                         worker_setup_loop_protection, device, dev, all_ports, ring_ports
                     )] = dev
                 for future in as_completed(futures):
                     lp_results.append(future.result())
-            print_results("Phase 1a — Loop Protection", lp_results)
+            print_results("Phase 1c — Loop Protection", lp_results)
 
             if timer > 0:
                 ad_results = []
@@ -1549,27 +1684,14 @@ def run_migrate_edge(args, config, log_filename):
                         if not device or ip in l2s_devices:
                             continue
                         all_ports = device_facts.get(ip, {}).get('all_ports', [])
-                        ring_ports = [dev['port1'], dev['port2']]
+                        ring_ports = ring_ports_map.get(ip, [dev['port1'], dev['port2']])
                         futures[pool.submit(
                             worker_setup_auto_disable, device, dev, all_ports, timer,
                             'loop-protection'
                         )] = dev
                     for future in as_completed(futures):
                         ad_results.append(future.result())
-                print_results("Phase 1b — Auto-Disable (loop-protection)", ad_results)
-
-            # Then disable RSTP globally
-            log_print("\n  Disabling RSTP globally...")
-            rstp_results = []
-            with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
-                futures = {}
-                for dev in config['devices']:
-                    device = connections.get(dev['ip'])
-                    if device:
-                        futures[pool.submit(worker_disable_rstp_global, device, dev)] = dev
-                for future in as_completed(futures):
-                    rstp_results.append(future.result())
-            print_results("RSTP Disable (global)", rstp_results)
+                print_results("Phase 1d — Auto-Disable (loop-protection)", ad_results)
 
         elif target == 'rstp-full':
             # Deploy RSTP Full (BPDU Guard goes on, ring ports RSTP off, edge ports get admin edge)
@@ -1582,7 +1704,7 @@ def run_migrate_edge(args, config, log_filename):
                     if not device:
                         continue
                     all_ports = device_facts.get(ip, {}).get('all_ports', [])
-                    ring_ports = [dev['port1'], dev['port2']]
+                    ring_ports = ring_ports_map.get(ip, [dev['port1'], dev['port2']])
                     futures[pool.submit(
                         worker_setup_rstp_full, device, dev, all_ports, ring_ports, timer
                     )] = dev
@@ -1670,7 +1792,8 @@ def run_migrate_edge(args, config, log_filename):
             if lp_results:
                 print_results("Loop Protection Teardown", lp_results)
 
-        if has_bpdu_guard and target != 'rstp-full':
+        if has_bpdu_guard and target not in ('rstp-full', 'loop'):
+            # loop migration tears down rstp-full in Phase 1 (before RSTP disable)
             results = []
             with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
                 futures = {}
@@ -1680,7 +1803,7 @@ def run_migrate_edge(args, config, log_filename):
                     if not device or ip in l2s_devices:
                         continue
                     all_ports = device_facts.get(ip, {}).get('all_ports', [])
-                    ring_ports = [dev['port1'], dev['port2']]
+                    ring_ports = ring_ports_map.get(ip, [dev['port1'], dev['port2']])
                     futures[pool.submit(
                         worker_teardown_rstp_full, device, dev, all_ports, ring_ports
                     )] = dev
