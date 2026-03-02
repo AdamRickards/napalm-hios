@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.8.1 — 2026-03-02
+
+### Bug fix: MOPS SET error detection
+
+`_is_ok_response()` in `mops_client.py` treated all `mibResponse` replies as success. When a MOPS SET fails (e.g. invalid port index, read-only attribute, non-existent table row), the switch returns `mibResponse` with `error` attributes on the affected MIB/Node/Attribute elements instead of `<ok/>`. The old code saw `mibResponse` and returned `True`, silently swallowing the error. Every `set()`, `set_indexed()`, and `set_multi()` call was affected — invalid writes appeared to succeed while nothing was applied to the switch.
+
+- **`_is_ok_response()`**: now parses `mibResponse` XML for `error` attributes at MIB, Node, and Attribute levels. Raises `MOPSError` with details (e.g. `"SET failed: HM2-PLATFORM-SWITCHING-MIB/hm2AgentStpCstPortEntry/hm2AgentStpCstPortEdge: noCreation"`). Empty `mibResponse` (echo-back with no errors) still returns `True`.
+- **`_parse_response()`**: now detects attribute-level `error` attributes in GET responses and adds them to the `errors` list with `attribute` field. Previously only caught MIB-level and Node-level errors.
+
+### MOPS `set_multi()` atomicity confirmed
+
+Live-tested on BRS50 (.80): `set_multi()` with one invalid mutation in a batch of valid ones results in atomic rejection — nothing is applied. Cross-MIB batching (different MIBs in one POST) works. No-ops (setting a value already in target state) are harmless.
+
+### Unit tests
+
+- 4 new tests: `test_is_ok_mibresponse_with_attribute_error`, `test_is_ok_mibresponse_with_node_error`, `test_is_ok_mibresponse_with_mib_error`, `test_parse_response_attribute_error`.
+- Existing `test_is_ok_mibresponse` (empty mibResponse = success) unchanged and passing.
+
+### Version bump
+
+- `version.py` and `setup.py`: 1.8.0 → 1.8.1
+
 ## 1.8.0 — 2026-03-01
 
 ### VLAN Ingress/Egress API — all 3 protocols

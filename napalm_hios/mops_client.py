@@ -239,17 +239,53 @@ class MOPSClient:
         return r.text
 
     def _is_ok_response(self, xml_text):
-        """Check if response is a simple <ok/> (SET success).
-        Also accepts mibResponse (some SETs echo back data instead of <ok/>).
+        """Check if response indicates SET success.
+
+        Returns True for <ok/> responses.
+        For mibResponse, parses for errors at MIB, Node, and Attribute levels.
+        Raises MOPSError with details if any errors are found.
+        Returns True if mibResponse contains no errors (echo-back success).
+        Returns False if response contains neither <ok/> nor mibResponse.
         """
         root = ET.fromstring(xml_text)
         for elem in root:
             tag = elem.tag.replace("{%s}" % NS_NETCONF, "")
             if tag == "ok":
                 return True
-            # Some SET operations return mibResponse instead of <ok/>
             tag_mops = elem.tag.replace("{%s}" % NS_MOPS, "")
             if tag_mops == "mibResponse":
+                # Parse mibResponse for errors at any level
+                errors = []
+                for mib_data in elem.iter("{%s}MIBData" % NS_MOPS):
+                    for mib_elem in mib_data:
+                        mib_tag = mib_elem.tag.replace("{%s}" % NS_MOPS, "")
+                        if mib_tag != "MIB":
+                            continue
+                        mib_name = mib_elem.get("name", "?")
+                        if mib_elem.get("error"):
+                            errors.append(f"{mib_name}: {mib_elem.get('error')}")
+                            continue
+                        for node_elem in mib_elem:
+                            node_tag = node_elem.tag.replace("{%s}" % NS_MOPS, "")
+                            if node_tag != "Node":
+                                continue
+                            node_name = node_elem.get("name", "?")
+                            if node_elem.get("error"):
+                                errors.append(
+                                    f"{mib_name}/{node_name}: "
+                                    f"{node_elem.get('error')}")
+                                continue
+                            for entry_elem in node_elem:
+                                for attr_elem in entry_elem:
+                                    if attr_elem.get("error"):
+                                        attr_name = attr_elem.get("name", "?")
+                                        errors.append(
+                                            f"{mib_name}/{node_name}/"
+                                            f"{attr_name}: "
+                                            f"{attr_elem.get('error')}")
+                if errors:
+                    raise MOPSError(
+                        f"SET failed: {'; '.join(errors)}")
                 return True
         return False
 
@@ -325,6 +361,14 @@ class MOPSClient:
 
                             if child_tag == "Attribute":
                                 name = child_elem.get("name")
+                                if child_elem.get("error"):
+                                    result["errors"].append({
+                                        "mib": mib_name,
+                                        "node": node_name,
+                                        "attribute": name,
+                                        "error": child_elem.get("error"),
+                                    })
+                                    continue
                                 value = child_elem.text or ""
                                 if decode_strings:
                                     value = _decode_hex_string(value)

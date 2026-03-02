@@ -44,7 +44,13 @@ class LiveDeviceTest:
             'get_users',
             'get_vlans',
             'ping',
-            'get_lldp_neighbors_detail_extended'
+            'get_lldp_neighbors_detail_extended',
+            'get_mrp',
+            'get_hidiscovery',
+            'get_rstp',
+            'get_rstp_port',
+            'get_auto_disable',
+            'get_loop_protection'
         ]
 
         # Define CLI commands here

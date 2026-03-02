@@ -264,6 +264,85 @@ class TestResponseParsing(unittest.TestCase):
         </rpc-reply>'''
         self.assertTrue(self.client._is_ok_response(xml))
 
+    def test_is_ok_mibresponse_with_attribute_error(self):
+        """mibResponse with attribute-level error should raise MOPSError."""
+        xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+        <rpc-reply xmlns="{NS_NETCONF}" message-id="1">
+          <mibResponse xmlns="{NS_MOPS}">
+            <MIBData>
+              <MIB name="HM2-PLATFORM-SWITCHING-MIB">
+                <Node name="hm2AgentStpCstPortEntry">
+                  <Entry>
+                    <Attribute name="hm2AgentStpCstPortEdge" error="noCreation"/>
+                  </Entry>
+                </Node>
+              </MIB>
+            </MIBData>
+          </mibResponse>
+        </rpc-reply>'''
+        with self.assertRaises(MOPSError) as ctx:
+            self.client._is_ok_response(xml)
+        self.assertIn("noCreation", str(ctx.exception))
+        self.assertIn("hm2AgentStpCstPortEdge", str(ctx.exception))
+
+    def test_is_ok_mibresponse_with_node_error(self):
+        """mibResponse with node-level error should raise MOPSError."""
+        xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+        <rpc-reply xmlns="{NS_NETCONF}" message-id="1">
+          <mibResponse xmlns="{NS_MOPS}">
+            <MIBData>
+              <MIB name="TEST-MIB">
+                <Node name="badNode" error="noSuchName"/>
+              </MIB>
+            </MIBData>
+          </mibResponse>
+        </rpc-reply>'''
+        with self.assertRaises(MOPSError) as ctx:
+            self.client._is_ok_response(xml)
+        self.assertIn("noSuchName", str(ctx.exception))
+        self.assertIn("TEST-MIB/badNode", str(ctx.exception))
+
+    def test_is_ok_mibresponse_with_mib_error(self):
+        """mibResponse with MIB-level error should raise MOPSError."""
+        xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+        <rpc-reply xmlns="{NS_NETCONF}" message-id="1">
+          <mibResponse xmlns="{NS_MOPS}">
+            <MIBData>
+              <MIB name="NONEXISTENT-MIB" error="noSuchName"/>
+            </MIBData>
+          </mibResponse>
+        </rpc-reply>'''
+        with self.assertRaises(MOPSError) as ctx:
+            self.client._is_ok_response(xml)
+        self.assertIn("noSuchName", str(ctx.exception))
+        self.assertIn("NONEXISTENT-MIB", str(ctx.exception))
+
+    def test_parse_response_attribute_error(self):
+        """_parse_response should capture attribute-level errors."""
+        xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+        <rpc-reply xmlns="{NS_NETCONF}" message-id="1">
+          <mibResponse xmlns="{NS_MOPS}">
+            <MIBData>
+              <MIB name="TEST-MIB">
+                <Node name="testEntry">
+                  <Entry>
+                    <Attribute name="goodAttr">42</Attribute>
+                    <Attribute name="badAttr" error="noCreation"/>
+                  </Entry>
+                </Node>
+              </MIB>
+            </MIBData>
+          </mibResponse>
+        </rpc-reply>'''
+        result = self.client._parse_response(xml, decode_strings=False)
+        self.assertEqual(len(result["errors"]), 1)
+        self.assertEqual(result["errors"][0]["attribute"], "badAttr")
+        self.assertEqual(result["errors"][0]["error"], "noCreation")
+        # Good attribute should still be parsed
+        entry = result["mibs"]["TEST-MIB"]["testEntry"][0]
+        self.assertEqual(entry["goodAttr"], "42")
+        self.assertNotIn("badAttr", entry)
+
     def test_parse_empty_attribute(self):
         """Self-closing attributes (no text) should return empty string."""
         xml = f'''<?xml version="1.0" encoding="UTF-8"?>
