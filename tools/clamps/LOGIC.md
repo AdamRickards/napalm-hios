@@ -90,54 +90,64 @@ lets it forward immediately. Default timer=0 avoids this by never recovering.
 
 ```
 Per Device:
-  ┌─────────────────────────────────────────────┐
-  │ RSTP: Global ON, BPDU Guard ON              │
-  │                                             │
-  │ Ring Ports (1/5, 1/6):                      │
-  │   RSTP: OFF (MRP owns these)                │
-  │   Admin Edge: OFF                           │
-  │   Auto-Disable: timer (bpdu-rate)           │
-  │                                             │
-  │ Edge Ports (all others):                    │
-  │   RSTP: ON                                  │
-  │   Admin Edge: ON                            │
-  │   Auto-Disable: timer (bpdu-rate)           │
-  └─────────────────────────────────────────────┘
+  ┌───────────────────────────────────────────────────┐
+  │ RSTP: Global ON, BPDU Guard ON                    │
+  │                                                   │
+  │ Ring Ports (1/5, 1/6 + sub-ring ports):           │
+  │   RSTP: OFF (MRP owns these)                      │
+  │   Admin Edge: OFF                                 │
+  │   Auto-Disable: timer (bpdu-rate)                 │
+  │                                                   │
+  │ Edge Ports (all others):                          │
+  │   RSTP: ON                                        │
+  │   Admin Edge: ON                                  │
+  │   Auto-Disable: timer (bpdu-rate)                 │
+  └───────────────────────────────────────────────────┘
 ```
 
 ### loop
 
 ```
 Per Device:
-  ┌─────────────────────────────────────────────┐
-  │ RSTP: Global OFF                            │
-  │ Loop Protection: Global ON, tx_interval=1s  │
-  │                                             │
-  │ Ring Ports (1/5, 1/6):                      │
-  │   Loop Prot: ON, mode=passive,              │
-  │              action=auto-disable            │
-  │   Auto-Disable: timer (loop-protection)     │
-  │                                             │
-  │ Edge Ports (all others):                    │
-  │   Loop Prot: ON, mode=active,               │
-  │              action=auto-disable             │
-  │   Auto-Disable: timer (loop-protection)     │
-  └─────────────────────────────────────────────┘
+  ┌───────────────────────────────────────────────────┐
+  │ RSTP: Global OFF                                  │
+  │ Loop Protection: Global ON, tx_interval=1s        │
+  │                                                   │
+  │ Ring Ports (1/5, 1/6 + sub-ring ports):           │
+  │   Loop Prot: ON, mode=passive,                    │
+  │              action=auto-disable                  │
+  │   Auto-Disable: timer=0 (loop-protection)         │
+  │                                                   │
+  │ Edge Ports (all others):                          │
+  │   Loop Prot: ON, mode=active,                     │
+  │              action=auto-disable                   │
+  │   Auto-Disable: timer=0 (loop-protection)         │
+  │                                                   │
+  │ timer=0 = kill and stay dead (factory default).   │
+  │ timer>0 = port recovers every Ns → 1s storm each │
+  │ cycle. Not recommended.                           │
+  └───────────────────────────────────────────────────┘
 ```
 
 ### rstp (legacy)
 
 ```
 Per Device:
-  ┌─────────────────────────────────────────────┐
-  │ RSTP: Global ON                             │
-  │                                             │
-  │ Ring Ports (1/5, 1/6):                      │
-  │   RSTP: OFF                                 │
-  │                                             │
-  │ Edge Ports (all others):                    │
-  │   RSTP: ON (default, no changes)            │
-  └─────────────────────────────────────────────┘
+  ┌───────────────────────────────────────────────────┐
+  │ RSTP: Global ON (untouched)                       │
+  │                                                   │
+  │ Ring Ports (1/5, 1/6 + sub-ring ports):           │
+  │   RSTP: OFF                                       │
+  │                                                   │
+  │ Edge Ports (all others):                          │
+  │   RSTP: ON (default, no changes)                  │
+  │                                                   │
+  │ NOT configured:                                   │
+  │   No BPDU Guard                                   │
+  │   No admin edge                                   │
+  │   No auto-disable                                 │
+  │   No loop protection                              │
+  └───────────────────────────────────────────────────┘
 ```
 
 ## Deploy Phase Logic
@@ -156,6 +166,7 @@ Per Device:
                     │  SW level,   │  detect L2S devices
                     │  MRP, RSTP,  │  check edge protection mode
                     │  interfaces  │  L2S safety abort if needed
+                    │  sub-ring    │  get_mrp_sub_ring() port discovery
                     └──────┬───────┘
                            │
                   ┌────────▼────────┐
@@ -164,22 +175,39 @@ Per Device:
                   └───┬────────┬───┘
                  YES  │        │  NO
                       │        │
-               ┌──────▼──┐    │
-               │ Phase 1  │   │
-               │ Break    │   │
-               │ ring     │   │
-               └──────┬───┘   │
-                      │       │
-                      ├───────┘
+               ┌──────▼──────┐ │
+               │ Phase 1a    │ │
+               │ Break main  │ │
+               │ ring (RM    │ │
+               │ port2 DOWN) │ │
+               └──────┬──────┘ │
+                      │        │
+                      ├────────┘
                       │
-               ┌──────▼───────┐
-               │  Phase 2     │  configure MRP (parallel)
+               ┌──────▼──────────┐
+               │ Sub-rings in    │
+               │ config?         │
+               └───┬─────────┬───┘
+              YES  │         │  NO
+                   │         │
+            ┌──────▼──────┐  │
+            │ Phase 1b    │  │
+            │ Break sub-  │  │
+            │ ring paths  │  │
+            │ (RSRM ports │  │
+            │  admin DOWN)│  │
+            └──────┬──────┘  │
+                   │         │
+                   ├─────────┘
+                   │
+               ┌───▼──────────┐
+               │  Phase 2     │  configure main ring MRP (parallel)
                └──────┬───────┘
                       │
                ┌──────▼───────┐
                │  Phase 3     │  deploy edge protection
                │  (mode       │  rstp-full / loop / rstp
-               │   specific)  │
+               │   specific)  │  sub-ring ports excluded
                └──────┬───────┘
                       │
                 ┌─────▼──────┐
@@ -191,20 +219,45 @@ Per Device:
             │ 2s wait │  │
             │ Phase 4 │  │
             │ Close   │  │
+            │ main    │  │
             │ ring    │  │
             └──────┬──┘  │
                    │     │
                    ├─────┘
                    │
             ┌──────▼───────┐
-            │  Phase 5     │  verify ring (3x retry)
+            │  Phase 5     │  verify main ring (3x retry)
             │  ring_state  │  FATAL if unhealthy
             │  =closed     │
             └──────┬───────┘
                    │
-            ┌──────▼───────┐
-            │  Phase 6     │  save to NVM (if configured)
-            └──────────────┘
+            ┌──────▼───────────┐
+            │ Sub-rings in     │
+            │ config?          │
+            └───┬──────────┬───┘
+           YES  │          │  NO
+                │          │
+         ┌──────▼──────┐   │
+         │  Phase 6    │   │
+         │  (per VLAN) │   │
+         │             │   │
+         │ 6a: RCs     │   │  set_mrp (client, sub-ring VLAN)
+         │ 6b: SRM +   │   │  set_mrp_sub_ring (manager/redundant)
+         │     RSRM    │   │
+         │ 6c: Restore │   │  RSRM ports admin UP
+         │     paths   │   │
+         └──────┬──────┘   │
+                │          │
+         ┌──────▼──────┐   │
+         │  Phase 7    │   │  verify sub-rings (3x retry per VLAN)
+         │  per SRM    │   │  WARNING if unhealthy (does not abort)
+         └──────┬──────┘   │
+                │          │
+                ├──────────┘
+                │
+         ┌──────▼───────┐
+         │  Phase 8     │  save to NVM (if configured)
+         └──────────────┘
 ```
 
 ## Undeploy Logic
@@ -216,12 +269,34 @@ ports, and save preference.
 ```
 Phase 0: Gather facts
   │
+  ├─ has_sub_rings?  → get_mrp_sub_ring() on each device
   ├─ has_loop_prot?  → tear down loop prot + auto-disable
   ├─ has_bpdu_guard? → tear down rstp-full (admin edge, BPDU Guard, auto-disable)
-  ├─ has_mrp?        → delete MRP
+  ├─ has_mrp?        → delete MRP (main ring + sub-ring RCs)
   │
   └─ ALWAYS: restore RSTP global + per-port on ring ports
              (factory default redundancy state)
+
+Step 1: Break all ring paths (prevent loops during teardown)
+  │
+  ├─ 1a: RSRM ports admin DOWN (sub-ring paths)
+  │      One port per sub-ring VLAN. Skipped if no sub-rings.
+  │
+  └─ 1b: RM port2 admin DOWN (main ring)
+         Skipped if ring ports not both up.
+
+Step 2: Delete sub-rings (if detected)
+  │
+  ├─ 2a: delete_mrp_sub_ring(ring_id=N) on SRM/RSRM devices
+  ├─ 2b: delete_mrp_sub_ring(ring_id=None) — disable SRM globally
+  └─ 2c: delete_mrp() on sub-ring RC devices
+
+Step 3: Tear down loop protection (if detected)
+Step 4: Tear down RSTP Full (if BPDU Guard detected)
+Step 5: Delete MRP on main ring devices
+Step 6: Restore RSTP (global + per-port on ring ports)
+Step 7: Restore all broken ports (RM port2 + RSRM ports admin UP)
+Step 8: Save to NVM (if save=true)
 ```
 
 ## Migrate-Edge Auto-Toggle
@@ -241,11 +316,19 @@ TO an RSTP-based strategy.
 ## Smart Ring Break
 
 ```
-Check RM ring ports (from Phase 0 interface data):
-  │
-  ├─ Both UP   → ring is formed → BREAK IT (disable port2)
-  ├─ One UP    → ring already broken → skip
-  └─ Neither UP → no ring → skip
+Phase 1a — Main Ring:
+  Check RM ring ports (from Phase 0 interface data):
+    │
+    ├─ Both UP   → ring is formed → BREAK IT (disable port2)
+    ├─ One UP    → ring already broken → skip
+    └─ Neither UP → no ring → skip
+
+Phase 1b — Sub-Rings:
+  For each sub-ring VLAN in config:
+    │
+    └─ RSRM port → admin DOWN (always, if sub-ring exists)
+       Prevents RSTP from routing through sub-ring path
+       during main ring MRP configuration
 ```
 
 Only break what needs breaking. Only restore what was broken.
@@ -335,3 +418,124 @@ until the cable is removed.
 **Future:** Hirschmann could fix this by sending keepalives from a
 non-forwarding state during auto-disable recovery — probe before forwarding,
 like RSTP's discarding state. Until then, rstp-full is superior for MRP rings.
+
+## Sub-Ring Path Breaking
+
+Sub-rings create parallel paths to the main ring through branch-point
+devices (SRM/RSRM). When MRP takes over the main ring and blocks RM port2,
+RSTP doesn't know about it — it sees the sub-ring path as an alternative
+route and can create a loop.
+
+```
+Phase 1b breaks RSRM ports BEFORE any MRP configuration:
+
+Main Ring:   .80 ─── 1/5 ═══ 1/6 ─── .82
+              │                        │
+              1/10 (SRM)        1/10 (RSRM) ← admin DOWN here
+              │                        │
+Sub-Ring:    .85 ─── 1/5 ═══ 1/6 ─── .81
+
+Without Phase 1b:
+  MRP blocks RM port2 (.80 1/6)
+  RSTP sees: .80 → 1/10 → .85 → .81 → 1/10 → .82 → 1/6 → .80
+  This is a valid alternate path → potential loop
+
+With Phase 1b:
+  RSRM port (.82 1/10) is admin DOWN
+  Sub-ring path is physically severed
+  MRP can safely take over main ring
+```
+
+The same logic applies in reverse during undeploy: Step 1a breaks RSRM
+ports before Step 1b breaks the main ring.
+
+## Sub-Ring Deploy Ordering
+
+Sub-rings are configured AFTER the main ring is verified healthy (Phase 5).
+This ensures the main ring is stable before adding complexity.
+
+```
+Per sub-ring VLAN:
+
+Phase 6a: Configure RCs (parallel)
+  │  set_mrp(mode='client', vlan=sub_vlan)
+  │  Standard MRP client — same as main ring RCs
+  │  Uses the sub-ring VLAN, NOT the main ring VLAN
+  │
+Phase 6b: Configure SRM + RSRM (parallel)
+  │  set_mrp_sub_ring(ring_id=N, mode='manager'|'redundantManager')
+  │  Branch-point devices — single port each
+  │  ring_id assigned sequentially (1, 2, 3...)
+  │
+Phase 6c: Restore RSRM port (close sub-ring)
+     set_interface(rsrm_port, enabled=True)
+     Sub-ring can now form
+```
+
+**Why RCs first:** The sub-ring clients must have MRP configured before
+the SRM/RSRM branch points activate. If SRM/RSRM come up first with no
+clients, the sub-ring has no ring to manage.
+
+## Sub-Ring Port Exclusion
+
+Sub-ring ports (SRM/RSRM single port per branch) are treated identically
+to main ring ports for edge protection:
+
+```
+get_ring_ports_for_device(config, ip):
+  │
+  ├─ Main ring ports: port1, port2
+  ├─ SRM port (if this device is a branch point)
+  └─ RSRM port (if this device is a branch point)
+
+All collected → excluded from edge protection
+  ├─ rstp-full: RSTP disabled on ring + sub-ring ports
+  ├─ loop: passive mode on ring + sub-ring ports
+  └─ rstp: RSTP disabled on ring + sub-ring ports
+```
+
+A device can be both a main ring member (ports 1/5, 1/6) and a sub-ring
+branch point (port 1/10). All three ports are excluded from edge protection.
+
+## Sub-Ring Verification
+
+Sub-ring health is checked on the SRM device (not RSRM, not RCs):
+
+```
+Phase 7: Per sub-ring VLAN
+  │
+  get_mrp_sub_ring() on SRM device
+  │
+  Find instance matching ring_id
+  │
+  ├─ ring_state=closed AND redundancy=true → HEALTHY
+  └─ Otherwise → WARNING (does NOT abort)
+```
+
+Unlike Phase 5 (main ring), sub-ring verification failure is a warning,
+not a fatal error. The main ring is already healthy — a sub-ring issue
+doesn't require rolling back the entire deployment.
+
+## Sub-Ring Undeploy Ordering
+
+Reverse of deploy. Delete sub-rings before main ring MRP:
+
+```
+Step 2a: Delete SRM instances
+  │  delete_mrp_sub_ring(ring_id=N) per instance
+  │  Removes branch-point sub-ring configuration
+  │
+Step 2b: Disable SRM globally
+  │  delete_mrp_sub_ring(ring_id=None)
+  │  Turns off sub-ring manager feature entirely
+  │
+Step 2c: Delete MRP on sub-ring RCs
+     delete_mrp() on each RC device
+     Removes standard MRP client config
+
+Then Step 5 deletes MRP on main ring devices.
+```
+
+**Why sub-rings first:** Sub-rings depend on the main ring. Deleting main
+ring MRP while sub-rings are still configured can leave orphaned sub-ring
+instances that are harder to clean up.

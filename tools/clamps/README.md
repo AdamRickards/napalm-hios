@@ -7,13 +7,13 @@
 
 MRP ring deployment and edge protection tool for Hirschmann HiOS switches.
 
-Deploys MRP rings with intelligent edge port protection, verifies ring health,
-and supports live edge strategy migration — all from a single config file.
+Deploys main rings and sub-rings with intelligent edge port protection, verifies
+ring health, and supports live edge strategy migration — all from a single config file.
 
 ## Requirements
 
 - Python 3.8+
-- [napalm-hios](https://pypi.org/project/napalm-hios/) driver installed
+- [napalm-hios](https://pypi.org/project/napalm-hios/) >= 1.9.0
 - HTTPS (port 443) reachable to all switches (MOPS protocol, default)
 - All switches running HiOS 10.x with matching credentials
 
@@ -53,11 +53,31 @@ force false
 # Device list — one per line
 # <ip> [port1 port2] [RM]
 192.168.1.80 1/5 1/6 RM
-192.168.1.81
 192.168.1.82
+
+# Sub-ring VLAN 200 — branches off main ring at .80 and .82
+192.168.1.80 SRM 200 1/10
+192.168.1.82 RSRM 200 1/10
+192.168.1.85 RC 200
+192.168.1.81 RC 200
 ```
 
 If no device has `RM`, the first device is automatically assigned as ring manager.
+
+### Sub-Ring Syntax
+
+Sub-rings branch off the main ring at two devices (SRM and RSRM) with one port each:
+
+```
+<ip> SRM <vlan> <port>    # sub-ring manager (branch point)
+<ip> RSRM <vlan> <port>   # redundant sub-ring manager (branch point)
+<ip> RC <vlan> [p1 p2]    # sub-ring client (uses global ports if omitted)
+```
+
+- SRM/RSRM IPs must also appear in the main ring device list
+- Sub-ring VLAN must differ from the main ring VLAN
+- Each sub-ring needs exactly one SRM and one RSRM
+- Multiple sub-rings supported, each on a unique VLAN
 
 ## Edge Protection Strategies
 
@@ -169,25 +189,38 @@ Connect (parallel)
   │
 Phase 0: Gather facts (parallel)
   │  SW level, MRP, RSTP, loop prot, auto-disable, interfaces
+  │  Sub-ring port discovery via get_mrp_sub_ring()
   │  L2S safety check (abort if loop mode + L2S without force)
   │
-Phase 1: Break ring (RM port2 admin DOWN)
+Phase 1a: Break main ring (RM port2 admin DOWN)
   │  Skipped if ring ports not both up
   │
-Phase 2: Configure MRP (parallel)
+Phase 1b: Break sub-ring paths (RSRM ports admin DOWN)
+  │  Prevents loops during sub-ring configuration
+  │
+Phase 2: Configure MRP on main ring (parallel)
   │  Set role, ports, VLAN, recovery delay
   │
 Phase 3: Edge protection
   │  Deploy selected strategy (see LOGIC.md for details)
+  │  Ring + sub-ring ports excluded from edge protection
   │  2s RSTP settle delay before closing ring
   │
-Phase 4: Close ring (RM port2 admin UP)
+Phase 4: Close main ring (RM port2 admin UP)
   │  Skipped if ring was not broken
   │
-Phase 5: Verify ring (3x retry @ 1s)
+Phase 5: Verify main ring (3x retry @ 1s)
   │  Check ring_state=closed, redundancy=true on RM
   │
-Phase 6: Save to NVM (parallel, if save=true)
+Phase 6: Configure sub-rings (per sub-ring VLAN)
+  │  6a: Configure sub-ring RCs (standard MRP client, parallel)
+  │  6b: Configure SRM + RSRM (set_mrp_sub_ring, parallel)
+  │  6c: Restore RSRM ports (close sub-rings)
+  │
+Phase 7: Verify sub-rings (3x retry per sub-ring on SRM)
+  │  Check ring_state + redundancy on each SRM device
+  │
+Phase 8: Save to NVM (parallel, if save=true)
 ```
 
 ### Undeploy Flow
@@ -196,24 +229,32 @@ Phase 6: Save to NVM (parallel, if save=true)
 Connect (parallel)
   │
 Phase 0: Gather facts (parallel)
-  │  Detect: loop protection? BPDU Guard? MRP?
+  │  Detect: loop protection? BPDU Guard? MRP? Sub-rings?
   │
-Step 1: Break ring (if ring ports both up)
+Step 1: Break all ring paths (prevent loops during teardown)
+  │  1a: RSRM ports admin DOWN (sub-ring paths)
+  │  1b: RM port2 admin DOWN (main ring)
   │
-Step 2: Tear down loop protection (if detected)
+Step 2: Delete sub-rings (if detected)
+  │  2a: Delete SRM instances on branch-point devices
+  │  2b: Disable SRM globally
+  │  2c: Delete MRP on sub-ring RCs
+  │
+Step 3: Tear down loop protection (if detected)
   │  Reset auto-disable → disable loop prot per port → global off
   │
-Step 3: Tear down RSTP Full (if BPDU Guard detected)
+Step 4: Tear down RSTP Full (if BPDU Guard detected)
   │  Reset auto-disable → remove admin edge → disable BPDU Guard
   │
-Step 4: Delete MRP (if configured)
+Step 5: Delete MRP (if configured on main ring)
   │
-Step 5: Restore RSTP (always)
-  │  Global enable + per-port enable on ring ports
+Step 6: Restore RSTP (always)
+  │  6a: Global enable
+  │  6b: Per-port enable on ring ports
   │
-Step 6: Restore RM port2 (if broken in Step 1)
+Step 7: Restore all broken ports (RM port2 + RSRM ports)
   │
-Step 7: Save to NVM (if save=true)
+Step 8: Save to NVM (if save=true)
 ```
 
 ## Important Notes
