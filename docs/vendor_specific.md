@@ -366,37 +366,41 @@ result = device.get_vlan_egress('1/1')  # only port 1/1 data
 
 ### set_vlan_ingress(port, pvid, frame_types, ingress_filtering)
 
-Set ingress parameters on a single port. `None` = don't change.
+Set ingress parameters on one or more ports. `None` = don't change.
+Pass a list of port names to configure multiple ports in one call.
 
 ```python
 device.set_vlan_ingress('1/1', pvid=100)
 device.set_vlan_ingress('1/1', frame_types='admit_only_tagged', ingress_filtering=True)
 device.set_vlan_ingress('1/1', pvid=1, frame_types='admit_all', ingress_filtering=False)
+device.set_vlan_ingress(['1/1', '1/2'], pvid=5, frame_types='admit_all')  # multiple ports
 ```
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
-| `port` | interface name | required | Port to configure (e.g. `'1/1'`) |
+| `port` | `str` or `list` | required | Port(s) to configure (e.g. `'1/1'` or `['1/1', '1/2']`) |
 | `pvid` | `1`–`4042` | `None` | Port VLAN ID |
 | `frame_types` | `'admit_all'`, `'admit_only_tagged'` | `None` | Acceptable frame types |
 | `ingress_filtering` | `True`, `False` | `None` | Enable/disable ingress filtering |
 
 ### set_vlan_egress(vlan_id, port, mode)
 
-Set one port's egress membership for one VLAN. The VLAN must already exist
-in the VLAN database — use `create_vlan()` first if needed.
+Set egress membership for one VLAN on one or more ports. The VLAN must
+already exist in the VLAN database — use `create_vlan()` first if needed.
+Pass a list of port names to configure multiple ports in one call.
 
 ```python
 device.set_vlan_egress(100, '1/1', 'tagged')
 device.set_vlan_egress(100, '1/1', 'untagged')
 device.set_vlan_egress(100, '1/1', 'forbidden')
 device.set_vlan_egress(100, '1/1', 'none')       # remove from VLAN
+device.set_vlan_egress(100, ['1/1', '1/2'], 'tagged')  # multiple ports
 ```
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
 | `vlan_id` | `1`–`4042` | required | VLAN ID |
-| `port` | interface name | required | Port to configure (e.g. `'1/1'`) |
+| `port` | `str` or `list` | required | Port(s) to configure (e.g. `'1/1'` or `['1/1', '1/2']`) |
 | `mode` | `'tagged'`, `'untagged'`, `'forbidden'`, `'none'` | required | Membership mode |
 
 ### create_vlan(vlan_id, name)
@@ -543,16 +547,20 @@ result = device.set_rstp(enabled=False)
 ### set_rstp_port(interface, enabled, edge_port, ...)
 
 Set per-port STP/RSTP configuration. All parameters except `interface`
-are optional — only provided values are changed.
+are optional — only provided values are changed. Pass a list of
+interface names to configure multiple ports in one call.
 
 ```python
 # Configure port as edge port with root guard
 result = device.set_rstp_port('1/5', edge_port=True, root_guard=True)
+
+# Configure multiple ports at once
+device.set_rstp_port(['1/1', '1/2', '1/3'], edge_port=True, auto_edge=False)
 ```
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
-| `interface` | interface name | required | Port to configure (e.g. `'1/5'`) |
+| `interface` | `str` or `list` | required | Port(s) to configure (e.g. `'1/5'` or `['1/1', '1/2']`) |
 | `enabled` | `True`, `False` | `None` | Enable/disable STP on this port |
 | `edge_port` | `True`, `False` | `None` | Admin edge port |
 | `auto_edge` | `True`, `False` | `None` | Auto-detect edge |
@@ -564,7 +572,7 @@ result = device.set_rstp_port('1/5', edge_port=True, root_guard=True)
 | `bpdu_filter` | `True`, `False` | `None` | Per-port BPDU filter |
 | `bpdu_flood` | `True`, `False` | `None` | BPDU flood |
 
-**Returns** the result of `get_rstp_port(interface)` after configuration.
+No-op if no parameters besides `interface` are provided.
 
 ---
 
@@ -617,25 +625,28 @@ The getter returns whatever the device provides — no padding.
 
 ### set_auto_disable(interface, timer=0)
 
-Set the auto-disable recovery timer on a port.
+Set the auto-disable recovery timer on a port. Pass a list of
+interface names to configure multiple ports in one call.
 
 ```python
 device.set_auto_disable('1/1', timer=60)   # 60-second recovery
 device.set_auto_disable('1/1', timer=0)    # disable timer
+device.set_auto_disable(['1/1', '1/2'], timer=90)  # multiple ports
 ```
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
-| `interface` | interface name | required | Port to configure (e.g. `'1/1'`) |
+| `interface` | `str` or `list` | required | Port(s) to configure (e.g. `'1/1'` or `['1/1', '1/2']`) |
 | `timer` | `0`, `30`–`4294967295` | `0` | Recovery interval in seconds (0 = disabled) |
 
 ### reset_auto_disable(interface)
 
 Reset (re-enable) an auto-disabled port immediately, without waiting for
-the recovery timer.
+the recovery timer. Pass a list of interface names to reset multiple ports.
 
 ```python
 device.reset_auto_disable('1/1')
+device.reset_auto_disable(['1/1', '1/2'])  # multiple ports
 ```
 
 ### set_auto_disable_reason(reason, enabled=True)
@@ -703,6 +714,7 @@ are handled gracefully.
 
 Configure loop protection. When `interface` is `None`, sets global
 parameters. When `interface` is specified, sets per-port parameters.
+Pass a list of interface names to configure multiple ports in one call.
 
 ```python
 # Enable loop protection globally
@@ -710,6 +722,9 @@ device.set_loop_protection(enabled=True)
 
 # Configure a port as active with trap+auto-disable
 device.set_loop_protection(interface='1/1', enabled=True, mode='active', action='all')
+
+# Configure multiple ports at once
+device.set_loop_protection(interface=['1/1', '1/2'], enabled=True, mode='active')
 
 # Set global transmit interval
 device.set_loop_protection(transmit_interval=3)
@@ -730,7 +745,7 @@ device.set_loop_protection(enabled=False)
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
-| `interface` | interface name | `None` | Port to configure (e.g. `'1/1'`) |
+| `interface` | `str` or `list` | `None` | Port(s) to configure (e.g. `'1/1'` or `['1/1', '1/2']`) |
 | `enabled` | `True`, `False` | `None` | Enable/disable on this port |
 | `mode` | `'active'`, `'passive'` | `None` | Detection mode |
 | `action` | `'trap'`, `'auto-disable'`, `'all'` | `None` | Action on loop detection |
@@ -807,7 +822,8 @@ result = device.set_hidiscovery('ro', blinking='toggle')
 ### set_interface(interface, enabled=None, description=None)
 
 Set port admin state and/or description. Only provided parameters are
-changed — omitted parameters are left untouched.
+changed — omitted parameters are left untouched. Pass a list of
+interface names to configure multiple ports in one call.
 
 ```python
 # Disable a port
@@ -818,11 +834,14 @@ device.set_interface('1/5', enabled=True, description='Uplink')
 
 # Clear the description
 device.set_interface('1/5', description='')
+
+# Configure multiple ports at once
+device.set_interface(['1/1', '1/2', '1/3'], enabled=True, description='Edge')
 ```
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
-| `interface` | interface name | required | Port to configure (e.g. `'1/5'`) |
+| `interface` | `str` or `list` | required | Port(s) to configure (e.g. `'1/5'` or `['1/1', '1/2']`) |
 | `enabled` | `True`, `False`, `None` | `None` | Admin up/down |
 | `description` | string, `None` | `None` | Port alias (ifAlias) |
 
@@ -916,13 +935,64 @@ result = device.clear_factory(erase_all=True)  # also regenerate factory.cfg
 
 ## MOPS Atomic Staging (MOPS-only)
 
-MOPS supports batching multiple configuration changes into a single
-atomic POST request. This is used internally by `commit_config()` but
-can also be called directly.
+Batch multiple setter calls into one atomic `set_multi()` POST.
+Useful for operations where intermediate states would break connectivity
+(e.g. changing PVID + egress membership together so a port never
+loses comms).
+
+```python
+device.start_staging()
+device.set_vlan_ingress('1/1', pvid=5)
+device.set_vlan_egress(5, '1/1', 'untagged')
+device.commit_staging()   # one POST, both changes applied atomically
+device.save_config()      # persist to NVM when ready
+```
+
+### Staging-aware setters
+
+These setters queue mutations when staging is active:
+
+| Setter | Notes |
+|--------|-------|
+| `set_vlan_ingress()` | |
+| `set_vlan_egress()` | |
+| `set_rstp()` | Returns `None` in staging (read-back skipped) |
+| `set_rstp_port()` | |
+| `set_interface()` | |
+| `set_hidiscovery()` | Returns `None` in staging (read-back skipped) |
+| `set_auto_disable()` | |
+| `reset_auto_disable()` | |
+| `set_auto_disable_reason()` | |
+| `set_loop_protection()` | Global + per-port |
+
+### Always fire immediately (bypass staging)
+
+| Setter | Reason |
+|--------|--------|
+| `create_vlan()` | VLAN CRUD is a database operation — other setters validate against live state |
+| `update_vlan()` | |
+| `delete_vlan()` | |
+| `set_mrp()` | Complex multi-step RowStatus sequences |
+| `delete_mrp()` | |
+| `set_mrp_sub_ring()` | |
+| `delete_mrp_sub_ring()` | |
+| `activate_profile()` | Causes device restart |
+| `delete_profile()` | |
+
+### Important
+
+- The driver does **not** validate dependencies between staged operations.
+  Operations that depend on prior state (e.g. `set_vlan_egress` requires
+  the VLAN to exist) must have their prerequisites committed first.
+  Tool layer is responsible for operation ordering.
+- `commit_staging()` does **not** save to NVM. Call `save_config()`
+  separately when ready.
+- SNMP and SSH raise `NotImplementedError`. Use `load_merge_candidate()`
+  for SSH CLI staging.
 
 ### start_staging()
 
-Enter staging mode — SET operations are queued instead of sent.
+Enter staging mode — setter calls queue mutations instead of sending.
 
 ```python
 device.start_staging()
@@ -930,23 +1000,25 @@ device.start_staging()
 
 ### get_staged_mutations()
 
-Return the list of queued mutations.
+Return the list of queued mutation tuples for inspection.
 
 ```python
 mutations = device.get_staged_mutations()
+# [('Q-BRIDGE-MIB', 'dot1qPortVlanEntry', {'dot1qPvid': '5'}, {'dot1dBasePort': '1'}), ...]
 ```
 
 ### commit_staging()
 
-Fire all queued mutations in one atomic POST, then save to NVM.
+Fire all queued mutations in one atomic POST. Does not save to NVM.
 
 ```python
 device.commit_staging()
+device.save_config()  # save when ready
 ```
 
 ### discard_staging()
 
-Clear queued mutations without sending.
+Clear queued mutations without sending. Device state unchanged.
 
 ```python
 device.discard_staging()

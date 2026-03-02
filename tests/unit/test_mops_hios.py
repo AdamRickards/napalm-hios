@@ -116,22 +116,20 @@ class TestMOPSHIOSGetters(unittest.TestCase):
                         {"ifIndex": "1", "ifName": "1/1"},
                     ]
                 },
+                "HM2-DEVMGMT-MIB": {
+                    "hm2DeviceMgmtGroup": [
+                        {"hm2DevMgmtProductDescr": "42 52 53 35 30 2d 38 54 58",
+                         "hm2DevMgmtSerialNumber": "53 4e 31 32 33"}],
+                    "hm2DevMgmtSwVersEntry": [
+                        {"hm2DevMgmtSwVersion": "48 69 4f 53 2d 32 41 2d 31 30 2e 33 2e 30 34 20 32 30 32 35 2d 31 32 2d 30 38 20 31 36 3a 35 34",
+                         "hm2DevMgmtSwFileLocation": "1", "hm2DevMgmtSwFileIdx": "1"},
+                        {"hm2DevMgmtSwVersion": "48 69 4f 53 2d 31 30 2e 33 2e 30 34",
+                         "hm2DevMgmtSwFileLocation": "2", "hm2DevMgmtSwFileIdx": "1"},
+                    ],
+                },
             },
             "errors": [],
         }
-        # Simulate successful private MIB queries (hex-encoded strings from MOPS)
-        self.backend.client.get.side_effect = [
-            # First get(): hm2DeviceMgmtGroup - product/serial
-            [{"hm2DevMgmtProductDescr": "42 52 53 35 30 2d 38 54 58",
-              "hm2DevMgmtSerialNumber": "53 4e 31 32 33"}],
-            # Second get(): hm2DevMgmtSwVersEntry - firmware versions
-            [
-                {"hm2DevMgmtSwVersion": "48 69 4f 53 2d 32 41 2d 31 30 2e 33 2e 30 34 20 32 30 32 35 2d 31 32 2d 30 38 20 31 36 3a 35 34",
-                 "hm2DevMgmtSwFileLocation": "1", "hm2DevMgmtSwFileIdx": "1"},
-                {"hm2DevMgmtSwVersion": "48 69 4f 53 2d 31 30 2e 33 2e 30 34",
-                 "hm2DevMgmtSwFileLocation": "2", "hm2DevMgmtSwFileIdx": "1"},
-            ],
-        ]
         facts = self.backend.get_facts()
         self.assertEqual(facts["os_version"], "HiOS-2A-10.3.04")
         self.assertEqual(facts["serial_number"], "SN123")
@@ -177,10 +175,17 @@ class TestMOPSHIOSGetters(unittest.TestCase):
 
     def test_get_interfaces_ip(self):
         self.backend._ifindex_map = {"100": "cpu/1"}
-        self.backend.client.get.return_value = [
-            {"ipAdEntAddr": "192.168.1.254", "ipAdEntIfIndex": "100",
-             "ipAdEntNetMask": "255.255.255.0"},
-        ]
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "IP-MIB": {
+                    "ipAddrEntry": [
+                        {"ipAdEntAddr": "192.168.1.254", "ipAdEntIfIndex": "100",
+                         "ipAdEntNetMask": "255.255.255.0"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
 
         result = self.backend.get_interfaces_ip()
         self.assertIn("cpu/1", result)
@@ -229,10 +234,17 @@ class TestMOPSHIOSGetters(unittest.TestCase):
 
     def test_get_lldp_neighbors(self):
         self.backend._ifindex_map = {"7": "1/7"}
-        self.backend.client.get.return_value = [
-            {"lldpRemLocalPortNum": "7", "lldpRemSysName": "BRS50-LOUNGE",
-             "lldpRemPortId": "Module: 1 Port: 5"},
-        ]
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "LLDP-MIB": {
+                    "lldpRemEntry": [
+                        {"lldpRemLocalPortNum": "7", "lldpRemSysName": "BRS50-LOUNGE",
+                         "lldpRemPortId": "Module: 1 Port: 5"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
 
         neighbors = self.backend.get_lldp_neighbors()
         self.assertIn("1/7", neighbors)
@@ -242,22 +254,27 @@ class TestMOPSHIOSGetters(unittest.TestCase):
 
     def test_get_lldp_neighbors_detail(self):
         self.backend._ifindex_map = {"7": "1/7"}
-        # Two get() calls: lldpRemEntry then lldpRemManAddrEntry
-        self.backend.client.get.side_effect = [
-            # lldpRemEntry
-            [{"lldpRemLocalPortNum": "7", "lldpRemIndex": "1",
-              "lldpRemPortId": "Module: 1 Port: 5",
-              "lldpRemPortDesc": "1/5",
-              "lldpRemChassisId": "64 60 38 8a 42 d6",
-              "lldpRemSysName": "BRS50-LOUNGE",
-              "lldpRemSysDesc": "Hirschmann BRS50",
-              "lldpRemSysCapSupported": "24",
-              "lldpRemSysCapEnabled": "24"}],
-            # lldpRemManAddrEntry
-            [{"lldpRemLocalPortNum": "7", "lldpRemIndex": "1",
-              "lldpRemManAddrSubtype": "1",
-              "lldpRemManAddr": "c0 a8 01 fe"}],
-        ]
+        # Single get_multi: lldpRemEntry + lldpRemManAddrEntry
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "LLDP-MIB": {
+                    "lldpRemEntry": [
+                        {"lldpRemLocalPortNum": "7", "lldpRemIndex": "1",
+                         "lldpRemPortId": "Module: 1 Port: 5",
+                         "lldpRemPortDesc": "1/5",
+                         "lldpRemChassisId": "64 60 38 8a 42 d6",
+                         "lldpRemSysName": "BRS50-LOUNGE",
+                         "lldpRemSysDesc": "Hirschmann BRS50",
+                         "lldpRemSysCapSupported": "24",
+                         "lldpRemSysCapEnabled": "24"}],
+                    "lldpRemManAddrEntry": [
+                        {"lldpRemLocalPortNum": "7", "lldpRemIndex": "1",
+                         "lldpRemManAddrSubtype": "1",
+                         "lldpRemManAddr": "c0 a8 01 fe"}],
+                },
+            },
+            "errors": [],
+        }
 
         detail = self.backend.get_lldp_neighbors_detail()
         self.assertIn("1/7", detail)
@@ -272,16 +289,23 @@ class TestMOPSHIOSGetters(unittest.TestCase):
     def test_get_mac_address_table(self):
         self.backend._ifindex_map = {"7": "1/7", "25": "cpu/1"}
         # FDB ID = VLAN ID on HiOS (requested explicitly as attribute)
-        self.backend.client.get.return_value = [
-            {"ieee8021QBridgeTpFdbAddress": "12 dd 6e 60 34 4b",
-             "ieee8021QBridgeTpFdbPort": "7",
-             "ieee8021QBridgeTpFdbStatus": "3",
-             "ieee8021QBridgeFdbId": "1"},
-            {"ieee8021QBridgeTpFdbAddress": "64 60 38 3f 4a a1",
-             "ieee8021QBridgeTpFdbPort": "25",
-             "ieee8021QBridgeTpFdbStatus": "5",
-             "ieee8021QBridgeFdbId": "3"},
-        ]
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "IEEE8021-Q-BRIDGE-MIB": {
+                    "ieee8021QBridgeTpFdbEntry": [
+                        {"ieee8021QBridgeTpFdbAddress": "12 dd 6e 60 34 4b",
+                         "ieee8021QBridgeTpFdbPort": "7",
+                         "ieee8021QBridgeTpFdbStatus": "3",
+                         "ieee8021QBridgeFdbId": "1"},
+                        {"ieee8021QBridgeTpFdbAddress": "64 60 38 3f 4a a1",
+                         "ieee8021QBridgeTpFdbPort": "25",
+                         "ieee8021QBridgeTpFdbStatus": "5",
+                         "ieee8021QBridgeFdbId": "3"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
 
         mac_table = self.backend.get_mac_address_table()
         self.assertEqual(len(mac_table), 2)
@@ -327,12 +351,19 @@ class TestMOPSHIOSGetters(unittest.TestCase):
 
     def test_get_arp_table(self):
         self.backend._ifindex_map = {"100": "cpu/1"}
-        self.backend.client.get.return_value = [
-            {"ipNetToMediaIfIndex": "100",
-             "ipNetToMediaPhysAddress": "aa bb cc dd ee ff",
-             "ipNetToMediaNetAddress": "192.168.1.1",
-             "ipNetToMediaType": "3"},
-        ]
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "IP-MIB": {
+                    "ipNetToMediaEntry": [
+                        {"ipNetToMediaIfIndex": "100",
+                         "ipNetToMediaPhysAddress": "aa bb cc dd ee ff",
+                         "ipNetToMediaNetAddress": "192.168.1.1",
+                         "ipNetToMediaType": "3"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
 
         arp = self.backend.get_arp_table()
         self.assertEqual(len(arp), 1)
@@ -421,18 +452,25 @@ class TestMOPSHIOSGetters(unittest.TestCase):
 
     def test_get_optics(self):
         self.backend._ifindex_map = {"1": "1/1", "2": "1/2"}
-        self.backend.client.get.return_value = [
-            {"ifIndex": "1",
-             "hm2SfpCurrentTxPower": "3835",
-             "hm2SfpCurrentRxPower": "3613",
-             "hm2SfpCurrentTxPowerdBm": "2d 34 2e 31",
-             "hm2SfpCurrentRxPowerdBm": "2d 34 2e 34"},
-            {"ifIndex": "2",
-             "hm2SfpCurrentTxPower": "3816",
-             "hm2SfpCurrentRxPower": "3502",
-             "hm2SfpCurrentTxPowerdBm": "2d 34 2e 31",
-             "hm2SfpCurrentRxPowerdBm": "2d 34 2e 35"},
-        ]
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DEVMGMT-MIB": {
+                    "hm2SfpDiagEntry": [
+                        {"ifIndex": "1",
+                         "hm2SfpCurrentTxPower": "3835",
+                         "hm2SfpCurrentRxPower": "3613",
+                         "hm2SfpCurrentTxPowerdBm": "2d 34 2e 31",
+                         "hm2SfpCurrentRxPowerdBm": "2d 34 2e 34"},
+                        {"ifIndex": "2",
+                         "hm2SfpCurrentTxPower": "3816",
+                         "hm2SfpCurrentRxPower": "3502",
+                         "hm2SfpCurrentTxPowerdBm": "2d 34 2e 31",
+                         "hm2SfpCurrentRxPowerdBm": "2d 34 2e 35"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
 
         optics = self.backend.get_optics()
         self.assertIn("1/1", optics)
@@ -517,15 +555,14 @@ class TestStaging(unittest.TestCase):
             ("SNMPv2-MIB", "system", {"sysLocation": "4c 61 62"}))
         self.assertEqual(len(self.backend.get_staged_mutations()), 1)
 
-        # Commit
+        # Commit — fires set_multi, does NOT auto-save
         self.backend.client.set_multi.return_value = True
-        self.backend.client.save_config.return_value = {}
         self.backend.commit_staging()
 
         self.assertFalse(self.backend._staging)
         self.assertEqual(self.backend._mutations, [])
         self.backend.client.set_multi.assert_called_once()
-        self.backend.client.save_config.assert_called_once()
+        self.backend.client.save_config.assert_not_called()
 
     def test_discard_staging(self):
         self.backend.start_staging()
@@ -736,38 +773,48 @@ class TestMOPSHIOSSetters(unittest.TestCase):
 
     def test_get_mrp_sub_ring_empty(self):
         """No SRM instances configured."""
-        self.backend.client.get.side_effect = [
-            [{"hm2SrmGlobalAdminState": "2", "hm2SrmMaxInstances": "8"}],
-            [],  # no entries
-        ]
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-L2REDUNDANCY-MIB": {
+                    "hm2SrmMibGroup": [{"hm2SrmGlobalAdminState": "2", "hm2SrmMaxInstances": "8"}],
+                    "hm2SrmEntry": [],
+                },
+            },
+            "errors": [],
+        }
         result = self.backend.get_mrp_sub_ring()
         self.assertFalse(result['enabled'])
         self.assertEqual(result['max_instances'], 8)
         self.assertEqual(result['instances'], [])
 
     def test_get_mrp_sub_ring_one_instance(self):
-        """One SRM instance configured and active."""
-        self.backend.client.get.side_effect = [
-            [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
-            [{
-                "hm2SrmRingID": "1",
-                "hm2SrmAdminState": "1",  # manager
-                "hm2SrmOperState": "1",   # manager
-                "hm2SrmVlanID": "200",
-                "hm2SrmMRPDomainID": "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff",
-                "hm2SrmPartnerMAC": "00:80:63:A1:B2:C3",
-                "hm2SrmSubRingProtocol": "mrp",
-                "hm2SrmSubRingName": "sub1",
-                "hm2SrmSubRingPortIfIndex": "3",
-                "hm2SrmSubRingPortOperState": "3",  # forwarding
-                "hm2SrmSubRingOperState": "3",       # closed
-                "hm2SrmRedundancyOperState": "1",    # True
-                "hm2SrmConfigOperState": "1",        # no error
-                "hm2SrmRowStatus": "1",              # active
-            }],
-        ]
-        self.backend._build_ifindex_map = Mock(return_value={
-            "1": "1/1", "2": "1/2", "3": "1/3", "4": "1/4"})
+        """One SRM instance configured and active (decode_strings=False)."""
+        self.backend._ifindex_map = {
+            "1": "1/1", "2": "1/2", "3": "1/3", "4": "1/4"}
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-L2REDUNDANCY-MIB": {
+                    "hm2SrmMibGroup": [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
+                    "hm2SrmEntry": [{
+                        "hm2SrmRingID": "1",
+                        "hm2SrmAdminState": "1",  # manager
+                        "hm2SrmOperState": "1",   # manager
+                        "hm2SrmVlanID": "200",
+                        "hm2SrmMRPDomainID": "ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff",
+                        "hm2SrmPartnerMAC": "00 80 63 a1 b2 c3",
+                        "hm2SrmSubRingProtocol": "4",              # iec-62439-mrp(4)
+                        "hm2SrmSubRingName": "73 75 62 31",        # "sub1"
+                        "hm2SrmSubRingPortIfIndex": "3",
+                        "hm2SrmSubRingPortOperState": "3",  # forwarding
+                        "hm2SrmSubRingOperState": "3",       # closed
+                        "hm2SrmRedundancyOperState": "1",    # True
+                        "hm2SrmConfigOperState": "1",        # no error
+                        "hm2SrmRowStatus": "1",              # active
+                    }],
+                },
+            },
+            "errors": [],
+        }
 
         result = self.backend.get_mrp_sub_ring()
         self.assertTrue(result['enabled'])
@@ -781,14 +828,24 @@ class TestMOPSHIOSSetters(unittest.TestCase):
         self.assertEqual(inst['ring_state'], 'closed')
         self.assertTrue(inst['redundancy'])
         self.assertEqual(inst['name'], 'sub1')
+        self.assertEqual(inst['partner_mac'], '00:80:63:a1:b2:c3')
+        self.assertEqual(inst['protocol'], 'mrp')
+        self.assertEqual(inst['domain_id'],
+                         'ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff')
 
     def test_set_mrp_sub_ring_global_enable(self):
         """Global SRM enable only (no instance)."""
         self.backend.client.set_indexed.return_value = True
-        self.backend.client.get.side_effect = [
-            [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
-            [],
-        ]
+        # Read-back via get_mrp_sub_ring() now uses get_multi
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-L2REDUNDANCY-MIB": {
+                    "hm2SrmMibGroup": [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
+                    "hm2SrmEntry": [],
+                },
+            },
+            "errors": [],
+        }
 
         result = self.backend.set_mrp_sub_ring(enabled=True)
 
@@ -801,10 +858,16 @@ class TestMOPSHIOSSetters(unittest.TestCase):
         self.backend._build_ifindex_map = Mock(return_value={
             "1": "1/1", "2": "1/2", "3": "1/3", "4": "1/4"})
         self.backend.client.set_indexed.return_value = True
-        self.backend.client.get.side_effect = [
-            [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
-            [],
-        ]
+        # Read-back via get_mrp_sub_ring() now uses get_multi
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-L2REDUNDANCY-MIB": {
+                    "hm2SrmMibGroup": [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
+                    "hm2SrmEntry": [],
+                },
+            },
+            "errors": [],
+        }
 
         self.backend.set_mrp_sub_ring(ring_id=1, mode='manager',
                                        port='1/3', vlan=200)
@@ -836,10 +899,16 @@ class TestMOPSHIOSSetters(unittest.TestCase):
     def test_delete_mrp_sub_ring(self):
         """Delete SRM instance: notInService → destroy."""
         self.backend.client.set_indexed.return_value = True
-        self.backend.client.get.side_effect = [
-            [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
-            [],
-        ]
+        # Read-back via get_mrp_sub_ring() now uses get_multi
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-L2REDUNDANCY-MIB": {
+                    "hm2SrmMibGroup": [{"hm2SrmGlobalAdminState": "1", "hm2SrmMaxInstances": "8"}],
+                    "hm2SrmEntry": [],
+                },
+            },
+            "errors": [],
+        }
 
         result = self.backend.delete_mrp_sub_ring(ring_id=1)
 
@@ -907,44 +976,42 @@ class TestMOPSHIOSSetters(unittest.TestCase):
 
     def test_set_interface_disable(self):
         self.backend._build_ifindex_map = Mock(return_value={"5": "1/5"})
-        self.backend.client.set_indexed.return_value = True
 
         self.backend.set_interface('1/5', enabled=False)
 
-        self.backend.client.set_indexed.assert_called_once_with(
-            "IF-MIB", "ifEntry", index={"ifIndex": "5"},
-            values={"ifAdminStatus": "2"})
+        self.backend.client.set_multi.assert_called_once_with([
+            ("IF-MIB", "ifEntry", {"ifAdminStatus": "2"}, {"ifIndex": "5"}),
+        ])
 
     def test_set_interface_enable(self):
         self.backend._build_ifindex_map = Mock(return_value={"5": "1/5"})
-        self.backend.client.set_indexed.return_value = True
 
         self.backend.set_interface('1/5', enabled=True)
 
-        self.backend.client.set_indexed.assert_called_once_with(
-            "IF-MIB", "ifEntry", index={"ifIndex": "5"},
-            values={"ifAdminStatus": "1"})
+        self.backend.client.set_multi.assert_called_once_with([
+            ("IF-MIB", "ifEntry", {"ifAdminStatus": "1"}, {"ifIndex": "5"}),
+        ])
 
     def test_set_interface_description(self):
         self.backend._build_ifindex_map = Mock(return_value={"5": "1/5"})
-        self.backend.client.set_indexed.return_value = True
 
         self.backend.set_interface('1/5', description='Uplink')
 
-        self.backend.client.set_indexed.assert_called_once_with(
-            "IF-MIB", "ifXEntry", index={"ifIndex": "5"},
-            values={"ifAlias": "55 70 6c 69 6e 6b"})  # hex-encoded "Uplink"
+        self.backend.client.set_multi.assert_called_once_with([
+            ("IF-MIB", "ifXEntry",
+             {"ifAlias": "55 70 6c 69 6e 6b"}, {"ifIndex": "5"}),
+        ])
 
     def test_set_interface_both(self):
         self.backend._build_ifindex_map = Mock(return_value={"5": "1/5"})
-        self.backend.client.set_indexed.return_value = True
 
         self.backend.set_interface('1/5', enabled=False, description='Down')
 
-        calls = self.backend.client.set_indexed.call_args_list
-        self.assertEqual(len(calls), 2)
-        self.assertEqual(calls[0].kwargs['values'], {"ifAdminStatus": "2"})
-        self.assertEqual(calls[1].kwargs['values'], {"ifAlias": "44 6f 77 6e"})
+        self.backend.client.set_multi.assert_called_once_with([
+            ("IF-MIB", "ifEntry", {"ifAdminStatus": "2"}, {"ifIndex": "5"}),
+            ("IF-MIB", "ifXEntry",
+             {"ifAlias": "44 6f 77 6e"}, {"ifIndex": "5"}),
+        ])
 
     def test_set_interface_unknown_port(self):
         self.backend._build_ifindex_map = Mock(return_value={"5": "1/5"})
@@ -1368,43 +1435,34 @@ class TestMOPSHIOSRSTP(unittest.TestCase):
     # ----------------------------------------------------------------
 
     def test_set_rstp_port_enable_disable(self):
-        """Enable then disable a port — verify set_indexed calls."""
+        """Enable then disable a port — verify set_multi calls."""
         self.backend._build_ifindex_map = Mock(
             return_value={"1": "1/1", "2": "1/2", "5": "1/5"})
         self.backend._ifindex_map = {"1": "1/1", "2": "1/2", "5": "1/5"}
-        self.backend.get_rstp_port = Mock(return_value={
-            "1/5": {"enabled": True, "state": "forwarding"},
-        })
 
         # Enable port 1/5
         self.backend.set_rstp_port("1/5", enabled=True)
 
-        self.backend.client.set_indexed.assert_called_with(
-            "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpPortEntry",
-            index={"ifIndex": "5"},
-            values={"hm2AgentStpPortState": "1"})
+        self.backend.client.set_multi.assert_called_with([
+            ("HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpPortEntry",
+             {"hm2AgentStpPortState": "1"}, {"ifIndex": "5"}),
+        ])
 
-        self.backend.client.set_indexed.reset_mock()
+        self.backend.client.set_multi.reset_mock()
 
         # Disable port 1/5
-        self.backend.get_rstp_port = Mock(return_value={
-            "1/5": {"enabled": False, "state": "disabled"},
-        })
         self.backend.set_rstp_port("1/5", enabled=False)
 
-        self.backend.client.set_indexed.assert_called_with(
-            "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpPortEntry",
-            index={"ifIndex": "5"},
-            values={"hm2AgentStpPortState": "2"})
+        self.backend.client.set_multi.assert_called_with([
+            ("HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpPortEntry",
+             {"hm2AgentStpPortState": "2"}, {"ifIndex": "5"}),
+        ])
 
     def test_set_rstp_port_cst_params(self):
-        """Verify CST port parameters are sent via set_indexed."""
+        """Verify CST port parameters are sent via set_multi."""
         self.backend._build_ifindex_map = Mock(
             return_value={"1": "1/1", "2": "1/2"})
         self.backend._ifindex_map = {"1": "1/1", "2": "1/2"}
-        self.backend.get_rstp_port = Mock(return_value={
-            "1/1": {"enabled": True},
-        })
 
         self.backend.set_rstp_port(
             "1/1", edge_port=True, auto_edge=False,
@@ -1412,40 +1470,35 @@ class TestMOPSHIOSRSTP(unittest.TestCase):
             root_guard=True, loop_guard=True, tcn_guard=True,
             bpdu_filter=True, bpdu_flood=False)
 
-        self.backend.client.set_indexed.assert_called_once_with(
-            "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpCstPortEntry",
-            index={"ifIndex": "1"},
-            values={
-                "hm2AgentStpCstPortEdge": "1",
-                "hm2AgentStpCstPortAutoEdge": "2",
-                "hm2AgentStpCstPortPathCost": "200000",
-                "hm2AgentStpCstPortPriority": "64",
-                "hm2AgentStpCstPortRootGuard": "1",
-                "hm2AgentStpCstPortLoopGuard": "1",
-                "hm2AgentStpCstPortTCNGuard": "1",
-                "hm2AgentStpCstPortBpduFilter": "1",
-                "hm2AgentStpCstPortBpduFlood": "2",
-            })
+        self.backend.client.set_multi.assert_called_once_with([
+            ("HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpCstPortEntry",
+             {
+                 "hm2AgentStpCstPortEdge": "1",
+                 "hm2AgentStpCstPortAutoEdge": "2",
+                 "hm2AgentStpCstPortPathCost": "200000",
+                 "hm2AgentStpCstPortPriority": "64",
+                 "hm2AgentStpCstPortRootGuard": "1",
+                 "hm2AgentStpCstPortLoopGuard": "1",
+                 "hm2AgentStpCstPortTCNGuard": "1",
+                 "hm2AgentStpCstPortBpduFilter": "1",
+                 "hm2AgentStpCstPortBpduFlood": "2",
+             }, {"ifIndex": "1"}),
+        ])
 
     def test_set_rstp_port_enable_plus_cst(self):
-        """Enable + CST params should produce two set_indexed calls."""
+        """Enable + CST params should produce two mutations in one set_multi."""
         self.backend._build_ifindex_map = Mock(
             return_value={"3": "1/3"})
         self.backend._ifindex_map = {"3": "1/3"}
-        self.backend.get_rstp_port = Mock(return_value={
-            "1/3": {"enabled": True, "edge_port": True},
-        })
 
         self.backend.set_rstp_port("1/3", enabled=True, edge_port=True)
 
-        calls = self.backend.client.set_indexed.call_args_list
-        self.assertEqual(len(calls), 2)
-        # First call: port enable
-        self.assertEqual(calls[0].kwargs["values"],
-                         {"hm2AgentStpPortState": "1"})
-        # Second call: CST edge
-        self.assertEqual(calls[1].kwargs["values"],
-                         {"hm2AgentStpCstPortEdge": "1"})
+        self.backend.client.set_multi.assert_called_once_with([
+            ("HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpPortEntry",
+             {"hm2AgentStpPortState": "1"}, {"ifIndex": "3"}),
+            ("HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpCstPortEntry",
+             {"hm2AgentStpCstPortEdge": "1"}, {"ifIndex": "3"}),
+        ])
 
     def test_set_rstp_port_unknown_interface(self):
         """Unknown interface name should raise ValueError."""
@@ -1458,17 +1511,14 @@ class TestMOPSHIOSRSTP(unittest.TestCase):
         self.assertIn("Unknown interface", str(ctx.exception))
 
     def test_set_rstp_port_no_params(self):
-        """No params beyond interface should skip set_indexed entirely."""
+        """No params beyond interface should skip set_multi entirely."""
         self.backend._build_ifindex_map = Mock(
             return_value={"1": "1/1"})
         self.backend._ifindex_map = {"1": "1/1"}
-        self.backend.get_rstp_port = Mock(return_value={
-            "1/1": {"enabled": True},
-        })
 
         self.backend.set_rstp_port("1/1")
 
-        self.backend.client.set_indexed.assert_not_called()
+        self.backend.client.set_multi.assert_not_called()
 
 
 class TestAutoDisable(unittest.TestCase):
@@ -1612,18 +1662,18 @@ class TestAutoDisable(unittest.TestCase):
     def test_set_auto_disable_timer(self):
         """Set recovery timer on a port."""
         self.backend.set_auto_disable('1/1', timer=30)
-        self.backend.client.set_indexed.assert_called_once_with(
-            "HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
-            index={"ifIndex": "1"},
-            values={"hm2AutoDisableIntfTimer": "30"})
+        self.backend.client.set_multi.assert_called_once_with([
+            ("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
+             {"hm2AutoDisableIntfTimer": "30"}, {"ifIndex": "1"}),
+        ])
 
     def test_set_auto_disable_timer_zero(self):
         """Set timer to 0 (off)."""
         self.backend.set_auto_disable('1/2', timer=0)
-        self.backend.client.set_indexed.assert_called_once_with(
-            "HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
-            index={"ifIndex": "2"},
-            values={"hm2AutoDisableIntfTimer": "0"})
+        self.backend.client.set_multi.assert_called_once_with([
+            ("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
+             {"hm2AutoDisableIntfTimer": "0"}, {"ifIndex": "2"}),
+        ])
 
     def test_set_auto_disable_unknown_interface(self):
         with self.assertRaises(ValueError) as ctx:
@@ -1633,10 +1683,10 @@ class TestAutoDisable(unittest.TestCase):
     def test_reset_auto_disable(self):
         """Manual port re-enable writes true(1) to reset."""
         self.backend.reset_auto_disable('1/1')
-        self.backend.client.set_indexed.assert_called_once_with(
-            "HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
-            index={"ifIndex": "1"},
-            values={"hm2AutoDisableIntfReset": "1"})
+        self.backend.client.set_multi.assert_called_once_with([
+            ("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
+             {"hm2AutoDisableIntfReset": "1"}, {"ifIndex": "1"}),
+        ])
 
     def test_reset_auto_disable_unknown_interface(self):
         with self.assertRaises(ValueError) as ctx:
@@ -1785,25 +1835,25 @@ class TestLoopProtection(unittest.TestCase):
         """Set per-port: enabled, active, auto-disable."""
         self.backend.set_loop_protection('1/1', enabled=True, mode='active',
                                          action='auto-disable')
-        self.backend.client.set_indexed.assert_called_once_with(
-            "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentKeepalivePortEntry",
-            index={"ifIndex": "1"},
-            values={
-                "hm2AgentKeepalivePortState": "1",
-                "hm2AgentKeepalivePortMode": "1",
-                "hm2AgentKeepalivePortRxAction": "11",
-            })
+        self.backend.client.set_multi.assert_called_once_with([
+            ("HM2-PLATFORM-SWITCHING-MIB", "hm2AgentKeepalivePortEntry",
+             {
+                 "hm2AgentKeepalivePortState": "1",
+                 "hm2AgentKeepalivePortMode": "1",
+                 "hm2AgentKeepalivePortRxAction": "11",
+             }, {"ifIndex": "1"}),
+        ])
 
     def test_set_loop_protection_per_port_passive(self):
         """Set ring port: enabled, passive (no action change)."""
         self.backend.set_loop_protection('1/2', enabled=True, mode='passive')
-        self.backend.client.set_indexed.assert_called_once_with(
-            "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentKeepalivePortEntry",
-            index={"ifIndex": "2"},
-            values={
-                "hm2AgentKeepalivePortState": "1",
-                "hm2AgentKeepalivePortMode": "2",
-            })
+        self.backend.client.set_multi.assert_called_once_with([
+            ("HM2-PLATFORM-SWITCHING-MIB", "hm2AgentKeepalivePortEntry",
+             {
+                 "hm2AgentKeepalivePortState": "1",
+                 "hm2AgentKeepalivePortMode": "2",
+             }, {"ifIndex": "2"}),
+        ])
 
     def test_set_loop_protection_per_port_unknown(self):
         with self.assertRaises(ValueError):
@@ -1961,32 +2011,30 @@ class TestLoopProtection(unittest.TestCase):
     def test_set_vlan_ingress_pvid(self):
         """Set PVID on a port."""
         self.backend._ifindex_map = {"3": "1/3"}
-        self.backend.client.set_indexed.return_value = True
 
         self.backend.set_vlan_ingress("1/3", pvid=100)
 
-        self.backend.client.set_indexed.assert_called_once_with(
-            "Q-BRIDGE-MIB", "dot1qPortVlanEntry",
-            index={"dot1dBasePort": "3"},
-            values={"dot1qPvid": "100"})
+        self.backend.client.set_multi.assert_called_once_with([
+            ("Q-BRIDGE-MIB", "dot1qPortVlanEntry",
+             {"dot1qPvid": "100"}, {"dot1dBasePort": "3"}),
+        ])
 
     def test_set_vlan_ingress_all_params(self):
         """Set PVID, frame_types, and ingress_filtering together."""
         self.backend._ifindex_map = {"3": "1/3"}
-        self.backend.client.set_indexed.return_value = True
 
         self.backend.set_vlan_ingress("1/3", pvid=5,
                                       frame_types="admit_only_tagged",
                                       ingress_filtering=True)
 
-        self.backend.client.set_indexed.assert_called_once_with(
-            "Q-BRIDGE-MIB", "dot1qPortVlanEntry",
-            index={"dot1dBasePort": "3"},
-            values={
-                "dot1qPvid": "5",
-                "dot1qPortAcceptableFrameTypes": "2",
-                "dot1qPortIngressFiltering": "1",
-            })
+        self.backend.client.set_multi.assert_called_once_with([
+            ("Q-BRIDGE-MIB", "dot1qPortVlanEntry",
+             {
+                 "dot1qPvid": "5",
+                 "dot1qPortAcceptableFrameTypes": "2",
+                 "dot1qPortIngressFiltering": "1",
+             }, {"dot1dBasePort": "3"}),
+        ])
 
     def test_set_vlan_ingress_invalid_frame_types(self):
         self.backend._ifindex_map = {"3": "1/3"}

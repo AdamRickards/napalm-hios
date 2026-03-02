@@ -752,3 +752,49 @@ class HIOSDriver(NetworkDriver):
                 transmit_interval, receive_threshold,
             )
         raise NotImplementedError("set_loop_protection is not implemented for this protocol")
+
+    # ------------------------------------------------------------------
+    # MOPS staging (atomic multi-setter batching)
+    # ------------------------------------------------------------------
+
+    def start_staging(self):
+        """Enter staging mode — MOPS mutations are queued, not sent.
+
+        Staging batches mutations into one atomic POST. The driver does
+        not validate dependencies between staged operations. Operations
+        that depend on prior state (e.g. set_vlan_egress requires the
+        VLAN to exist) must have their prerequisites committed first.
+        Tool layer is responsible for operation ordering.
+
+        VLAN CRUD (create/update/delete_vlan) always fires immediately
+        regardless of staging mode.
+
+        Raises NotImplementedError for SNMP/SSH (use load_merge_candidate
+        for SSH CLI staging).
+        """
+        if self.active_protocol == 'mops':
+            return self.mops.start_staging()
+        raise NotImplementedError(
+            "start_staging is only available via MOPS. "
+            "Use load_merge_candidate() for SSH CLI staging.")
+
+    def commit_staging(self):
+        """Fire all queued MOPS mutations in one atomic POST.
+
+        Does NOT save to NVM — call save_config() separately when ready.
+        """
+        if self.active_protocol == 'mops':
+            return self.mops.commit_staging()
+        raise NotImplementedError("commit_staging is only available via MOPS")
+
+    def discard_staging(self):
+        """Clear queued MOPS mutations without sending."""
+        if self.active_protocol == 'mops':
+            return self.mops.discard_staging()
+        raise NotImplementedError("discard_staging is only available via MOPS")
+
+    def get_staged_mutations(self):
+        """Return list of staged mutation tuples for inspection."""
+        if self.active_protocol == 'mops':
+            return self.mops.get_staged_mutations()
+        raise NotImplementedError("get_staged_mutations is only available via MOPS")

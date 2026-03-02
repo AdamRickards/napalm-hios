@@ -1342,12 +1342,17 @@ class SNMPHIOS:
 
     def set_vlan_ingress(self, port, pvid=None, frame_types=None,
                          ingress_filtering=None):
-        """Set ingress parameters on a single port via SNMP."""
+        """Set ingress parameters on one or more ports via SNMP.
+
+        Args:
+            port: port name (str) or list of port names
+        """
         return asyncio.run(self._set_vlan_ingress_async(
             port, pvid, frame_types, ingress_filtering))
 
     async def _set_vlan_ingress_async(self, port, pvid, frame_types,
                                        ingress_filtering):
+        ports = [port] if isinstance(port, str) else list(port)
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
         bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
@@ -1356,33 +1361,41 @@ class SNMPHIOS:
             name = ifmap.get(str(ifindex_val), f'if{ifindex_val}')
             name_to_bp[name] = bp_num
 
-        bp = name_to_bp.get(port)
-        if bp is None:
-            raise ValueError(f"Unknown interface '{port}'")
-
-        sets = []
-        if pvid is not None:
-            sets.append((f"{OID_dot1qPvid}.{bp}",
-                         Unsigned32(int(pvid))))
+        # Validate frame_types once
+        ft_val = None
         if frame_types is not None:
             if frame_types == 'admit_only_tagged':
-                val = 2
+                ft_val = 2
             elif frame_types == 'admit_all':
-                val = 1
+                ft_val = 1
             else:
                 raise ValueError(
                     f"Invalid frame_types '{frame_types}': "
                     f"use 'admit_all' or 'admit_only_tagged'")
-            sets.append((f"{OID_dot1qPortAcceptableFrameTypes}.{bp}",
-                         Integer32(val)))
-        if ingress_filtering is not None:
-            sets.append((f"{OID_dot1qPortIngressFiltering}.{bp}",
-                         Integer32(1 if ingress_filtering else 2)))
+
+        sets = []
+        for p in ports:
+            bp = name_to_bp.get(p)
+            if bp is None:
+                raise ValueError(f"Unknown interface '{p}'")
+            if pvid is not None:
+                sets.append((f"{OID_dot1qPvid}.{bp}",
+                             Unsigned32(int(pvid))))
+            if ft_val is not None:
+                sets.append((f"{OID_dot1qPortAcceptableFrameTypes}.{bp}",
+                             Integer32(ft_val)))
+            if ingress_filtering is not None:
+                sets.append((f"{OID_dot1qPortIngressFiltering}.{bp}",
+                             Integer32(1 if ingress_filtering else 2)))
         if sets:
             await self._set_oids(*sets)
 
     def set_vlan_egress(self, vlan_id, port, mode):
-        """Set one port's VLAN membership via SNMP."""
+        """Set port(s) VLAN membership via SNMP.
+
+        Args:
+            port: port name (str) or list of port names
+        """
         return asyncio.run(self._set_vlan_egress_async(vlan_id, port, mode))
 
     async def _set_vlan_egress_async(self, vlan_id, port, mode):
@@ -1391,20 +1404,22 @@ class SNMPHIOS:
                 f"Invalid mode '{mode}': use 'tagged', 'untagged', "
                 f"'forbidden', or 'none'")
 
+        ports = [port] if isinstance(port, str) else list(port)
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
         bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
-        bp_to_name = {}
         name_to_bp = {}
         for bp_num, ifindex_val in bp_data.items():
             name = ifmap.get(str(ifindex_val), f'if{ifindex_val}')
-            bp_to_name[bp_num] = name
             name_to_bp[name] = bp_num
 
-        bp = name_to_bp.get(port)
-        if bp is None:
-            raise ValueError(f"Unknown interface '{port}'")
-        bp_int = int(bp)
+        # Validate all ports up front
+        bp_ints = []
+        for p in ports:
+            bp = name_to_bp.get(p)
+            if bp is None:
+                raise ValueError(f"Unknown interface '{p}'")
+            bp_ints.append(int(bp))
 
         # Read current bitmaps for this VLAN
         vid = str(vlan_id)
@@ -1433,30 +1448,30 @@ class SNMPHIOS:
         untagged = _to_bytearray(untagged_raw)
         forbidden = _to_bytearray(forbidden_raw)
 
-        # Ensure arrays are long enough
-        byte_idx = (bp_int - 1) // 8
-        bit_mask = 0x80 >> ((bp_int - 1) % 8)
-        for arr in (egress, untagged, forbidden):
-            while len(arr) <= byte_idx:
-                arr.append(0)
+        # Modify bitmaps for ALL target ports
+        for bp_int in bp_ints:
+            byte_idx = (bp_int - 1) // 8
+            bit_mask = 0x80 >> ((bp_int - 1) % 8)
+            for arr in (egress, untagged, forbidden):
+                while len(arr) <= byte_idx:
+                    arr.append(0)
 
-        # Modify bitmaps based on mode
-        if mode == 'tagged':
-            egress[byte_idx] |= bit_mask
-            untagged[byte_idx] &= ~bit_mask
-            forbidden[byte_idx] &= ~bit_mask
-        elif mode == 'untagged':
-            egress[byte_idx] |= bit_mask
-            untagged[byte_idx] |= bit_mask
-            forbidden[byte_idx] &= ~bit_mask
-        elif mode == 'forbidden':
-            egress[byte_idx] &= ~bit_mask
-            untagged[byte_idx] &= ~bit_mask
-            forbidden[byte_idx] |= bit_mask
-        elif mode == 'none':
-            egress[byte_idx] &= ~bit_mask
-            untagged[byte_idx] &= ~bit_mask
-            forbidden[byte_idx] &= ~bit_mask
+            if mode == 'tagged':
+                egress[byte_idx] |= bit_mask
+                untagged[byte_idx] &= ~bit_mask
+                forbidden[byte_idx] &= ~bit_mask
+            elif mode == 'untagged':
+                egress[byte_idx] |= bit_mask
+                untagged[byte_idx] |= bit_mask
+                forbidden[byte_idx] &= ~bit_mask
+            elif mode == 'forbidden':
+                egress[byte_idx] &= ~bit_mask
+                untagged[byte_idx] &= ~bit_mask
+                forbidden[byte_idx] |= bit_mask
+            elif mode == 'none':
+                egress[byte_idx] &= ~bit_mask
+                untagged[byte_idx] &= ~bit_mask
+                forbidden[byte_idx] &= ~bit_mask
 
         await self._set_oids(
             (f"{OID_dot1qVlanStaticEgressPorts}.{vid}",
@@ -2131,23 +2146,26 @@ class SNMPHIOS:
         """Set interface admin state and/or description via SNMP.
 
         Args:
-            interface: port name (e.g. '1/5')
+            interface: port name (str) or list of port names
             enabled: True (admin up) or False (admin down), None to skip
             description: port description string, None to skip
         """
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
         ifindex_map = asyncio.run(self._build_ifindex_map())
         name_to_idx = {name: idx for idx, name in ifindex_map.items()}
-        ifidx = name_to_idx.get(interface)
-        if ifidx is None:
-            raise ValueError(f"Unknown interface '{interface}'")
 
         sets = []
-        if enabled is not None:
-            sets.append((f"{OID_ifAdminStatus}.{ifidx}",
-                         Integer32(1 if enabled else 2)))
-        if description is not None:
-            sets.append((f"{OID_ifAlias}.{ifidx}",
-                         OctetString(description)))
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            if enabled is not None:
+                sets.append((f"{OID_ifAdminStatus}.{ifidx}",
+                             Integer32(1 if enabled else 2)))
+            if description is not None:
+                sets.append((f"{OID_ifAlias}.{ifidx}",
+                             OctetString(description)))
         if sets:
             asyncio.run(self._set_oids(*sets))
 
@@ -2391,7 +2409,8 @@ class SNMPHIOS:
                     'vlan': int(cols.get('vlan', 0)),
                     'domain_id': domain_id,
                     'partner_mac': partner_mac,
-                    'protocol': str(cols.get('protocol', 'mrp')),
+                    'protocol': 'mrp' if str(
+                        cols.get('protocol', 4)) == '4' else 'unknown',
                     'name': str(cols.get('name', '')),
                     'port': port_name,
                     'port_state': _SRM_PORT_OPER_STATE.get(port_oper, 'not-connected'),
@@ -3006,34 +3025,54 @@ class SNMPHIOS:
         return {'interfaces': interfaces, 'reasons': reasons}
 
     def set_auto_disable(self, interface, timer=0):
-        """Set auto-disable recovery timer for a port."""
+        """Set auto-disable recovery timer for one or more ports.
+
+        Args:
+            interface: port name (str) or list of port names
+        """
         return asyncio.run(self._set_auto_disable_async(interface, timer))
 
     async def _set_auto_disable_async(self, interface, timer):
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
         name_to_idx = {name: idx for idx, name in ifmap.items()}
-        ifidx = name_to_idx.get(interface)
-        if ifidx is None:
-            raise ValueError(f"Unknown interface '{interface}'")
-        await self._set_oids(
-            (f"{OID_hm2AutoDisableIntfTimer}.{ifidx}", Unsigned32(int(timer))),
-        )
+
+        sets = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            sets.append((f"{OID_hm2AutoDisableIntfTimer}.{ifidx}",
+                         Unsigned32(int(timer))))
+        if sets:
+            await self._set_oids(*sets)
 
     def reset_auto_disable(self, interface):
-        """Manually re-enable an auto-disabled port."""
+        """Manually re-enable one or more auto-disabled ports.
+
+        Args:
+            interface: port name (str) or list of port names
+        """
         return asyncio.run(self._reset_auto_disable_async(interface))
 
     async def _reset_auto_disable_async(self, interface):
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
         name_to_idx = {name: idx for idx, name in ifmap.items()}
-        ifidx = name_to_idx.get(interface)
-        if ifidx is None:
-            raise ValueError(f"Unknown interface '{interface}'")
-        await self._set_oids(
-            (f"{OID_hm2AutoDisableIntfReset}.{ifidx}", Integer32(1)),  # true
-        )
+
+        sets = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            sets.append((f"{OID_hm2AutoDisableIntfReset}.{ifidx}",
+                         Integer32(1)))
+        if sets:
+            await self._set_oids(*sets)
 
     def set_auto_disable_reason(self, reason, enabled=True):
         """Enable or disable auto-disable recovery for a specific reason type."""
@@ -3121,7 +3160,11 @@ class SNMPHIOS:
     def set_loop_protection(self, interface=None, enabled=None, mode=None,
                             action=None, vlan_id=None,
                             transmit_interval=None, receive_threshold=None):
-        """Set loop protection configuration."""
+        """Set loop protection configuration.
+
+        Args:
+            interface: port name (str), list of port names, or None for global
+        """
         return asyncio.run(self._set_loop_protection_async(
             interface, enabled, mode, action, vlan_id,
             transmit_interval, receive_threshold,
@@ -3131,38 +3174,47 @@ class SNMPHIOS:
                                           action, vlan_id,
                                           transmit_interval, receive_threshold):
         if interface is not None:
+            interfaces = ([interface] if isinstance(interface, str)
+                          else list(interface))
             engine = SnmpEngine()
             ifmap = await self._build_ifindex_map(engine)
             name_to_idx = {name: idx for idx, name in ifmap.items()}
-            ifidx = name_to_idx.get(interface)
-            if ifidx is None:
-                raise ValueError(f"Unknown interface '{interface}'")
 
-            sets = []
-            if enabled is not None:
-                sets.append((f"{OID_hm2KeepalivePortState}.{ifidx}",
-                             Integer32(1 if enabled else 2)))
+            # Validate mode/action once
+            mode_val = None
             if mode is not None:
-                val = _LOOP_PROT_MODE_REV.get(mode)
-                if val is None:
+                mode_val = _LOOP_PROT_MODE_REV.get(mode)
+                if mode_val is None:
                     raise ValueError(
                         f"Invalid mode '{mode}': use 'active' or 'passive'")
-                sets.append((f"{OID_hm2KeepalivePortMode}.{ifidx}",
-                             Integer32(val)))
+            action_val = None
             if action is not None:
-                val = _LOOP_PROT_ACTION_REV.get(action)
-                if val is None:
+                action_val = _LOOP_PROT_ACTION_REV.get(action)
+                if action_val is None:
                     raise ValueError(
                         f"Invalid action '{action}': use 'trap', "
                         f"'auto-disable', or 'all'")
-                sets.append((f"{OID_hm2KeepalivePortRxAction}.{ifidx}",
-                             Integer32(val)))
-            if vlan_id is not None:
-                sets.append((f"{OID_hm2KeepalivePortVlanId}.{ifidx}",
-                             Integer32(int(vlan_id))))
 
-            for oid, val in sets:
-                await self._set_oids((oid, val))
+            sets = []
+            for iface in interfaces:
+                ifidx = name_to_idx.get(iface)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                if enabled is not None:
+                    sets.append((f"{OID_hm2KeepalivePortState}.{ifidx}",
+                                 Integer32(1 if enabled else 2)))
+                if mode_val is not None:
+                    sets.append((f"{OID_hm2KeepalivePortMode}.{ifidx}",
+                                 Integer32(mode_val)))
+                if action_val is not None:
+                    sets.append((f"{OID_hm2KeepalivePortRxAction}.{ifidx}",
+                                 Integer32(action_val)))
+                if vlan_id is not None:
+                    sets.append((f"{OID_hm2KeepalivePortVlanId}.{ifidx}",
+                                 Integer32(int(vlan_id))))
+
+            if sets:
+                await self._set_oids(*sets)
         else:
             sets = []
             if enabled is not None:
@@ -3175,8 +3227,8 @@ class SNMPHIOS:
                 sets.append((OID_hm2KeepaliveRxThreshold,
                              Integer32(int(receive_threshold))))
 
-            for oid, val in sets:
-                await self._set_scalar(oid, val)
+            if sets:
+                await self._set_oids(*sets)
 
     # ── RSTP ─────────────────────────────────────────────────────
 
@@ -3374,7 +3426,11 @@ class SNMPHIOS:
                       auto_edge=None, path_cost=None, priority=None,
                       root_guard=None, loop_guard=None, tcn_guard=None,
                       bpdu_filter=None, bpdu_flood=None):
-        """Set per-port STP/RSTP configuration."""
+        """Set per-port STP/RSTP configuration.
+
+        Args:
+            interface: port name (str) or list of port names
+        """
         return asyncio.run(self._set_rstp_port_async(
             interface, enabled, edge_port, auto_edge, path_cost, priority,
             root_guard, loop_guard, tcn_guard, bpdu_filter, bpdu_flood))
@@ -3383,50 +3439,50 @@ class SNMPHIOS:
                                     auto_edge, path_cost, priority,
                                     root_guard, loop_guard, tcn_guard,
                                     bpdu_filter, bpdu_flood):
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
         name_to_idx = {name: idx for idx, name in ifmap.items()}
-        ifidx = name_to_idx.get(interface)
-        if ifidx is None:
-            raise ValueError(f"Unknown interface '{interface}'")
 
-        # Port enable/disable (hm2AgentStpPortEntry)
-        if enabled is not None:
-            await self._set_oids(
-                (f"{OID_hm2AgentStpPortState}.{ifidx}",
-                 Integer32(1 if enabled else 2)))
-
-        # CST port settings
         sets = []
-        if edge_port is not None:
-            sets.append((f"{OID_hm2AgentStpCstPortEdge}.{ifidx}",
-                         Integer32(1 if edge_port else 2)))
-        if auto_edge is not None:
-            sets.append((f"{OID_hm2AgentStpCstPortAutoEdge}.{ifidx}",
-                         Integer32(1 if auto_edge else 2)))
-        if path_cost is not None:
-            sets.append((f"{OID_hm2AgentStpCstPortPathCost}.{ifidx}",
-                         Unsigned32(int(path_cost))))
-        if priority is not None:
-            sets.append((f"{OID_hm2AgentStpCstPortPriority}.{ifidx}",
-                         Unsigned32(int(priority))))
-        if root_guard is not None:
-            sets.append((f"{OID_hm2AgentStpCstPortRootGuard}.{ifidx}",
-                         Integer32(1 if root_guard else 2)))
-        if loop_guard is not None:
-            sets.append((f"{OID_hm2AgentStpCstPortLoopGuard}.{ifidx}",
-                         Integer32(1 if loop_guard else 2)))
-        if tcn_guard is not None:
-            sets.append((f"{OID_hm2AgentStpCstPortTCNGuard}.{ifidx}",
-                         Integer32(1 if tcn_guard else 2)))
-        if bpdu_filter is not None:
-            sets.append((f"{OID_hm2AgentStpCstPortBpduFilter}.{ifidx}",
-                         Integer32(1 if bpdu_filter else 2)))
-        if bpdu_flood is not None:
-            sets.append((f"{OID_hm2AgentStpCstPortBpduFlood}.{ifidx}",
-                         Integer32(1 if bpdu_flood else 2)))
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
 
-        for oid, val in sets:
-            await self._set_oids((oid, val))
+            # Port enable/disable (hm2AgentStpPortEntry)
+            if enabled is not None:
+                sets.append((f"{OID_hm2AgentStpPortState}.{ifidx}",
+                             Integer32(1 if enabled else 2)))
+            # CST port settings
+            if edge_port is not None:
+                sets.append((f"{OID_hm2AgentStpCstPortEdge}.{ifidx}",
+                             Integer32(1 if edge_port else 2)))
+            if auto_edge is not None:
+                sets.append((f"{OID_hm2AgentStpCstPortAutoEdge}.{ifidx}",
+                             Integer32(1 if auto_edge else 2)))
+            if path_cost is not None:
+                sets.append((f"{OID_hm2AgentStpCstPortPathCost}.{ifidx}",
+                             Unsigned32(int(path_cost))))
+            if priority is not None:
+                sets.append((f"{OID_hm2AgentStpCstPortPriority}.{ifidx}",
+                             Unsigned32(int(priority))))
+            if root_guard is not None:
+                sets.append((f"{OID_hm2AgentStpCstPortRootGuard}.{ifidx}",
+                             Integer32(1 if root_guard else 2)))
+            if loop_guard is not None:
+                sets.append((f"{OID_hm2AgentStpCstPortLoopGuard}.{ifidx}",
+                             Integer32(1 if loop_guard else 2)))
+            if tcn_guard is not None:
+                sets.append((f"{OID_hm2AgentStpCstPortTCNGuard}.{ifidx}",
+                             Integer32(1 if tcn_guard else 2)))
+            if bpdu_filter is not None:
+                sets.append((f"{OID_hm2AgentStpCstPortBpduFilter}.{ifidx}",
+                             Integer32(1 if bpdu_filter else 2)))
+            if bpdu_flood is not None:
+                sets.append((f"{OID_hm2AgentStpCstPortBpduFlood}.{ifidx}",
+                             Integer32(1 if bpdu_flood else 2)))
 
-        return await self._get_rstp_port_async(interface)
+        if sets:
+            await self._set_oids(*sets)

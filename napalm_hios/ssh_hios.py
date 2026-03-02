@@ -1725,21 +1725,24 @@ class SSHHIOS:
         """Set interface admin state and/or description via SSH.
 
         Args:
-            interface: port name (e.g. '1/5')
+            interface: port name (str) or list of port names
             enabled: True (admin up) or False (admin down), None to skip
             description: port description string, None to skip
         """
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
         self._config_mode()
         try:
-            output = self.cli(f'interface {interface}')
-            resp = output.get(f'interface {interface}', '')
-            if 'Error' in resp or 'Invalid' in resp:
-                raise ValueError(f"Unknown interface '{interface}'")
-            if enabled is not None:
-                self.cli('no shutdown' if enabled else 'shutdown')
-            if description is not None:
-                self.cli(f'name {description}' if description else 'no name')
-            self.cli('exit')
+            for iface in interfaces:
+                output = self.cli(f'interface {iface}')
+                resp = output.get(f'interface {iface}', '')
+                if 'Error' in resp or 'Invalid' in resp:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                if enabled is not None:
+                    self.cli('no shutdown' if enabled else 'shutdown')
+                if description is not None:
+                    self.cli(f'name {description}' if description else 'no name')
+                self.cli('exit')
         finally:
             self._exit_config_mode()
 
@@ -2094,27 +2097,33 @@ class SSHHIOS:
         return {'interfaces': interfaces, 'reasons': reasons}
 
     def set_auto_disable(self, interface, timer=0):
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
         timer = int(timer)
         self._config_mode()
         try:
-            output = self.cli(f'interface {interface}')
-            resp = output.get(f'interface {interface}', '')
-            if 'Error' in resp or 'Invalid' in resp:
-                raise ValueError(f"Unknown interface '{interface}'")
-            self.cli(f'auto-disable timer {timer}')
-            self.cli('exit')
+            for iface in interfaces:
+                output = self.cli(f'interface {iface}')
+                resp = output.get(f'interface {iface}', '')
+                if 'Error' in resp or 'Invalid' in resp:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                self.cli(f'auto-disable timer {timer}')
+                self.cli('exit')
         finally:
             self._exit_config_mode()
 
     def reset_auto_disable(self, interface):
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
         self._config_mode()
         try:
-            output = self.cli(f'interface {interface}')
-            resp = output.get(f'interface {interface}', '')
-            if 'Error' in resp or 'Invalid' in resp:
-                raise ValueError(f"Unknown interface '{interface}'")
-            self.cli('auto-disable reset')
-            self.cli('exit')
+            for iface in interfaces:
+                output = self.cli(f'interface {iface}')
+                resp = output.get(f'interface {iface}', '')
+                if 'Error' in resp or 'Invalid' in resp:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                self.cli('auto-disable reset')
+                self.cli('exit')
         finally:
             self._exit_config_mode()
 
@@ -2211,27 +2220,30 @@ class SSHHIOS:
                 if receive_threshold is not None:
                     self.cli(f'loop-protection rx-threshold {int(receive_threshold)}')
             else:
-                # Per-interface settings
-                output = self.cli(f'interface {interface}')
-                resp = output.get(f'interface {interface}', '')
-                if 'Error' in resp or 'Invalid' in resp:
-                    raise ValueError(f"Unknown interface '{interface}'")
-                if enabled is not None:
-                    if enabled:
-                        self.cli('loop-protection operation')
-                    else:
-                        self.cli('no loop-protection operation')
-                if mode is not None:
-                    if mode not in ('active', 'passive'):
-                        raise ValueError(f"mode must be 'active' or 'passive', got '{mode}'")
-                    self.cli(f'loop-protection mode {mode}')
-                if action is not None:
-                    if action not in ('trap', 'auto-disable', 'all'):
-                        raise ValueError(f"action must be 'trap', 'auto-disable', or 'all', got '{action}'")
-                    self.cli(f'loop-protection action {action}')
-                if vlan_id is not None:
-                    self.cli(f'loop-protection vlan {int(vlan_id)}')
-                self.cli('exit')
+                # Per-interface settings — accept single string or list
+                interfaces = ([interface] if isinstance(interface, str)
+                              else list(interface))
+                if mode is not None and mode not in ('active', 'passive'):
+                    raise ValueError(f"mode must be 'active' or 'passive', got '{mode}'")
+                if action is not None and action not in ('trap', 'auto-disable', 'all'):
+                    raise ValueError(f"action must be 'trap', 'auto-disable', or 'all', got '{action}'")
+                for iface in interfaces:
+                    output = self.cli(f'interface {iface}')
+                    resp = output.get(f'interface {iface}', '')
+                    if 'Error' in resp or 'Invalid' in resp:
+                        raise ValueError(f"Unknown interface '{iface}'")
+                    if enabled is not None:
+                        if enabled:
+                            self.cli('loop-protection operation')
+                        else:
+                            self.cli('no loop-protection operation')
+                    if mode is not None:
+                        self.cli(f'loop-protection mode {mode}')
+                    if action is not None:
+                        self.cli(f'loop-protection action {action}')
+                    if vlan_id is not None:
+                        self.cli(f'loop-protection vlan {int(vlan_id)}')
+                    self.cli('exit')
         finally:
             self._exit_config_mode()
 
@@ -2389,60 +2401,62 @@ class SSHHIOS:
                       auto_edge=None, path_cost=None, priority=None,
                       root_guard=None, loop_guard=None, tcn_guard=None,
                       bpdu_filter=None, bpdu_flood=None):
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
         self._config_mode()
         try:
-            output = self.cli(f'interface {interface}')
-            resp = output.get(f'interface {interface}', '')
-            if 'Error' in resp or 'Invalid' in resp:
-                raise ValueError(f"Unknown interface '{interface}'")
-            if enabled is not None:
-                if enabled:
-                    self.cli('spanning-tree mode')
-                else:
-                    self.cli('no spanning-tree mode')
-            if edge_port is not None:
-                if edge_port:
-                    self.cli('spanning-tree edge-port')
-                else:
-                    self.cli('no spanning-tree edge-port')
-            if auto_edge is not None:
-                if auto_edge:
-                    self.cli('spanning-tree edge-auto')
-                else:
-                    self.cli('no spanning-tree edge-auto')
-            if path_cost is not None:
-                self.cli(f'spanning-tree cost {int(path_cost)}')
-            if priority is not None:
-                self.cli(f'spanning-tree priority {int(priority)}')
-            if root_guard is not None:
-                if root_guard:
-                    self.cli('spanning-tree guard-root')
-                else:
-                    self.cli('no spanning-tree guard-root')
-            if loop_guard is not None:
-                if loop_guard:
-                    self.cli('spanning-tree guard-loop')
-                else:
-                    self.cli('no spanning-tree guard-loop')
-            if tcn_guard is not None:
-                if tcn_guard:
-                    self.cli('spanning-tree guard-tcn')
-                else:
-                    self.cli('no spanning-tree guard-tcn')
-            if bpdu_filter is not None:
-                if bpdu_filter:
-                    self.cli('spanning-tree bpdu-filter')
-                else:
-                    self.cli('no spanning-tree bpdu-filter')
-            if bpdu_flood is not None:
-                if bpdu_flood:
-                    self.cli('spanning-tree bpdu-flood')
-                else:
-                    self.cli('no spanning-tree bpdu-flood')
-            self.cli('exit')
+            for iface in interfaces:
+                output = self.cli(f'interface {iface}')
+                resp = output.get(f'interface {iface}', '')
+                if 'Error' in resp or 'Invalid' in resp:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                if enabled is not None:
+                    if enabled:
+                        self.cli('spanning-tree mode')
+                    else:
+                        self.cli('no spanning-tree mode')
+                if edge_port is not None:
+                    if edge_port:
+                        self.cli('spanning-tree edge-port')
+                    else:
+                        self.cli('no spanning-tree edge-port')
+                if auto_edge is not None:
+                    if auto_edge:
+                        self.cli('spanning-tree edge-auto')
+                    else:
+                        self.cli('no spanning-tree edge-auto')
+                if path_cost is not None:
+                    self.cli(f'spanning-tree cost {int(path_cost)}')
+                if priority is not None:
+                    self.cli(f'spanning-tree priority {int(priority)}')
+                if root_guard is not None:
+                    if root_guard:
+                        self.cli('spanning-tree guard-root')
+                    else:
+                        self.cli('no spanning-tree guard-root')
+                if loop_guard is not None:
+                    if loop_guard:
+                        self.cli('spanning-tree guard-loop')
+                    else:
+                        self.cli('no spanning-tree guard-loop')
+                if tcn_guard is not None:
+                    if tcn_guard:
+                        self.cli('spanning-tree guard-tcn')
+                    else:
+                        self.cli('no spanning-tree guard-tcn')
+                if bpdu_filter is not None:
+                    if bpdu_filter:
+                        self.cli('spanning-tree bpdu-filter')
+                    else:
+                        self.cli('no spanning-tree bpdu-filter')
+                if bpdu_flood is not None:
+                    if bpdu_flood:
+                        self.cli('spanning-tree bpdu-flood')
+                    else:
+                        self.cli('no spanning-tree bpdu-flood')
+                self.cli('exit')
         finally:
             self._exit_config_mode()
-        return self.get_rstp_port(interface)
 
     def get_vlan_ingress(self, *ports):
         """Get per-port ingress settings via ``show vlan port``.
@@ -2519,61 +2533,65 @@ class SSHHIOS:
 
     def set_vlan_ingress(self, port, pvid=None, frame_types=None,
                          ingress_filtering=None):
-        """Set ingress parameters on a single port.
+        """Set ingress parameters on one or more ports.
 
         Args:
-            port: interface name (e.g. ``'1/1'``)
+            port: interface name (str) or list of interface names
             pvid: PVID integer, or None to skip
             frame_types: ``'admit_all'`` or ``'admit_only_tagged'``, or None
             ingress_filtering: True/False, or None to skip
         """
+        ports = [port] if isinstance(port, str) else list(port)
         self._config_mode()
         try:
-            output = self.cli(f'interface {port}')
-            resp = output.get(f'interface {port}', '')
-            if 'Error' in resp or 'Invalid' in resp:
-                raise ValueError(f"Unknown interface '{port}'")
-            if pvid is not None:
-                self.cli(f'vlan pvid {pvid}')
-            if frame_types is not None:
-                if frame_types == 'admit_only_tagged':
-                    self.cli('vlan acceptframe vlanonly')
-                else:
-                    self.cli('vlan acceptframe all')
-            if ingress_filtering is not None:
-                if ingress_filtering:
-                    self.cli('vlan ingressfilter enable')
-                else:
-                    self.cli('vlan ingressfilter disable')
-            self.cli('exit')
+            for p in ports:
+                output = self.cli(f'interface {p}')
+                resp = output.get(f'interface {p}', '')
+                if 'Error' in resp or 'Invalid' in resp:
+                    raise ValueError(f"Unknown interface '{p}'")
+                if pvid is not None:
+                    self.cli(f'vlan pvid {pvid}')
+                if frame_types is not None:
+                    if frame_types == 'admit_only_tagged':
+                        self.cli('vlan acceptframe vlanonly')
+                    else:
+                        self.cli('vlan acceptframe all')
+                if ingress_filtering is not None:
+                    if ingress_filtering:
+                        self.cli('vlan ingressfilter enable')
+                    else:
+                        self.cli('vlan ingressfilter disable')
+                self.cli('exit')
         finally:
             self._exit_config_mode()
 
     def set_vlan_egress(self, vlan_id, port, mode):
-        """Set one port's egress membership for one VLAN.
+        """Set port(s) egress membership for one VLAN.
 
         Args:
             vlan_id: VLAN ID integer
-            port: interface name (e.g. ``'1/1'``)
+            port: interface name (str) or list of interface names
             mode: ``'tagged'``, ``'untagged'``, ``'forbidden'``, or ``'none'``
         """
+        ports = [port] if isinstance(port, str) else list(port)
         self._config_mode()
         try:
-            output = self.cli(f'interface {port}')
-            resp = output.get(f'interface {port}', '')
-            if 'Error' in resp or 'Invalid' in resp:
-                raise ValueError(f"Unknown interface '{port}'")
-            if mode == 'tagged':
-                self.cli(f'vlan participation include {vlan_id}')
-                self.cli(f'vlan tagging {vlan_id}')
-            elif mode == 'untagged':
-                self.cli(f'vlan participation include {vlan_id}')
-                self.cli(f'no vlan tagging {vlan_id}')
-            elif mode == 'forbidden':
-                self.cli(f'vlan participation exclude {vlan_id}')
-            elif mode == 'none':
-                self.cli(f'vlan participation auto {vlan_id}')
-            self.cli('exit')
+            for p in ports:
+                output = self.cli(f'interface {p}')
+                resp = output.get(f'interface {p}', '')
+                if 'Error' in resp or 'Invalid' in resp:
+                    raise ValueError(f"Unknown interface '{p}'")
+                if mode == 'tagged':
+                    self.cli(f'vlan participation include {vlan_id}')
+                    self.cli(f'vlan tagging {vlan_id}')
+                elif mode == 'untagged':
+                    self.cli(f'vlan participation include {vlan_id}')
+                    self.cli(f'no vlan tagging {vlan_id}')
+                elif mode == 'forbidden':
+                    self.cli(f'vlan participation exclude {vlan_id}')
+                elif mode == 'none':
+                    self.cli(f'vlan participation auto {vlan_id}')
+                self.cli('exit')
         finally:
             self._exit_config_mode()
 

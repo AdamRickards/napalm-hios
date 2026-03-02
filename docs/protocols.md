@@ -147,6 +147,10 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `delete_vlan` | Yes | Yes | Yes | Vendor write |
 | `is_factory_default` | Yes | Yes | No (gated) | Vendor |
 | `onboard` | Yes | Yes | No (gated) | Vendor |
+| `start_staging` | Yes | No | No | MOPS-only; SNMP/SSH raise NotImplementedError |
+| `commit_staging` | Yes | No | No | MOPS-only |
+| `discard_staging` | Yes | No | No | MOPS-only |
+| `get_staged_mutations` | Yes | No | No | MOPS-only |
 
 ---
 

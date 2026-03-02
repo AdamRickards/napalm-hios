@@ -138,6 +138,10 @@ device.close()
 - `activate_profile()` — activate a config profile (warm restart)
 - `delete_profile()` — delete a config profile
 - `onboard()` — change default password on factory-fresh device
+- `start_staging()` — enter MOPS staging mode (queue mutations)
+- `commit_staging()` — fire all queued mutations in one atomic POST
+- `discard_staging()` — clear queued mutations without sending
+- `get_staged_mutations()` — inspect queued mutation tuples
 
 For vendor-specific method details, see [vendor_specific.md](vendor_specific.md).
 

@@ -1,5 +1,83 @@
 # Changelog
 
+## 1.9.0 — 2026-03-02
+
+### Multi-interface setters — all 3 protocols
+
+All 7 per-port setters now accept a single interface string or a list of interfaces. MOPS batches all mutations into one `set_multi()` POST. SNMP batches all varbinds into one SET PDU. SSH loops within one config mode session. Backward compatible — single string still works exactly as before.
+
+- **`set_interface(interface, ...)`** — `str | list`. MOPS: separate mutations for `ifEntry` (admin status) and `ifXEntry` (alias) per port, all in one `set_multi()`.
+- **`set_rstp_port(interface, ...)`** — `str | list`. Builds `hm2AgentStpPortEntry` (enabled) + `hm2AgentStpCstPortEntry` (CST params) mutations per port, one `set_multi()`.
+- **`set_auto_disable(interface, timer)`** — `str | list`.
+- **`reset_auto_disable(interface)`** — `str | list`.
+- **`set_loop_protection(interface, ...)`** — `str | list` for per-port path. Global path unchanged.
+- **`set_vlan_ingress(port, ...)`** — `str | list`.
+- **`set_vlan_egress(vlan_id, port, mode)`** — `str | list` for port. Reads bitmaps once, modifies all target port bits in memory, writes back once.
+
+### SNMP setter batching fix
+
+`set_loop_protection` and `set_rstp_port` in SNMP were sending one SET PDU per parameter in a loop. Now batch all varbinds into one `_set_oids()` call. Reduces SNMP round-trips from N to 1 per setter call even for single-interface use.
+
+### MOPS getter consolidation — 4 getters reduced from multiple POSTs to 1
+
+Pure internal refactor — no API change, same return formats. Each getter now fetches all its MIB tables in a single `get_multi()` HTTP POST instead of sequential `get()` calls.
+
+- **`get_facts()`**: 3 POSTs → 1. Merged HM2-DEVMGMT-MIB (product, serial, firmware) into existing `get_multi` with SNMPv2-MIB + IF-MIB.
+- **`get_environment()`**: 3 POSTs → 1. Merged PSU (HM2-PWRMGMT-MIB) + fans (HM2-FAN-MIB) into existing `get_multi` with temp + CPU + memory.
+- **`get_lldp_neighbors_detail()`**: 2 POSTs → 1. Merged `lldpRemEntry` + `lldpRemManAddrEntry` into one `get_multi`.
+- **`get_mrp_sub_ring()`**: 2 POSTs → 1. Merged `hm2SrmMibGroup` + `hm2SrmEntry` into one `get_multi`.
+
+### MOPS getter consolidation — ifindex map bundling (11 getters)
+
+Added `_get_with_ifindex()` helper that conditionally bundles `IF-MIB/ifXEntry` into a getter's own `get_multi()` POST when the ifindex cache is cold. Eliminates a separate HTTP round-trip for interface name resolution. On warm cache (e.g. after `get_facts()`), the helper skips the extra table — zero overhead.
+
+11 getters converted, 6 of which were also migrated from single `get()` to `get_multi()`:
+
+- **Already `get_multi()`**: `get_lldp_neighbors_detail`, `get_lldp_neighbors_detail_extended`, `get_mrp_sub_ring`, `get_auto_disable`, `get_loop_protection`
+- **Converted `get()` → `get_multi()`**: `get_interfaces_ip`, `get_lldp_neighbors`, `get_arp_table`, `get_optics`, `get_mrp`, `get_mac_address_table`
+- **`get_mrp()`**: also gained `decode_strings=False` (was missing — now consistent with all other getters). `hm2MrpDomainName` now manually decoded via `_decode_hex_string()`.
+
+### Bug fix: `get_mrp_sub_ring()` binary field mangling
+
+MOPS `get_mrp_sub_ring()` was missing `decode_strings=False`, causing binary fields to be mangled by XML string decode:
+- **`hm2SrmPartnerMAC`**: 6-byte MAC became U+FFFD replacement characters. Now decoded from raw hex to `xx:xx:xx:xx:xx:xx`.
+- **`hm2SrmMRPDomainID`**: 16-byte UUID had `\xFF` bytes replaced with U+FFFD. Now decoded from raw hex to colon-separated format.
+- **`hm2SrmSubRingPortIfIndex`**: integer port index was mangled (e.g. `16` → `\u0010`). Now parsed as integer correctly.
+- **`hm2SrmSubRingProtocol`**: is an INTEGER enum (`4` = `iec-62439-mrp`), not a text string. Both MOPS and SNMP now map `4` → `'mrp'` instead of passing through the raw value.
+- **`hm2SrmSubRingName`**: text field now manually decoded via `_decode_hex_string()`.
+
+### MOPS staging — wired into vendor setters
+
+Staging batches mutations into one atomic POST. The driver does not validate dependencies between staged operations. Operations that depend on prior state (e.g. `set_vlan_egress` requires the VLAN to exist) must have their prerequisites committed first. Tool layer is responsible for operation ordering.
+
+- **`device.start_staging()`** / **`device.commit_staging()`** / **`device.discard_staging()`** / **`device.get_staged_mutations()`** — exposed on `HIOSDriver` dispatch layer. SNMP/SSH raise `NotImplementedError`.
+- **14 setters wired** via three staging-aware helpers (`_apply_mutations`, `_apply_set_indexed`, `_apply_set`):
+  - `set_vlan_ingress`, `set_vlan_egress`, `set_rstp`, `set_rstp_port`, `set_interface`, `set_hidiscovery`, `set_auto_disable`, `reset_auto_disable`, `set_auto_disable_reason`, `set_loop_protection` (global + per-port)
+- **VLAN CRUD always fires immediately** — `create_vlan()`, `update_vlan()`, `delete_vlan()` bypass staging. These are database operations; other setters validate against live state (e.g. `set_vlan_egress` reads the VLAN table to verify the VLAN exists and get current bitmaps).
+- **Read-back skips in staging** — `set_rstp()` and `set_hidiscovery()` return `None` when staging (read-back would return stale pre-commit state).
+- **`commit_staging()` does NOT auto-save** — fires `set_multi()` only. Call `save_config()` separately. Avoids NVM race conditions when committing multiple batches.
+- **MRP setters not wired** — `set_mrp()`, `delete_mrp()`, `set_mrp_sub_ring()`, `delete_mrp_sub_ring()` still fire immediately (complex multi-step RowStatus sequences with try/except).
+
+### Live verification
+
+All changes tested on 4 BRS50 devices (.80, .81, .82, .85) across MOPS and SNMP protocols. 152 live setter/getter tests passed (44 getter tests across 3 protocols + 108 setter tests across 2 protocols, single + multi-interface). `.85` (L2S) correctly skipped for loop protection (not supported on L2S).
+
+40 staging live tests passed across all 4 devices:
+- `start_staging` → empty queue verified
+- VLAN ingress + egress staged → 2 mutations queued, device state unchanged pre-commit
+- `commit_staging` → one atomic POST (0.38–0.77s), device state verified post-commit
+- `discard_staging` → mutations cleared, device unchanged
+- Mixed setter batch (interface description + RSTP port) → committed successfully
+- `save_config()` independently after commit → NVM sync confirmed (2.6–7.2s)
+
+### Unit tests
+
+- 14 setter tests updated from `set_indexed` assertions to `set_multi` assertions.
+- 7 getter tests updated for consolidated `get_multi` mock fixtures.
+- 6 getter tests migrated from `client.get` mocks to `client.get_multi` mocks (ifindex consolidation).
+- SRM test fixtures updated for `decode_strings=False` format (hex-encoded text fields, raw hex binary fields, integer protocol enum).
+- 417 total passing.
+
 ## 1.8.1 — 2026-03-02
 
 ### Bug fix: MOPS SET error detection

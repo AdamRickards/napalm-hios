@@ -419,22 +419,64 @@ class MOPSHIOS:
         """
         return self._build_ifindex_map()
 
+    def _get_with_ifindex(self, *tables, decode_strings=False):
+        """Fetch tables via get_multi, bundling IF-MIB/ifXEntry when cache is cold.
+
+        On cold cache: adds ifXEntry to the request so ifindex map is built
+        from the same HTTP POST as the getter's own data (1 POST instead of 2).
+        On warm cache: fetches only the requested tables (ifindex from cache).
+
+        Returns (mibs_dict, ifindex_map) where mibs_dict is
+        result["mibs"] from get_multi.
+        """
+        table_list = list(tables)
+        need_cache = self._ifindex_map is None
+        if need_cache:
+            table_list.append(("IF-MIB", "ifXEntry", ["ifIndex", "ifName"]))
+
+        result = self.client.get_multi(table_list, decode_strings=decode_strings)
+        mibs = result["mibs"]
+
+        if need_cache:
+            if_entries = mibs.get("IF-MIB", {}).get("ifXEntry", [])
+            self._ifindex_map = {}
+            for entry in if_entries:
+                idx = entry.get("ifIndex", "")
+                name = _decode_hex_string(entry.get("ifName", ""))
+                if idx and name:
+                    self._ifindex_map[idx] = name
+
+        return mibs, self._ifindex_map
+
     # ------------------------------------------------------------------
     # Staging support
     # ------------------------------------------------------------------
 
     def start_staging(self):
-        """Enter staging mode — mutations are queued, not sent."""
+        """Enter staging mode — mutations are queued, not sent.
+
+        Staging batches mutations into one atomic POST.
+        The driver does not validate dependencies between staged operations.
+        Operations that depend on prior state (e.g. set_vlan_egress requires
+        the VLAN to exist) must have their prerequisites committed first.
+        Tool layer is responsible for operation ordering.
+
+        VLAN CRUD (create/update/delete_vlan) always fires immediately
+        regardless of staging mode.
+        """
         self._staging = True
         self._mutations = []
 
     def commit_staging(self):
-        """Fire all queued mutations in one atomic POST, then save to NVM."""
+        """Fire all queued mutations in one atomic POST.
+
+        Applies staged mutations to running config via set_multi().
+        Does NOT save to NVM — call save_config() separately when ready.
+        """
         if not self._mutations:
             self._staging = False
             return
         self.client.set_multi(self._mutations)
-        self.client.save_config()
         self._staging = False
         self._mutations = []
 
@@ -447,18 +489,60 @@ class MOPSHIOS:
         """Return list of staged mutation tuples for compare_config."""
         return list(self._mutations)
 
+    def _apply_mutations(self, mutations):
+        """Send mutations immediately or queue them if staging.
+
+        mutations: list of (mib, node, values[, index]) tuples.
+        """
+        if not mutations:
+            return
+        if self._staging:
+            self._mutations.extend(mutations)
+        else:
+            self.client.set_multi(mutations)
+
+    def _apply_set_indexed(self, mib, node, index, values):
+        """set_indexed() that respects staging mode.
+
+        Converts to a mutation tuple and queues if staging, otherwise
+        calls client.set_indexed() directly.
+        """
+        if self._staging:
+            self._mutations.append((mib, node, values, index))
+        else:
+            self.client.set_indexed(mib, node, index=index, values=values)
+
+    def _apply_set(self, mib, node, values):
+        """set() that respects staging mode.
+
+        Converts to a mutation tuple and queues if staging, otherwise
+        calls client.set() directly.
+        """
+        if self._staging:
+            self._mutations.append((mib, node, values))
+        else:
+            self.client.set(mib, node, values)
+
     # ------------------------------------------------------------------
     # Standard NAPALM getters
     # ------------------------------------------------------------------
 
     def get_facts(self):
-        """Return device facts from SNMPv2-MIB + IF-MIB + HM2 private MIBs."""
+        """Return device facts from SNMPv2-MIB + IF-MIB + HM2 private MIBs.
+
+        Single get_multi fetches all 4 MIB tables in one HTTP POST.
+        """
         # decode_strings=False: ifIndex values like "10","11","25" are valid hex
         # tokens that _decode_hex_string corrupts. Manually decode text fields.
         result = self.client.get_multi([
             ("SNMPv2-MIB", "system",
              ["sysDescr", "sysName", "sysUpTime", "sysContact", "sysLocation"]),
             ("IF-MIB", "ifXEntry", ["ifIndex", "ifName"]),
+            ("HM2-DEVMGMT-MIB", "hm2DeviceMgmtGroup",
+             ["hm2DevMgmtProductDescr", "hm2DevMgmtSerialNumber"]),
+            ("HM2-DEVMGMT-MIB", "hm2DevMgmtSwVersEntry",
+             ["hm2DevMgmtSwVersion", "hm2DevMgmtSwFileLocation",
+              "hm2DevMgmtSwFileIdx"]),
         ], decode_strings=False)
 
         mibs = result["mibs"]
@@ -487,39 +571,27 @@ class MOPSHIOS:
         hostname = _decode_hex_string(sys_data.get("sysName", ""))
         uptime_ticks = _safe_int(sys_data.get("sysUpTime", "0"))
 
-        # Get product description and serial from private MIBs
+        # Product description and serial from private MIBs
         serial = ""
-        try:
-            hm2_entries = self.client.get("HM2-DEVMGMT-MIB", "hm2DeviceMgmtGroup",
-                                          ["hm2DevMgmtProductDescr", "hm2DevMgmtSerialNumber"],
-                                          decode_strings=False)
-            if hm2_entries:
-                product_descr = _decode_hex_string(hm2_entries[0].get("hm2DevMgmtProductDescr", ""))
-                serial = _decode_hex_string(hm2_entries[0].get("hm2DevMgmtSerialNumber", ""))
-                if product_descr:
-                    model = product_descr
-        except MOPSError:
-            pass
+        hm2 = mibs.get("HM2-DEVMGMT-MIB", {})
+        hm2_entries = hm2.get("hm2DeviceMgmtGroup", [])
+        if hm2_entries:
+            product_descr = _decode_hex_string(hm2_entries[0].get("hm2DevMgmtProductDescr", ""))
+            serial = _decode_hex_string(hm2_entries[0].get("hm2DevMgmtSerialNumber", ""))
+            if product_descr:
+                model = product_descr
 
-        # Get firmware version from software version table
+        # Firmware version from software version table
         # RAM entry (FileLocation=1) with FileIdx=1 = running version
-        try:
-            fw_entries = self.client.get("HM2-DEVMGMT-MIB", "hm2DevMgmtSwVersEntry",
-                                         ["hm2DevMgmtSwVersion",
-                                          "hm2DevMgmtSwFileLocation",
-                                          "hm2DevMgmtSwFileIdx"],
-                                         decode_strings=False)
-            for entry in fw_entries:
-                loc = entry.get("hm2DevMgmtSwFileLocation", "")
-                idx = entry.get("hm2DevMgmtSwFileIdx", "")
-                if loc == "1" and idx == "1":
-                    raw_version = _decode_hex_string(entry.get("hm2DevMgmtSwVersion", ""))
-                    if raw_version:
-                        # "HiOS-2A-10.3.04 2025-12-08 16:54" → "HiOS-2A-10.3.04"
-                        os_version = raw_version.split()[0] if ' ' in raw_version else raw_version
-                    break
-        except MOPSError:
-            pass
+        fw_entries = hm2.get("hm2DevMgmtSwVersEntry", [])
+        for entry in fw_entries:
+            loc = entry.get("hm2DevMgmtSwFileLocation", "")
+            idx = entry.get("hm2DevMgmtSwFileIdx", "")
+            if loc == "1" and idx == "1":
+                raw_version = _decode_hex_string(entry.get("hm2DevMgmtSwVersion", ""))
+                if raw_version:
+                    os_version = raw_version.split()[0] if ' ' in raw_version else raw_version
+                break
 
         return {
             'uptime': uptime_ticks // 100,
@@ -590,11 +662,13 @@ class MOPSHIOS:
 
     def get_interfaces_ip(self):
         """Return IP addresses from IP-MIB/ipAddrEntry."""
-        ifindex_map = self._build_ifindex_map()
         # decode_strings=False: ipAdEntIfIndex values like "25" are valid hex
-        entries = self.client.get("IP-MIB", "ipAddrEntry",
-                                  ["ipAdEntAddr", "ipAdEntIfIndex", "ipAdEntNetMask"],
-                                  decode_strings=False)
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("IP-MIB", "ipAddrEntry",
+             ["ipAdEntAddr", "ipAdEntIfIndex", "ipAdEntNetMask"]),
+            decode_strings=False,
+        )
+        entries = mibs.get("IP-MIB", {}).get("ipAddrEntry", [])
         result = {}
         for entry in entries:
             ip = entry.get("ipAdEntAddr", "")
@@ -665,12 +739,14 @@ class MOPSHIOS:
 
     def get_lldp_neighbors(self):
         """Return LLDP neighbors from LLDP-MIB/lldpRemEntry."""
-        ifindex_map = self._build_ifindex_map()
         # decode_strings=False: port ID and chassis ID contain binary MACs
-        entries = self.client.get("LLDP-MIB", "lldpRemEntry",
-                                  ["lldpRemLocalPortNum", "lldpRemSysName",
-                                   "lldpRemPortId", "lldpRemChassisId"],
-                                  decode_strings=False)
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("LLDP-MIB", "lldpRemEntry",
+             ["lldpRemLocalPortNum", "lldpRemSysName",
+              "lldpRemPortId", "lldpRemChassisId"]),
+            decode_strings=False,
+        )
+        entries = mibs.get("LLDP-MIB", {}).get("lldpRemEntry", [])
         neighbors = {}
         for entry in entries:
             local_port_num = entry.get("lldpRemLocalPortNum", "")
@@ -728,17 +804,45 @@ class MOPSHIOS:
         return mgmt_map
 
     def get_lldp_neighbors_detail(self, interface=""):
-        """Return detailed LLDP neighbor info from LLDP-MIB/lldpRemEntry."""
-        ifindex_map = self._build_ifindex_map()
-        # decode_strings=False: chassis/port IDs are binary MACs, capabilities are bitmaps
-        entries = self.client.get("LLDP-MIB", "lldpRemEntry", [
-            "lldpRemLocalPortNum", "lldpRemIndex",
-            "lldpRemPortId", "lldpRemPortDesc",
-            "lldpRemChassisId", "lldpRemSysName", "lldpRemSysDesc",
-            "lldpRemSysCapSupported", "lldpRemSysCapEnabled",
-        ], decode_strings=False)
+        """Return detailed LLDP neighbor info from LLDP-MIB.
 
-        mgmt_map = self._get_lldp_mgmt_addresses()
+        Single get_multi fetches lldpRemEntry + lldpRemManAddrEntry in one HTTP POST.
+        """
+        # decode_strings=False: chassis/port IDs are binary MACs, capabilities are bitmaps
+        try:
+            mibs, ifindex_map = self._get_with_ifindex(
+                ("LLDP-MIB", "lldpRemEntry", [
+                    "lldpRemLocalPortNum", "lldpRemIndex",
+                    "lldpRemPortId", "lldpRemPortDesc",
+                    "lldpRemChassisId", "lldpRemSysName", "lldpRemSysDesc",
+                    "lldpRemSysCapSupported", "lldpRemSysCapEnabled",
+                ]),
+                ("LLDP-MIB", "lldpRemManAddrEntry", [
+                    "lldpRemManAddrSubtype", "lldpRemManAddr",
+                    "lldpRemIndex", "lldpRemLocalPortNum",
+                ]),
+                decode_strings=False,
+            )
+        except MOPSError:
+            return {}
+
+        entries = mibs.get("LLDP-MIB", {}).get("lldpRemEntry", [])
+        mgmt_entries = mibs.get("LLDP-MIB", {}).get("lldpRemManAddrEntry", [])
+
+        # Build management address map from inline results
+        mgmt_map = {}
+        for entry in mgmt_entries:
+            subtype = _safe_int(entry.get("lldpRemManAddrSubtype", "0"))
+            addr_raw = entry.get("lldpRemManAddr", "")
+            port_num = entry.get("lldpRemLocalPortNum", "")
+            rem_idx = entry.get("lldpRemIndex", "")
+            if not port_num or not rem_idx:
+                continue
+            key = (port_num, rem_idx)
+            if subtype == 1:  # IPv4
+                ip = _decode_hex_ip(addr_raw)
+                if ip:
+                    mgmt_map.setdefault(key, []).append(ip)
 
         result = {}
         for entry in entries:
@@ -792,11 +896,9 @@ class MOPSHIOS:
           LLDP-EXT-DOT3-MIB/lldpXdot3RemPortEntry: AutoNegSupported, AutoNegEnabled
           LLDP-EXT-DOT1-MIB/lldpXdot1RemPortVlanIdEntry: not in capture, try anyway
         """
-        ifindex_map = self._build_ifindex_map()
-
         # Fetch standard LLDP + management addresses + DOT3 extensions in one get_multi
         try:
-            result = self.client.get_multi([
+            mibs, ifindex_map = self._get_with_ifindex(
                 ("LLDP-MIB", "lldpRemEntry", [
                     "lldpRemLocalPortNum", "lldpRemIndex",
                     "lldpRemPortId", "lldpRemPortDesc",
@@ -813,11 +915,11 @@ class MOPSHIOS:
                     "lldpXdot3RemPortOperMauType",
                     "lldpRemLocalPortNum", "lldpRemIndex",
                 ]),
-            ], decode_strings=False)
+                decode_strings=False,
+            )
         except MOPSError:
             return {}
 
-        mibs = result["mibs"]
         lldp_entries = mibs.get("LLDP-MIB", {}).get("lldpRemEntry", [])
         mgmt_entries = mibs.get("LLDP-MIB", {}).get("lldpRemManAddrEntry", [])
         dot3_entries = mibs.get("LLDP-EXT-DOT3-MIB", {}).get(
@@ -971,26 +1073,30 @@ class MOPSHIOS:
         Request ieee8021QBridgeFdbId (or dot1qFdbId) explicitly — on HiOS
         this equals the VLAN ID directly, matching the SNMP OID index suffix.
         """
-        ifindex_map = self._build_ifindex_map()
-
         # decode_strings=False: FDB address is binary MAC
         try:
-            entries = self.client.get("IEEE8021-Q-BRIDGE-MIB",
-                                      "ieee8021QBridgeTpFdbEntry",
-                                      ["ieee8021QBridgeTpFdbAddress",
-                                       "ieee8021QBridgeTpFdbPort",
-                                       "ieee8021QBridgeTpFdbStatus",
-                                       "ieee8021QBridgeFdbId"],
-                                      decode_strings=False)
+            mibs, ifindex_map = self._get_with_ifindex(
+                ("IEEE8021-Q-BRIDGE-MIB", "ieee8021QBridgeTpFdbEntry",
+                 ["ieee8021QBridgeTpFdbAddress",
+                  "ieee8021QBridgeTpFdbPort",
+                  "ieee8021QBridgeTpFdbStatus",
+                  "ieee8021QBridgeFdbId"]),
+                decode_strings=False,
+            )
+            entries = mibs.get("IEEE8021-Q-BRIDGE-MIB", {}).get(
+                "ieee8021QBridgeTpFdbEntry", [])
         except MOPSError:
             try:
-                entries = self.client.get("Q-BRIDGE-MIB",
-                                          "dot1qTpFdbEntry",
-                                          ["dot1qTpFdbAddress",
-                                           "dot1qTpFdbPort",
-                                           "dot1qTpFdbStatus",
-                                           "dot1qFdbId"],
-                                          decode_strings=False)
+                mibs, ifindex_map = self._get_with_ifindex(
+                    ("Q-BRIDGE-MIB", "dot1qTpFdbEntry",
+                     ["dot1qTpFdbAddress",
+                      "dot1qTpFdbPort",
+                      "dot1qTpFdbStatus",
+                      "dot1qFdbId"]),
+                    decode_strings=False,
+                )
+                entries = mibs.get("Q-BRIDGE-MIB", {}).get(
+                    "dot1qTpFdbEntry", [])
             except MOPSError:
                 return []
 
@@ -1027,12 +1133,14 @@ class MOPSHIOS:
 
     def get_arp_table(self, vrf=""):
         """Return ARP table from IP-MIB/ipNetToMediaEntry."""
-        ifindex_map = self._build_ifindex_map()
         # decode_strings=False: MAC address is binary
-        entries = self.client.get("IP-MIB", "ipNetToMediaEntry",
-                                  ["ipNetToMediaIfIndex", "ipNetToMediaPhysAddress",
-                                   "ipNetToMediaNetAddress", "ipNetToMediaType"],
-                                  decode_strings=False)
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("IP-MIB", "ipNetToMediaEntry",
+             ["ipNetToMediaIfIndex", "ipNetToMediaPhysAddress",
+              "ipNetToMediaNetAddress", "ipNetToMediaType"]),
+            decode_strings=False,
+        )
+        entries = mibs.get("IP-MIB", {}).get("ipNetToMediaEntry", [])
         arp_table = []
         for entry in entries:
             ifidx = entry.get("ipNetToMediaIfIndex", "")
@@ -1211,12 +1319,15 @@ class MOPSHIOS:
 
     def set_vlan_ingress(self, port, pvid=None, frame_types=None,
                          ingress_filtering=None):
-        """Set ingress parameters on a single port via MOPS."""
+        """Set ingress parameters on one or more ports via MOPS.
+
+        Args:
+            port: port name (str) or list of port names
+            pvid, frame_types, ingress_filtering: applied to all ports
+        """
+        ports = [port] if isinstance(port, str) else list(port)
         bridge_map = self._get_bridge_port_map()
         name_to_bp = {name: bp for bp, name in bridge_map.items()}
-        bp = name_to_bp.get(port)
-        if bp is None:
-            raise ValueError(f"Unknown interface '{port}'")
 
         values = {}
         if pvid is not None:
@@ -1233,30 +1344,49 @@ class MOPSHIOS:
         if ingress_filtering is not None:
             values["dot1qPortIngressFiltering"] = "1" if ingress_filtering else "2"
 
-        if values:
-            self.client.set_indexed("Q-BRIDGE-MIB", "dot1qPortVlanEntry",
-                                    index={"dot1dBasePort": bp},
-                                    values=values)
+        if not values:
+            return
+
+        mutations = []
+        for p in ports:
+            bp = name_to_bp.get(p)
+            if bp is None:
+                raise ValueError(f"Unknown interface '{p}'")
+            mutations.append(("Q-BRIDGE-MIB", "dot1qPortVlanEntry",
+                              dict(values), {"dot1dBasePort": bp}))
+
+        self._apply_mutations(mutations)
 
     def set_vlan_egress(self, vlan_id, port, mode):
-        """Set one port's VLAN membership via MOPS.
+        """Set port(s) VLAN membership via MOPS.
 
-        Reads the current raw hex bitmaps, modifies the target port's bit,
-        and writes back. Uses Q-BRIDGE-MIB for SET (IEEE8021 SET fails on
-        HiOS despite GET working).
+        Reads the current raw hex bitmaps once, modifies all target ports'
+        bits, and writes back in one SET. Uses Q-BRIDGE-MIB for SET
+        (IEEE8021 SET fails on HiOS despite GET working).
+
+        Args:
+            vlan_id: VLAN ID (must already exist)
+            port: port name (str) or list of port names
+            mode: 'tagged', 'untagged', 'forbidden', or 'none'
         """
         if mode not in ('tagged', 'untagged', 'forbidden', 'none'):
             raise ValueError(
                 f"Invalid mode '{mode}': use 'tagged', 'untagged', "
                 f"'forbidden', or 'none'")
 
+        ports = [port] if isinstance(port, str) else list(port)
         bridge_map = self._get_bridge_port_map()
         name_to_bp = {name: int(bp) for bp, name in bridge_map.items()}
-        bp = name_to_bp.get(port)
-        if bp is None:
-            raise ValueError(f"Unknown interface '{port}'")
 
-        # Read current raw hex bitmaps for all VLANs
+        # Validate all ports up front
+        bps = []
+        for p in ports:
+            bp = name_to_bp.get(p)
+            if bp is None:
+                raise ValueError(f"Unknown interface '{p}'")
+            bps.append(bp)
+
+        # Read current raw hex bitmaps for all VLANs (one GET)
         try:
             entries = self.client.get("IEEE8021-Q-BRIDGE-MIB",
                                       "ieee8021QBridgeVlanStaticEntry",
@@ -1311,30 +1441,30 @@ class MOPSHIOS:
         untagged = _hex_to_bytearray(untagged_hex)
         forbidden = _hex_to_bytearray(forbidden_hex)
 
-        # Ensure arrays are long enough for target port
-        byte_idx = (bp - 1) // 8
-        bit_mask = 0x80 >> ((bp - 1) % 8)
-        for arr in (egress, untagged, forbidden):
-            while len(arr) <= byte_idx:
-                arr.append(0)
+        # Modify bits for ALL target ports
+        for bp in bps:
+            byte_idx = (bp - 1) // 8
+            bit_mask = 0x80 >> ((bp - 1) % 8)
+            for arr in (egress, untagged, forbidden):
+                while len(arr) <= byte_idx:
+                    arr.append(0)
 
-        # Modify bits
-        if mode == 'tagged':
-            egress[byte_idx] |= bit_mask
-            untagged[byte_idx] &= ~bit_mask
-            forbidden[byte_idx] &= ~bit_mask
-        elif mode == 'untagged':
-            egress[byte_idx] |= bit_mask
-            untagged[byte_idx] |= bit_mask
-            forbidden[byte_idx] &= ~bit_mask
-        elif mode == 'forbidden':
-            egress[byte_idx] &= ~bit_mask
-            untagged[byte_idx] &= ~bit_mask
-            forbidden[byte_idx] |= bit_mask
-        elif mode == 'none':
-            egress[byte_idx] &= ~bit_mask
-            untagged[byte_idx] &= ~bit_mask
-            forbidden[byte_idx] &= ~bit_mask
+            if mode == 'tagged':
+                egress[byte_idx] |= bit_mask
+                untagged[byte_idx] &= ~bit_mask
+                forbidden[byte_idx] &= ~bit_mask
+            elif mode == 'untagged':
+                egress[byte_idx] |= bit_mask
+                untagged[byte_idx] |= bit_mask
+                forbidden[byte_idx] &= ~bit_mask
+            elif mode == 'forbidden':
+                egress[byte_idx] &= ~bit_mask
+                untagged[byte_idx] &= ~bit_mask
+                forbidden[byte_idx] |= bit_mask
+            elif mode == 'none':
+                egress[byte_idx] &= ~bit_mask
+                untagged[byte_idx] &= ~bit_mask
+                forbidden[byte_idx] &= ~bit_mask
 
         # Encode back to space-separated hex
         def _bytearray_to_hex(ba):
@@ -1345,14 +1475,14 @@ class MOPSHIOS:
         # ForbiddenEgressPorts must be set separately — combining all three
         # in one request causes the device to silently reject the change.
         idx = {"dot1qVlanIndex": str(vlan_id)}
-        self.client.set_indexed(
+        self._apply_set_indexed(
             "Q-BRIDGE-MIB", "dot1qVlanStaticEntry", index=idx,
             values={
                 "dot1qVlanStaticEgressPorts": _bytearray_to_hex(egress),
                 "dot1qVlanStaticUntaggedPorts": _bytearray_to_hex(untagged),
             })
         if mode == 'forbidden' or forbidden_hex.replace(' ', '').replace('0', ''):
-            self.client.set_indexed(
+            self._apply_set_indexed(
                 "Q-BRIDGE-MIB", "dot1qVlanStaticEntry", index=idx,
                 values={
                     "dot1qVlanStaticForbiddenEgressPorts": _bytearray_to_hex(forbidden),
@@ -1362,6 +1492,8 @@ class MOPSHIOS:
         """Create a VLAN in the VLAN database via MOPS.
 
         Uses Q-BRIDGE-MIB for SET (IEEE8021 SET fails on HiOS).
+        Always fires immediately — VLAN CRUD is a database operation,
+        not port config, and other setters validate against live state.
         """
         values = {"dot1qVlanStaticRowStatus": "4"}  # createAndGo
         if name:
@@ -1372,14 +1504,20 @@ class MOPSHIOS:
             values=values)
 
     def update_vlan(self, vlan_id, name):
-        """Rename an existing VLAN via MOPS."""
+        """Rename an existing VLAN via MOPS.
+
+        Always fires immediately — VLAN CRUD is a database operation.
+        """
         self.client.set_indexed(
             "Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
             index={"dot1qVlanIndex": str(vlan_id)},
             values={"dot1qVlanStaticName": encode_string(name)})
 
     def delete_vlan(self, vlan_id):
-        """Delete a VLAN from the VLAN database via MOPS."""
+        """Delete a VLAN from the VLAN database via MOPS.
+
+        Always fires immediately — VLAN CRUD is a database operation.
+        """
         self.client.set_indexed(
             "Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
             index={"dot1qVlanIndex": str(vlan_id)},
@@ -1503,16 +1641,18 @@ class MOPSHIOS:
           hm2SfpCurrentTxPowerdBm, hm2SfpCurrentRxPowerdBm, ifIndex
         Power values are in units of 0.1 µW. dBm values are hex-encoded strings.
         """
-        ifindex_map = self._build_ifindex_map()
         try:
             # decode_strings=False: dBm values are hex-encoded strings
-            entries = self.client.get("HM2-DEVMGMT-MIB", "hm2SfpDiagEntry",
-                                      ["ifIndex",
-                                       "hm2SfpCurrentTxPower",
-                                       "hm2SfpCurrentRxPower",
-                                       "hm2SfpCurrentTxPowerdBm",
-                                       "hm2SfpCurrentRxPowerdBm"],
-                                      decode_strings=False)
+            mibs, ifindex_map = self._get_with_ifindex(
+                ("HM2-DEVMGMT-MIB", "hm2SfpDiagEntry",
+                 ["ifIndex",
+                  "hm2SfpCurrentTxPower",
+                  "hm2SfpCurrentRxPower",
+                  "hm2SfpCurrentTxPowerdBm",
+                  "hm2SfpCurrentRxPowerdBm"]),
+                decode_strings=False,
+            )
+            entries = mibs.get("HM2-DEVMGMT-MIB", {}).get("hm2SfpDiagEntry", [])
         except MOPSError:
             return {}
 
@@ -1569,7 +1709,10 @@ class MOPSHIOS:
         return optics
 
     def get_environment(self):
-        """Return environment data: temperature, PSU, CPU, memory, fans."""
+        """Return environment data: temperature, PSU, CPU, memory, fans.
+
+        Single get_multi fetches all 5 MIB tables in one HTTP POST.
+        """
         env = {
             'fans': {},
             'temperature': {},
@@ -1578,13 +1721,9 @@ class MOPSHIOS:
             'memory': {},
         }
 
-        # Temperature from HM2-DEVMGMT-MIB, CPU+memory from HM2-DIAGNOSTIC-MIB
-        # Confirmed Node names:
-        #   hm2DeviceMgmtTemperatureGroup (note: "Device" not "Dev")
-        #   hm2DiagCpuResourcesGroup, hm2DiagMemoryResourcesGroup
+        # decode_strings=False: temperature "42" and "70" are valid hex tokens
+        # that _decode_hex_string corrupts to ASCII chars 'B' and 'p'
         try:
-            # decode_strings=False: temperature "42" and "70" are valid hex tokens
-            # that _decode_hex_string corrupts to ASCII chars 'B' and 'p'
             result = self.client.get_multi([
                 ("HM2-DEVMGMT-MIB", "hm2DeviceMgmtTemperatureGroup",
                  ["hm2DevMgmtTemperature",
@@ -1594,76 +1733,71 @@ class MOPSHIOS:
                  ["hm2DiagCpuUtilization"]),
                 ("HM2-DIAGNOSTIC-MIB", "hm2DiagMemoryResourcesGroup",
                  ["hm2DiagMemoryRamAllocated", "hm2DiagMemoryRamFree"]),
+                ("HM2-PWRMGMT-MIB", "hm2PSEntry",
+                 ["hm2PSState"]),
+                ("HM2-FAN-MIB", "hm2FanEntry",
+                 ["hm2FanStatus"]),
             ], decode_strings=False)
             mibs = result["mibs"]
-
-            # Temperature
-            temp_entries = mibs.get("HM2-DEVMGMT-MIB", {}).get(
-                "hm2DeviceMgmtTemperatureGroup", [])
-            if temp_entries:
-                t = temp_entries[0]
-                temp_val = _safe_int(t.get("hm2DevMgmtTemperature", "0"))
-                upper = _safe_int(t.get("hm2DevMgmtTemperatureUpperLimit", "70"))
-                env['temperature']['chassis'] = {
-                    'temperature': float(temp_val),
-                    'is_alert': temp_val >= upper,
-                    'is_critical': temp_val >= upper + 10,
-                }
-
-            # CPU
-            cpu_entries = mibs.get("HM2-DIAGNOSTIC-MIB", {}).get(
-                "hm2DiagCpuResourcesGroup", [])
-            if cpu_entries:
-                cpu_util = _safe_int(cpu_entries[0].get("hm2DiagCpuUtilization", "0"))
-                env['cpu']['0'] = {'%usage': float(cpu_util)}
-
-            # Memory — HiOS "allocated" = total pool, "free" = unused
-            # Match SNMP driver: available_ram = allocated, used_ram = allocated - free
-            mem_entries = mibs.get("HM2-DIAGNOSTIC-MIB", {}).get(
-                "hm2DiagMemoryResourcesGroup", [])
-            if mem_entries:
-                m = mem_entries[0]
-                mem_alloc = _safe_int(m.get("hm2DiagMemoryRamAllocated", "0"))
-                mem_free = _safe_int(m.get("hm2DiagMemoryRamFree", "0"))
-                env['memory'] = {
-                    'available_ram': mem_alloc,
-                    'used_ram': mem_alloc - mem_free,
-                }
         except MOPSError:
-            pass
+            return env
+
+        # Temperature
+        temp_entries = mibs.get("HM2-DEVMGMT-MIB", {}).get(
+            "hm2DeviceMgmtTemperatureGroup", [])
+        if temp_entries:
+            t = temp_entries[0]
+            temp_val = _safe_int(t.get("hm2DevMgmtTemperature", "0"))
+            upper = _safe_int(t.get("hm2DevMgmtTemperatureUpperLimit", "70"))
+            env['temperature']['chassis'] = {
+                'temperature': float(temp_val),
+                'is_alert': temp_val >= upper,
+                'is_critical': temp_val >= upper + 10,
+            }
+
+        # CPU
+        cpu_entries = mibs.get("HM2-DIAGNOSTIC-MIB", {}).get(
+            "hm2DiagCpuResourcesGroup", [])
+        if cpu_entries:
+            cpu_util = _safe_int(cpu_entries[0].get("hm2DiagCpuUtilization", "0"))
+            env['cpu']['0'] = {'%usage': float(cpu_util)}
+
+        # Memory — HiOS "allocated" = total pool, "free" = unused
+        # Match SNMP driver: available_ram = allocated, used_ram = allocated - free
+        mem_entries = mibs.get("HM2-DIAGNOSTIC-MIB", {}).get(
+            "hm2DiagMemoryResourcesGroup", [])
+        if mem_entries:
+            m = mem_entries[0]
+            mem_alloc = _safe_int(m.get("hm2DiagMemoryRamAllocated", "0"))
+            mem_free = _safe_int(m.get("hm2DiagMemoryRamFree", "0"))
+            env['memory'] = {
+                'available_ram': mem_alloc,
+                'used_ram': mem_alloc - mem_free,
+            }
 
         # Power supplies from HM2-PWRMGMT-MIB
-        try:
-            psu_entries = self.client.get("HM2-PWRMGMT-MIB", "hm2PSEntry",
-                                          ["hm2PSState"])
-            for i, entry in enumerate(psu_entries, 1):
-                # PSU index may be in _idx_ or inferred from entry order
-                idx = entry.get("_idx_hm2PSIndex", str(i))
-                state = _safe_int_or_ord(entry.get("hm2PSState", "3"))
-                # 1=present, 2=defective, 3=notInstalled, 4=unknown
-                if state != 3:  # Skip not-installed
-                    env['power'][f'Power Supply P{idx}'] = {
-                        'status': state == 1,
-                        'capacity': -1.0,
-                        'output': -1.0,
-                    }
-        except MOPSError:
-            pass
+        psu_entries = mibs.get("HM2-PWRMGMT-MIB", {}).get("hm2PSEntry", [])
+        for i, entry in enumerate(psu_entries, 1):
+            idx = entry.get("_idx_hm2PSIndex", str(i))
+            state = _safe_int_or_ord(entry.get("hm2PSState", "3"))
+            # 1=present, 2=defective, 3=notInstalled, 4=unknown
+            if state != 3:  # Skip not-installed
+                env['power'][f'Power Supply P{idx}'] = {
+                    'status': state == 1,
+                    'capacity': -1.0,
+                    'output': -1.0,
+                }
 
         # Fans from HM2-FAN-MIB
-        try:
-            fan_entries = self.client.get("HM2-FAN-MIB", "hm2FanEntry",
-                                          ["hm2FanStatus"])
-            for i, entry in enumerate(fan_entries, 1):
-                idx = entry.get("_idx_hm2FanIndex", str(i))
-                status = _safe_int_or_ord(entry.get("hm2FanStatus", "1"))
-                # 1=not-available, 2=available-and-ok, 3=available-but-failure
-                if status != 1:
-                    env['fans'][f'Fan {idx}'] = {
-                        'status': status == 2,
-                    }
-        except MOPSError:
-            pass
+        fan_entries = mibs.get("HM2-FAN-MIB", {}).get("hm2FanEntry", [])
+        for i, entry in enumerate(fan_entries, 1):
+            idx = entry.get("_idx_hm2FanIndex", str(i))
+            status = _safe_int_or_ord(entry.get("hm2FanStatus", "1"))
+            # 1=not-available, 2=available-and-ok, 3=available-but-failure
+            if status != 1:
+                env['fans'][f'Fan {idx}'] = {
+                    'status': status == 2,
+                }
 
         return env
 
@@ -1715,30 +1849,33 @@ class MOPSHIOS:
     def get_mrp(self):
         """Return MRP domain configuration and operating state."""
         try:
-            entries = self.client.get("HM2-L2REDUNDANCY-MIB", "hm2MrpEntry", [
-                "hm2MrpDomainName",
-                "hm2MrpRingport1IfIndex", "hm2MrpRingport1OperState",
-                "hm2MrpRingport2IfIndex", "hm2MrpRingport2OperState",
-                "hm2MrpRoleAdminState", "hm2MrpRoleOperState",
-                "hm2MrpRecoveryDelay", "hm2MrpVlanID",
-                "hm2MrpMRMPriority", "hm2MrpMRMReactOnLinkChange",
-                "hm2MrpMRMRingOpenCount",
-                "hm2MrpMRCBlockedSupported",
-                "hm2MrpRingOperState", "hm2MrpRedundancyOperState",
-                "hm2MrpConfigOperState",
-                "hm2MrpRowStatus",
-                "hm2MrpRingport2FixedBackup",
-                "hm2MrpRecoveryDelaySupported",
-            ])
+            mibs, ifindex_map = self._get_with_ifindex(
+                ("HM2-L2REDUNDANCY-MIB", "hm2MrpEntry", [
+                    "hm2MrpDomainName",
+                    "hm2MrpRingport1IfIndex", "hm2MrpRingport1OperState",
+                    "hm2MrpRingport2IfIndex", "hm2MrpRingport2OperState",
+                    "hm2MrpRoleAdminState", "hm2MrpRoleOperState",
+                    "hm2MrpRecoveryDelay", "hm2MrpVlanID",
+                    "hm2MrpMRMPriority", "hm2MrpMRMReactOnLinkChange",
+                    "hm2MrpMRMRingOpenCount",
+                    "hm2MrpMRCBlockedSupported",
+                    "hm2MrpRingOperState", "hm2MrpRedundancyOperState",
+                    "hm2MrpConfigOperState",
+                    "hm2MrpRowStatus",
+                    "hm2MrpRingport2FixedBackup",
+                    "hm2MrpRecoveryDelaySupported",
+                ]),
+                decode_strings=False,
+            )
         except MOPSError:
             return {'configured': False}
 
+        entries = mibs.get("HM2-L2REDUNDANCY-MIB", {}).get("hm2MrpEntry", [])
         if not entries:
             return {'configured': False}
 
         # Use first entry (default domain)
         e = entries[0]
-        ifindex_map = self._build_ifindex_map()
 
         row_status = _safe_int(e.get("hm2MrpRowStatus", "0"))
         if row_status not in (1, 4):  # active(1) or createAndGo(4)
@@ -1772,7 +1909,7 @@ class MOPSHIOS:
             'port_secondary_state': _MRP_PORT_OPER_STATE.get(
                 e.get("hm2MrpRingport2OperState", "4"), 'notConnected'),
             'domain_id': '',
-            'domain_name': e.get("hm2MrpDomainName", ""),
+            'domain_name': _decode_hex_string(e.get("hm2MrpDomainName", "")),
             'vlan': _safe_int(e.get("hm2MrpVlanID", "0")),
             'recovery_delay': recovery,
             'recovery_delay_supported': recovery_supported,
@@ -2142,8 +2279,10 @@ class MOPSHIOS:
                               "hm2AgentStpCstConfigGroup", cst_values))
 
         if mutations:
-            self.client.set_multi(mutations)
+            self._apply_mutations(mutations)
 
+        if self._staging:
+            return None
         return self.get_rstp()
 
     def set_rstp_port(self, interface, enabled=None, edge_port=None,
@@ -2153,27 +2292,15 @@ class MOPSHIOS:
         """Set per-port STP/RSTP configuration.
 
         Args:
-            interface: port name (e.g. '1/5')
+            interface: port name (str) or list of port names
             All other params optional — only provided values are changed.
         """
-        # Resolve interface name to ifIndex
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
         ifindex_map = self._build_ifindex_map()
-        ifindex = None
-        for idx, name in ifindex_map.items():
-            if name == interface:
-                ifindex = idx
-                break
-        if ifindex is None:
-            raise ValueError(f"Unknown interface '{interface}'")
+        name_to_idx = {name: idx for idx, name in ifindex_map.items()}
 
-        # Port enable/disable is in hm2AgentStpPortEntry (indexed by ifIndex)
-        if enabled is not None:
-            self.client.set_indexed(
-                "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpPortEntry",
-                index={"ifIndex": ifindex},
-                values={"hm2AgentStpPortState": "1" if enabled else "2"})
-
-        # CST port settings (indexed by ifIndex)
+        # Build CST values dict once
         cst_values = {}
         if edge_port is not None:
             cst_values["hm2AgentStpCstPortEdge"] = "1" if edge_port else "2"
@@ -2199,11 +2326,25 @@ class MOPSHIOS:
             cst_values["hm2AgentStpCstPortBpduFlood"] = (
                 "1" if bpdu_flood else "2")
 
-        if cst_values:
-            self.client.set_indexed(
-                "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpCstPortEntry",
-                index={"ifIndex": ifindex},
-                values=cst_values)
+        # Resolve all interfaces, build mutations
+        mutations = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            if enabled is not None:
+                mutations.append((
+                    "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpPortEntry",
+                    {"hm2AgentStpPortState": "1" if enabled else "2"},
+                    {"ifIndex": ifidx}))
+            if cst_values:
+                mutations.append((
+                    "HM2-PLATFORM-SWITCHING-MIB", "hm2AgentStpCstPortEntry",
+                    dict(cst_values), {"ifIndex": ifidx}))
+
+        if not mutations:
+            return
+        self._apply_mutations(mutations)
 
     # ------------------------------------------------------------------
     # Vendor setters
@@ -2213,27 +2354,33 @@ class MOPSHIOS:
         """Set interface admin state and/or description via MOPS.
 
         Args:
-            interface: port name (e.g. '1/5')
+            interface: port name (str) or list of port names
             enabled: True (admin up) or False (admin down), None to skip
             description: port description string, None to skip
         """
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
         ifindex_map = self._build_ifindex_map()
         name_to_idx = {name: idx for idx, name in ifindex_map.items()}
-        ifidx = name_to_idx.get(interface)
-        if ifidx is None:
-            raise ValueError(f"Unknown interface '{interface}'")
 
-        idx = {"ifIndex": ifidx}
+        mutations = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            idx = {"ifIndex": ifidx}
+            if enabled is not None:
+                mutations.append(("IF-MIB", "ifEntry",
+                                  {"ifAdminStatus": "1" if enabled else "2"},
+                                  idx))
+            if description is not None:
+                mutations.append(("IF-MIB", "ifXEntry",
+                                  {"ifAlias": encode_string(description)},
+                                  idx))
 
-        if enabled is not None:
-            self.client.set_indexed("IF-MIB", "ifEntry",
-                                    index=idx,
-                                    values={"ifAdminStatus": "1" if enabled else "2"})
-
-        if description is not None:
-            self.client.set_indexed("IF-MIB", "ifXEntry",
-                                    index=idx,
-                                    values={"ifAlias": encode_string(description)})
+        if not mutations:
+            return
+        self._apply_mutations(mutations)
 
     def set_hidiscovery(self, status, blinking=None):
         """Set HiDiscovery operating mode via MOPS.
@@ -2264,7 +2411,9 @@ class MOPSHIOS:
         if blinking is not None:
             values["hm2NetHiDiscoveryBlinking"] = "1" if blinking else "2"
 
-        self.client.set("HM2-NETCONFIG-MIB", "hm2NetHiDiscoveryGroup", values)
+        self._apply_set("HM2-NETCONFIG-MIB", "hm2NetHiDiscoveryGroup", values)
+        if self._staging:
+            return None
         return self.get_hidiscovery()
 
     def set_mrp(self, operation='enable', mode='client', port_primary=None,
@@ -2367,15 +2516,38 @@ class MOPSHIOS:
         return {'configured': False}
 
     def get_mrp_sub_ring(self):
-        """Return MRP sub-ring (SRM) configuration and operating state."""
+        """Return MRP sub-ring (SRM) configuration and operating state.
+
+        Single get_multi fetches global scalars + instance table in one HTTP POST.
+        """
         try:
-            # Global scalars
-            global_data = self.client.get("HM2-L2REDUNDANCY-MIB", "hm2SrmMibGroup", [
-                "hm2SrmGlobalAdminState",
-                "hm2SrmMaxInstances",
-            ])
+            mibs, ifindex_map = self._get_with_ifindex(
+                ("HM2-L2REDUNDANCY-MIB", "hm2SrmMibGroup", [
+                    "hm2SrmGlobalAdminState",
+                    "hm2SrmMaxInstances",
+                ]),
+                ("HM2-L2REDUNDANCY-MIB", "hm2SrmEntry", [
+                    "hm2SrmRingID",
+                    "hm2SrmAdminState", "hm2SrmOperState",
+                    "hm2SrmVlanID", "hm2SrmMRPDomainID",
+                    "hm2SrmPartnerMAC", "hm2SrmSubRingProtocol",
+                    "hm2SrmSubRingName",
+                    "hm2SrmSubRingPortIfIndex", "hm2SrmSubRingPortOperState",
+                    "hm2SrmSubRingOperState", "hm2SrmRedundancyOperState",
+                    "hm2SrmConfigOperState",
+                    "hm2SrmRowStatus",
+                ]),
+                decode_strings=False,
+            )
         except MOPSError:
-            global_data = []
+            return {
+                'enabled': False,
+                'max_instances': 8,
+                'instances': [],
+            }
+
+        global_data = mibs.get("HM2-L2REDUNDANCY-MIB", {}).get("hm2SrmMibGroup", [])
+        entries = mibs.get("HM2-L2REDUNDANCY-MIB", {}).get("hm2SrmEntry", [])
 
         enabled = False
         max_instances = 8
@@ -2384,44 +2556,29 @@ class MOPSHIOS:
             enabled = _safe_int(g.get("hm2SrmGlobalAdminState", "2")) == 1
             max_instances = _safe_int(g.get("hm2SrmMaxInstances", "8"), 8)
 
-        try:
-            entries = self.client.get("HM2-L2REDUNDANCY-MIB", "hm2SrmEntry", [
-                "hm2SrmRingID",
-                "hm2SrmAdminState", "hm2SrmOperState",
-                "hm2SrmVlanID", "hm2SrmMRPDomainID",
-                "hm2SrmPartnerMAC", "hm2SrmSubRingProtocol",
-                "hm2SrmSubRingName",
-                "hm2SrmSubRingPortIfIndex", "hm2SrmSubRingPortOperState",
-                "hm2SrmSubRingOperState", "hm2SrmRedundancyOperState",
-                "hm2SrmConfigOperState",
-                "hm2SrmRowStatus",
-            ])
-        except MOPSError:
-            entries = []
-
         instances = []
         if entries:
-            ifindex_map = self._build_ifindex_map()
             for e in entries:
                 row_status = _safe_int(e.get("hm2SrmRowStatus", "0"))
                 if row_status not in (1, 4):  # active(1) or createAndGo(4)
                     continue
 
-                port_idx = e.get("hm2SrmSubRingPortIfIndex", "")
+                # With decode_strings=False, integer fields come as hex.
+                # Port ifIndex: hex string like "10" (=16 decimal) — parse as int
+                port_idx_raw = e.get("hm2SrmSubRingPortIfIndex", "")
+                port_idx = str(_safe_int(port_idx_raw, 0))
                 admin_state = e.get("hm2SrmAdminState", "1")
                 oper_state = e.get("hm2SrmOperState", "4")
 
-                # Domain ID: mangled binary (U+FFFD replaces \xFF during XML decode)
+                # Domain ID: raw hex "ff ff ff ..." → colon-separated
                 domain_raw = e.get("hm2SrmMRPDomainID", "")
-                if domain_raw and len(domain_raw) == 16:
-                    # U+FFFD (replacement char) → 0xFF (original byte)
+                if domain_raw and domain_raw.strip():
                     domain_id = ':'.join(
-                        'ff' if c == '\ufffd' else f'{ord(c):02x}'
-                        for c in domain_raw)
+                        domain_raw.strip().split())
                 else:
                     domain_id = 'ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff:ff'
 
-                # Partner MAC: mangled binary → formatted MAC
+                # Partner MAC: raw hex "64 60 38 8a 42 d6" → formatted MAC
                 partner_raw = e.get("hm2SrmPartnerMAC", "")
                 partner_mac = _try_mac(partner_raw) if partner_raw else ""
 
@@ -2432,8 +2589,10 @@ class MOPSHIOS:
                     'vlan': _safe_int(e.get("hm2SrmVlanID", "0")),
                     'domain_id': domain_id,
                     'partner_mac': partner_mac,
-                    'protocol': e.get("hm2SrmSubRingProtocol", "mrp"),
-                    'name': e.get("hm2SrmSubRingName", ""),
+                    'protocol': 'mrp' if e.get(
+                        "hm2SrmSubRingProtocol", "4") == "4" else 'unknown',
+                    'name': _decode_hex_string(
+                        e.get("hm2SrmSubRingName", "")),
                     'port': ifindex_map.get(port_idx, port_idx),
                     'port_state': _SRM_PORT_OPER_STATE.get(
                         e.get("hm2SrmSubRingPortOperState", "4"), 'not-connected'),
@@ -2625,9 +2784,7 @@ class MOPSHIOS:
                     reason, active, error_time}}
                 'reasons': {reason_name: {enabled, category}}
         """
-        ifindex_map = self._build_ifindex_map()
-
-        result = self.client.get_multi([
+        mibs, ifindex_map = self._get_with_ifindex(
             ("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry", [
                 "ifIndex",
                 "hm2AutoDisableIntfTimer",
@@ -2642,9 +2799,9 @@ class MOPSHIOS:
                 "hm2AutoDisableReasonOperation",
                 "hm2AutoDisableReasonCategory",
             ]),
-        ], decode_strings=False)
+            decode_strings=False,
+        )
 
-        mibs = result["mibs"]
         intf_entries = (mibs.get("HM2-DEVMGMT-MIB", {})
                         .get("hm2AutoDisableIntfEntry", []))
         reason_entries = (mibs.get("HM2-DEVMGMT-MIB", {})
@@ -2692,39 +2849,49 @@ class MOPSHIOS:
         return {'interfaces': interfaces, 'reasons': reasons}
 
     def set_auto_disable(self, interface, timer=0):
-        """Set auto-disable recovery timer for a port.
+        """Set auto-disable recovery timer for one or more ports.
 
         Args:
-            interface: port name (e.g. '1/5')
+            interface: port name (str) or list of port names
             timer: recovery interval in seconds (0=off, 30 minimum)
         """
+        interfaces = [interface] if isinstance(interface, str) else list(interface)
         ifindex_map = self._build_ifindex_map()
         name_to_idx = {name: idx for idx, name in ifindex_map.items()}
-        ifidx = name_to_idx.get(interface)
-        if ifidx is None:
-            raise ValueError(f"Unknown interface '{interface}'")
 
-        self.client.set_indexed("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
-                                index={"ifIndex": ifidx},
-                                values={"hm2AutoDisableIntfTimer": str(int(timer))})
+        mutations = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            mutations.append(("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
+                              {"hm2AutoDisableIntfTimer": str(int(timer))},
+                              {"ifIndex": ifidx}))
+
+        self._apply_mutations(mutations)
 
     def reset_auto_disable(self, interface):
-        """Manually re-enable an auto-disabled port.
+        """Manually re-enable one or more auto-disabled ports.
 
         Writes true(1) to hm2AutoDisableIntfReset — no need for admin down/up.
 
         Args:
-            interface: port name (e.g. '1/5')
+            interface: port name (str) or list of port names
         """
+        interfaces = [interface] if isinstance(interface, str) else list(interface)
         ifindex_map = self._build_ifindex_map()
         name_to_idx = {name: idx for idx, name in ifindex_map.items()}
-        ifidx = name_to_idx.get(interface)
-        if ifidx is None:
-            raise ValueError(f"Unknown interface '{interface}'")
 
-        self.client.set_indexed("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
-                                index={"ifIndex": ifidx},
-                                values={"hm2AutoDisableIntfReset": "1"})  # true
+        mutations = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            mutations.append(("HM2-DEVMGMT-MIB", "hm2AutoDisableIntfEntry",
+                              {"hm2AutoDisableIntfReset": "1"},
+                              {"ifIndex": ifidx}))
+
+        self._apply_mutations(mutations)
 
     def set_auto_disable_reason(self, reason, enabled=True):
         """Enable or disable auto-disable recovery for a specific reason type.
@@ -2739,7 +2906,7 @@ class MOPSHIOS:
                 f"Unknown reason '{reason}': use one of "
                 f"{list(_AUTO_DISABLE_REASONS_REV.keys())}")
 
-        self.client.set_indexed("HM2-DEVMGMT-MIB", "hm2AutoDisableReasonEntry",
+        self._apply_set_indexed("HM2-DEVMGMT-MIB", "hm2AutoDisableReasonEntry",
                                 index={"hm2AutoDisableReasons": reason_idx},
                                 values={"hm2AutoDisableReasonOperation":
                                         "1" if enabled else "2"})
@@ -2760,9 +2927,7 @@ class MOPSHIOS:
                     tpid_type, loop_detected, loop_count, last_loop_time,
                     tx_frames, rx_frames, discard_frames}}
         """
-        ifindex_map = self._build_ifindex_map()
-
-        result = self.client.get_multi([
+        mibs, ifindex_map = self._get_with_ifindex(
             ("HM2-PLATFORM-SWITCHING-MIB", "hm2AgentSwitchKeepaliveGroup", [
                 "hm2AgentSwitchKeepaliveState",
                 "hm2AgentSwitchKeepaliveTransmitInterval",
@@ -2782,9 +2947,9 @@ class MOPSHIOS:
                 "hm2AgentKeepalivePortRxFrameCount",
                 "hm2AgentKeepalivePortDiscardFrameCount",
             ]),
-        ], decode_strings=False)
+            decode_strings=False,
+        )
 
-        mibs = result["mibs"]
         glb = (mibs.get("HM2-PLATFORM-SWITCHING-MIB", {})
                .get("hm2AgentSwitchKeepaliveGroup", [{}])[0])
         port_entries = (mibs.get("HM2-PLATFORM-SWITCHING-MIB", {})
@@ -2841,7 +3006,7 @@ class MOPSHIOS:
         If interface is None, sets global values.
 
         Args:
-            interface: port name or None for global settings
+            interface: port name (str), list of port names, or None for global
             enabled: True/False for on/off
             mode: 'active' or 'passive' (per-port only)
             action: 'trap', 'auto-disable', or 'all' (per-port only)
@@ -2853,12 +3018,11 @@ class MOPSHIOS:
         (0→none, >0→dot1q). It is read-only in the getter.
         """
         if interface is not None:
-            # Per-port
+            # Per-port — accept single string or list
+            interfaces = ([interface] if isinstance(interface, str)
+                          else list(interface))
             ifindex_map = self._build_ifindex_map()
             name_to_idx = {name: idx for idx, name in ifindex_map.items()}
-            ifidx = name_to_idx.get(interface)
-            if ifidx is None:
-                raise ValueError(f"Unknown interface '{interface}'")
 
             values = {}
             if enabled is not None:
@@ -2879,12 +3043,21 @@ class MOPSHIOS:
             if vlan_id is not None:
                 values["hm2AgentKeepalivePortVlanId"] = str(int(vlan_id))
 
-            if values:
-                self.client.set_indexed(
+            if not values:
+                return
+
+            mutations = []
+            for iface in interfaces:
+                ifidx = name_to_idx.get(iface)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                mutations.append((
                     "HM2-PLATFORM-SWITCHING-MIB",
                     "hm2AgentKeepalivePortEntry",
-                    index={"ifIndex": ifidx},
-                    values=values)
+                    dict(values), {"ifIndex": ifidx}))
+
+            if mutations:
+                self._apply_mutations(mutations)
         else:
             # Global
             values = {}
@@ -2899,5 +3072,5 @@ class MOPSHIOS:
                     int(receive_threshold))
 
             if values:
-                self.client.set("HM2-PLATFORM-SWITCHING-MIB",
+                self._apply_set("HM2-PLATFORM-SWITCHING-MIB",
                                 "hm2AgentSwitchKeepaliveGroup", values)
