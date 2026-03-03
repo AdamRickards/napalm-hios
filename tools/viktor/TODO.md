@@ -17,6 +17,18 @@
 
 ## Remaining
 
+### Ring / Sub-Ring Operations
+
+Current `-m` is inline in `main()` — useful logic buried in the flow. Needs
+refactoring and proper terminology.
+
+- [ ] Extract `filter_ring_members()` into a reusable "VLAN follower" function — given a VLAN ID, return devices + ports tagged for it. Useful beyond ring selection (any VLAN-based port targeting). Name TBD: `get_vlan_ports()`? `follow_vlan()`? Find the right term
+- [ ] Ring/sub-ring "find" — discover ring VLANs by scanning VLAN names (HiOS auto-names MRP VLANs) and/or cross-referencing `get_mrp()` to confirm VLAN is actually an MRP domain. Enables: `--rings` discovery, auto-detect without `-m`, safety check on `vlan delete` of ring VLANs
+- [ ] "Find" and "follow" should share common internals — both need egress data, both produce device+port sets. Factor out the shared VLAN→ports lookup so both paths use the same code
+- [ ] Update LOGIC.md and README.md when terminology and API are settled
+
+### Other
+
 - [ ] `-fi` support — read device list from site index (`../site.json`)
 - [ ] `-iN` / `-iN-M` / `-i*` — device selection by site index
 - [ ] `--entry` topology-safe ordering — LLDP BFS, furthest-first for changes affecting connectivity
@@ -26,3 +38,4 @@
 ## Depends on driver
 
 - [ ] `get_vlan_egress()` should include VLANs with zero port membership (driver filters them out — data is there from the MIB, just dropped by the `if port_modes:` guard)
+- [ ] `set_access_port(port(s), vlan_id)` — atomic access mode via MOPS `set_multi`: read VLAN table + ifIndex, set egress (add new untagged, remove old) + PVID in a single call. Eliminates the blip between staged egress commit and separate PVID call. Same function reusable for management VLAN migration (egress + PVID + management VLAN ID in one atomic set). Benchmark with BLIP to measure improvement. **Mirror**: driver TODO in `../../TODO.md` — update both when complete
