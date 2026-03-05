@@ -76,6 +76,9 @@ local/
 # Vendor MIB files (reference only, from firmware)
 MIBs/
 
+# sFlow reference files (used for SNOOP)
+/tools/snoop/sFlow/
+
 # Runtime artifacts
 .pytest_cache/
 .wrangler/
