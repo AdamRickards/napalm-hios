@@ -21,15 +21,22 @@
 
 ## Vendor-specific methods (driver)
 
-- [ ] `get_sflow()` / `set_sflow()` — global sFlow config + per-port sampling. MIBs: SFLOW-MIB (RFC 3176) + HM2-PLATFORM-SFLOW-MIB. MOPS + SNMP, SSH stub. **Unlocks**: [SNOOP](tools/snoop/TODO.md)
+- [ ] `get_vlan_egress()` should include VLANs with zero port membership — currently all three backends (MOPS line 1315, SSH line 2530, SNMP line 1339) skip VLANs where `port_modes` is empty. The data is there from the MIB/CLI, the driver just drops it. Fix: always include the VLAN with an empty ports dict. Discovered via VIKTOR `vlan list` not showing freshly-created VLANs until a port is assigned
+- [ ] `set_access_port(port(s), vlan_id)` — atomic access mode change via MOPS `set_multi`. Reads VLAN table + ifIndex, then in a single POST: add untagged on new VLAN, remove from old VLAN(s), set PVID. Currently VIKTOR does this as staged egress + separate PVID call (two round-trips, measurable blip). Same function design should accommodate management VLAN migration: egress + PVID + management VLAN ID all in one atomic set. MOPS-only (SSH/SNMP fall back to current multi-call approach). Benchmark improvement with [BLIP](tools/blip/TODO.md). **Mirror**: VIKTOR TODO in `tools/viktor/TODO.md` — update both when complete
+- [ ] Multi-get composition — `get_multi()` API that lets callers request multiple getters in one HTTP POST. Phase 0 gather (CLAMPS, VIKTOR, AARON) gets all facts in a single round-trip. Each additional safety check (SRM ports, VLAN egress, etc.) costs zero extra HTTP requests
 - [ ] `get_tftp()` / `set_tftp()` — TFTP config management. Two functions: manual config pull from TFTP server, and enable/disable auto-backup on save. **Unlocks**: [POLO](tools/polo/TODO.md), MOHAWC `--tftp-pull`
+- [ ] `get_syslog()` / `set_syslog()` — syslog server config (destination IP/port, severity filter, facility). MOPS + SNMP, SSH stub. **Unlocks**: [SNOOP](tools/snoop/TODO.md) syslog listener, fleet-wide log aggregation
+- [ ] `get_users()` / `set_user()` / `delete_user()` — local user account CRUD. Create/modify/delete user accounts with role (admin/operator/guest). **Unlocks**: fleet-wide credential management, audit-ready accounts (e.g. per-tool service accounts)
 
 ## CLAMPS
 
 See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 
-- [ ] MOPS staging/commit for performance — staging infrastructure ready in driver (v1.9.0). One commit per phase, not per-port → ~80% reduction in HTTP requests
-- [ ] Benchmark before/after: time CLAMPS per-device operation chain. Staging cuts per-device chains from ~N POSTs/phase to ~1 POST/phase
+- [x] MOPS staging on setup workers — `worker_setup_rstp_full`, `worker_setup_loop_protection`, `worker_setup_auto_disable` batch all mutations into one atomic POST per device. Teardown workers intentionally not staged (order > speed)
+- [x] Multi-interface setters — all workers pass lists instead of per-port loops. Combined with staging: 31.3s → 11.1s (65% faster, 4 BRS50 devices)
+- [x] SRM-aware ring port map — phase 0 discovers sub-ring ports via `get_mrp_sub_ring()`, merges into ring_ports_map. Prevents edge protection (BPDU Guard, loop detection) from targeting sub-ring ports
+- [x] `cpu/1` and `vlan/N` filtered from `all_ports` — fixes `noCreation` error on non-switchports via MOPS/SNMP
+- [ ] Phase 0 staged getters — depends on driver multi-get composition. One HTTP POST for entire gather phase instead of 7. Every additional safety check (SRM ports, VLAN state, etc.) becomes free
 - [ ] Zero-config discovery mode — LLDP-driven topology discovery
 - [ ] `--gather` mode — Phase 0 only, read-only audit
 - [ ] `-fi` support — read device list from [site index](tools/SITE_INDEX.md)
@@ -39,6 +46,13 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 
 - [ ] Auto-entry detection — `get_local_identity()` testing (direct, through unmanaged switch, multi-NIC, VPN adapters, cross-subnet)
 - [ ] `--seed IP` — LLDP BFS crawl, creates [site index](tools/SITE_INDEX.md) in one pass
+
+## VIKTOR
+
+- [x] v1.0 — `vlan list/create/delete/rename`, `access`, `trunk`, `auto-trunk`, `--audit`, `--names`, `--export`, `--import`, `-m` ring selector
+- [ ] `-fi` support — read device list from [site index](tools/SITE_INDEX.md)
+- [ ] `--entry` topology-safe ordering — cross-tool build
+- [ ] Management VLAN migration — needs driver `set_management_vlan()` / `set_management_ip()`
 
 ## MOHAWC
 

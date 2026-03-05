@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.10.0 — 2026-03-05
+
+### sFlow support (MOPS-only) — RFC 3176
+
+4 new vendor-specific methods for programmatic sFlow configuration via SFLOW-MIB:
+
+- **`get_sflow()`** — agent version/address + 8-slot receiver table (owner, address, port, timeout, datagram version)
+- **`set_sflow(receiver, ...)`** — configure/release sFlow receivers. Owner must be set first to claim a receiver (separate MOPS SET required by device). Setting owner to `''` releases the receiver and auto-clears all bound samplers/pollers
+- **`get_sflow_port(interfaces=None, type=None)`** — per-port sampler (rate, header size) and poller (interval) config. Filters by interface list and table type (`'sampler'`/`'poller'`)
+- **`set_sflow_port(interfaces, receiver, ...)`** — bind/unbind sampler and/or poller on ports. `sample_rate`/`interval` params select which table to configure. When unbinding (`receiver=0`), only the receiver field is sent — device auto-clears rate/interval
+
+Helper: `_encode_hex_ip()` — IPv4 string to MOPS hex format, inverse of `_decode_hex_ip()`.
+
+Dispatcher in `hios.py` gates on MOPS-only (`active_protocol == 'mops'`).
+
+Live tested on BRS50 (.4) and GRS1042 (.254). 23 new unit tests.
+
 ## 1.9.0 — 2026-03-02
 
 ### Multi-interface setters — all 3 protocols

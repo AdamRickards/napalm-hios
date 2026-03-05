@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch, MagicMock
 
 from napalm_hios.mops_hios import (
     MOPSHIOS, _safe_int, _parse_sysDescr, _mask_to_prefix,
-    _decode_portlist_hex, _decode_lldp_capabilities,
+    _decode_portlist_hex, _decode_lldp_capabilities, _encode_hex_ip,
 )
 from napalm.base.exceptions import ConnectionException
 
@@ -2170,6 +2170,381 @@ class TestEncodePortlistHex(unittest.TestCase):
         encoded = _encode_portlist_hex(original, ifmap)
         decoded = _decode_portlist_hex(encoded, ifmap)
         self.assertEqual(sorted(decoded), sorted(original))
+
+
+# ------------------------------------------------------------------
+# sFlow helpers
+# ------------------------------------------------------------------
+
+
+class TestEncodeHexIp(unittest.TestCase):
+    """Test _encode_hex_ip helper."""
+
+    def test_encode_standard(self):
+        self.assertEqual(_encode_hex_ip("192.168.1.4"), "c0 a8 01 04")
+
+    def test_encode_zeros(self):
+        self.assertEqual(_encode_hex_ip("0.0.0.0"), "00 00 00 00")
+
+    def test_encode_broadcast(self):
+        self.assertEqual(_encode_hex_ip("255.255.255.255"), "ff ff ff ff")
+
+    def test_roundtrip(self):
+        from napalm_hios.mops_hios import _decode_hex_ip
+        ip = "10.2.1.4"
+        self.assertEqual(_decode_hex_ip(_encode_hex_ip(ip)), ip)
+
+
+# ------------------------------------------------------------------
+# sFlow getters
+# ------------------------------------------------------------------
+
+
+class TestSFlowGetters(unittest.TestCase):
+    """Test sFlow getter methods with mocked client."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_sflow(self):
+        """get_sflow returns agent info + 8 receivers."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "SFLOW-MIB": {
+                    "sFlowAgent": [{
+                        "sFlowVersion": "31 2e 33 3b 48 69 72 73 63 68 6d 61 6e 6e 3b 31 30 2e 33 2e 30 34",
+                        "sFlowAgentAddressType": "1",
+                        "sFlowAgentAddress": "c0 a8 01 04",
+                    }],
+                    "sFlowRcvrEntry": [
+                        {"sFlowRcvrIndex": "1", "sFlowRcvrOwner": "31",
+                         "sFlowRcvrTimeout": "151306",
+                         "sFlowRcvrMaximumDatagramSize": "1400",
+                         "sFlowRcvrAddressType": "1",
+                         "sFlowRcvrAddress": "0a 02 01 04",
+                         "sFlowRcvrPort": "6343",
+                         "sFlowRcvrDatagramVersion": "5"},
+                        {"sFlowRcvrIndex": "2", "sFlowRcvrOwner": "",
+                         "sFlowRcvrTimeout": "0",
+                         "sFlowRcvrMaximumDatagramSize": "1400",
+                         "sFlowRcvrAddressType": "1",
+                         "sFlowRcvrAddress": "00 00 00 00",
+                         "sFlowRcvrPort": "6343",
+                         "sFlowRcvrDatagramVersion": "5"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
+
+        result = self.backend.get_sflow()
+        self.assertEqual(result['agent_version'], '1.3;Hirschmann;10.3.04')
+        self.assertEqual(result['agent_address'], '192.168.1.4')
+        self.assertIn(1, result['receivers'])
+        self.assertIn(2, result['receivers'])
+
+        r1 = result['receivers'][1]
+        self.assertEqual(r1['owner'], '1')
+        self.assertEqual(r1['address'], '10.2.1.4')
+        self.assertEqual(r1['timeout'], 151306)
+        self.assertEqual(r1['port'], 6343)
+        self.assertEqual(r1['datagram_version'], 5)
+
+        r2 = result['receivers'][2]
+        self.assertEqual(r2['owner'], '')
+        self.assertEqual(r2['address'], '0.0.0.0')
+        self.assertEqual(r2['timeout'], 0)
+
+    def test_get_sflow_port(self):
+        """get_sflow_port returns sampler + poller per port."""
+        self.backend._ifindex_map = {"1": "1/1", "2": "1/2", "25": "cpu/1"}
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "SFLOW-MIB": {
+                    "sFlowFsEntry": [
+                        {"sFlowFsDataSource": "1.3.6.1.2.1.2.2.1.1.1",
+                         "sFlowFsInstance": "1", "sFlowFsReceiver": "2",
+                         "sFlowFsPacketSamplingRate": "256",
+                         "sFlowFsMaximumHeaderSize": "128"},
+                        {"sFlowFsDataSource": "1.3.6.1.2.1.2.2.1.1.2",
+                         "sFlowFsInstance": "1", "sFlowFsReceiver": "0",
+                         "sFlowFsPacketSamplingRate": "0",
+                         "sFlowFsMaximumHeaderSize": "128"},
+                        {"sFlowFsDataSource": "1.3.6.1.2.1.2.2.1.1.25",
+                         "sFlowFsInstance": "1", "sFlowFsReceiver": "0",
+                         "sFlowFsPacketSamplingRate": "0",
+                         "sFlowFsMaximumHeaderSize": "128"},
+                    ],
+                    "sFlowCpEntry": [
+                        {"sFlowCpDataSource": "1.3.6.1.2.1.2.2.1.1.1",
+                         "sFlowCpInstance": "1", "sFlowCpReceiver": "2",
+                         "sFlowCpInterval": "20"},
+                        {"sFlowCpDataSource": "1.3.6.1.2.1.2.2.1.1.2",
+                         "sFlowCpInstance": "1", "sFlowCpReceiver": "0",
+                         "sFlowCpInterval": "0"},
+                        {"sFlowCpDataSource": "1.3.6.1.2.1.2.2.1.1.25",
+                         "sFlowCpInstance": "1", "sFlowCpReceiver": "0",
+                         "sFlowCpInterval": "0"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
+
+        result = self.backend.get_sflow_port()
+        self.assertIn("1/1", result)
+        self.assertIn("1/2", result)
+        self.assertNotIn("cpu/1", result)
+
+        s1 = result["1/1"]["sampler"]
+        self.assertEqual(s1["receiver"], 2)
+        self.assertEqual(s1["sample_rate"], 256)
+        self.assertEqual(s1["max_header_size"], 128)
+
+        p1 = result["1/1"]["poller"]
+        self.assertEqual(p1["receiver"], 2)
+        self.assertEqual(p1["interval"], 20)
+
+        s2 = result["1/2"]["sampler"]
+        self.assertEqual(s2["receiver"], 0)
+        self.assertEqual(s2["sample_rate"], 0)
+
+    def test_get_sflow_port_filter_interfaces(self):
+        """get_sflow_port with interface filter returns only requested ports."""
+        self.backend._ifindex_map = {"1": "1/1", "2": "1/2"}
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "SFLOW-MIB": {
+                    "sFlowFsEntry": [
+                        {"sFlowFsDataSource": "1.3.6.1.2.1.2.2.1.1.1",
+                         "sFlowFsInstance": "1", "sFlowFsReceiver": "0",
+                         "sFlowFsPacketSamplingRate": "0",
+                         "sFlowFsMaximumHeaderSize": "128"},
+                        {"sFlowFsDataSource": "1.3.6.1.2.1.2.2.1.1.2",
+                         "sFlowFsInstance": "1", "sFlowFsReceiver": "0",
+                         "sFlowFsPacketSamplingRate": "0",
+                         "sFlowFsMaximumHeaderSize": "128"},
+                    ],
+                    "sFlowCpEntry": [
+                        {"sFlowCpDataSource": "1.3.6.1.2.1.2.2.1.1.1",
+                         "sFlowCpInstance": "1", "sFlowCpReceiver": "0",
+                         "sFlowCpInterval": "0"},
+                        {"sFlowCpDataSource": "1.3.6.1.2.1.2.2.1.1.2",
+                         "sFlowCpInstance": "1", "sFlowCpReceiver": "0",
+                         "sFlowCpInterval": "0"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
+
+        result = self.backend.get_sflow_port(['1/1'])
+        self.assertIn("1/1", result)
+        self.assertNotIn("1/2", result)
+
+    def test_get_sflow_port_type_sampler(self):
+        """get_sflow_port with type='sampler' returns only sampler keys."""
+        self.backend._ifindex_map = {"1": "1/1"}
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "SFLOW-MIB": {
+                    "sFlowFsEntry": [
+                        {"sFlowFsDataSource": "1.3.6.1.2.1.2.2.1.1.1",
+                         "sFlowFsInstance": "1", "sFlowFsReceiver": "0",
+                         "sFlowFsPacketSamplingRate": "0",
+                         "sFlowFsMaximumHeaderSize": "128"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
+
+        result = self.backend.get_sflow_port(type='sampler')
+        self.assertIn("sampler", result["1/1"])
+        self.assertNotIn("poller", result["1/1"])
+
+    def test_get_sflow_port_type_poller(self):
+        """get_sflow_port with type='poller' returns only poller keys."""
+        self.backend._ifindex_map = {"1": "1/1"}
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "SFLOW-MIB": {
+                    "sFlowCpEntry": [
+                        {"sFlowCpDataSource": "1.3.6.1.2.1.2.2.1.1.1",
+                         "sFlowCpInstance": "1", "sFlowCpReceiver": "0",
+                         "sFlowCpInterval": "0"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
+
+        result = self.backend.get_sflow_port(type='poller')
+        self.assertIn("poller", result["1/1"])
+        self.assertNotIn("sampler", result["1/1"])
+
+
+# ------------------------------------------------------------------
+# sFlow setters
+# ------------------------------------------------------------------
+
+
+class TestSFlowSetters(unittest.TestCase):
+    """Test sFlow setter methods with mocked client."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+        self.backend._ifindex_map = {
+            "1": "1/1", "2": "1/2", "3": "1/3",
+        }
+        # Mock get_sflow for read-back after set
+        self.backend.get_sflow = Mock(return_value={
+            'agent_version': '1.3;Hirschmann;10.3.04',
+            'agent_address': '192.168.1.4',
+            'receivers': {},
+        })
+
+    def test_set_sflow_owner_then_address(self):
+        """set_sflow sends owner as separate SET, then address."""
+        self.backend.set_sflow(2, owner='snoop', address='192.168.1.100',
+                               timeout=-1)
+        calls = self.backend.client.set_indexed.call_args_list
+        # Call 1: owner
+        self.assertEqual(calls[0].kwargs['values'],
+                         {"sFlowRcvrOwner": "73 6e 6f 6f 70"})
+        self.assertEqual(calls[0].kwargs['index'],
+                         {"sFlowRcvrIndex": "2"})
+        # Call 2: address + timeout
+        vals = calls[1].kwargs['values']
+        self.assertEqual(vals["sFlowRcvrAddress"], "c0 a8 01 64")
+        self.assertEqual(vals["sFlowRcvrAddressType"], "1")
+        self.assertEqual(vals["sFlowRcvrTimeout"], "-1")
+
+    def test_set_sflow_address_only(self):
+        """set_sflow with address only sends one SET (no owner)."""
+        self.backend.set_sflow(1, address='192.168.1.100')
+        self.backend.client.set_indexed.assert_called_once_with(
+            "SFLOW-MIB", "sFlowRcvrEntry",
+            index={"sFlowRcvrIndex": "1"},
+            values={"sFlowRcvrAddress": "c0 a8 01 64",
+                    "sFlowRcvrAddressType": "1"})
+
+    def test_set_sflow_release(self):
+        """set_sflow with owner='' sends empty owner to release."""
+        self.backend.set_sflow(2, owner='')
+        self.backend.client.set_indexed.assert_called_once_with(
+            "SFLOW-MIB", "sFlowRcvrEntry",
+            index={"sFlowRcvrIndex": "2"},
+            values={"sFlowRcvrOwner": ""})
+
+    def test_set_sflow_invalid_receiver(self):
+        with self.assertRaises(ValueError):
+            self.backend.set_sflow(0)
+        with self.assertRaises(ValueError):
+            self.backend.set_sflow(9)
+
+    def test_set_sflow_port_bind(self):
+        """set_sflow_port binds sampler + poller to receiver."""
+        self.backend.set_sflow_port(['1/1', '1/2'], receiver=2,
+                                    sample_rate=256, interval=20)
+        mutations = self.backend.client.set_multi.call_args[0][0]
+        # 4 mutations: sampler+poller for each of 2 ports
+        self.assertEqual(len(mutations), 4)
+
+        # Port 1/1 sampler
+        mib, node, vals, idx = mutations[0]
+        self.assertEqual(mib, "SFLOW-MIB")
+        self.assertEqual(node, "sFlowFsEntry")
+        self.assertEqual(vals["sFlowFsReceiver"], "2")
+        self.assertEqual(vals["sFlowFsPacketSamplingRate"], "256")
+        self.assertEqual(idx["sFlowFsDataSource"],
+                         "1.3.6.1.2.1.2.2.1.1.1")
+        self.assertEqual(idx["sFlowFsInstance"], "1")
+
+        # Port 1/1 poller
+        mib, node, vals, idx = mutations[1]
+        self.assertEqual(node, "sFlowCpEntry")
+        self.assertEqual(vals["sFlowCpReceiver"], "2")
+        self.assertEqual(vals["sFlowCpInterval"], "20")
+
+        # Port 1/2 sampler
+        mib, node, vals, idx = mutations[2]
+        self.assertEqual(idx["sFlowFsDataSource"],
+                         "1.3.6.1.2.1.2.2.1.1.2")
+
+    def test_set_sflow_port_unbind(self):
+        """set_sflow_port with receiver=0 sends only receiver field."""
+        self.backend.set_sflow_port('1/1', receiver=0,
+                                    sample_rate=0, interval=0)
+        mutations = self.backend.client.set_multi.call_args[0][0]
+        self.assertEqual(len(mutations), 2)
+
+        # Sampler: only receiver, no rate
+        mib, node, vals, idx = mutations[0]
+        self.assertEqual(vals, {"sFlowFsReceiver": "0"})
+        self.assertNotIn("sFlowFsPacketSamplingRate", vals)
+
+        # Poller: only receiver, no interval
+        mib, node, vals, idx = mutations[1]
+        self.assertEqual(vals, {"sFlowCpReceiver": "0"})
+        self.assertNotIn("sFlowCpInterval", vals)
+
+    def test_set_sflow_port_sampler_only(self):
+        """set_sflow_port with sample_rate only touches sampler table."""
+        self.backend.set_sflow_port('1/1', receiver=1, sample_rate=512)
+        mutations = self.backend.client.set_multi.call_args[0][0]
+        self.assertEqual(len(mutations), 1)
+        self.assertEqual(mutations[0][1], "sFlowFsEntry")
+
+    def test_set_sflow_port_poller_only(self):
+        """set_sflow_port with interval only touches poller table."""
+        self.backend.set_sflow_port('1/1', receiver=1, interval=30)
+        mutations = self.backend.client.set_multi.call_args[0][0]
+        self.assertEqual(len(mutations), 1)
+        self.assertEqual(mutations[0][1], "sFlowCpEntry")
+
+    def test_set_sflow_port_max_header_size(self):
+        """set_sflow_port passes max_header_size to sampler."""
+        self.backend.set_sflow_port('1/1', receiver=1, sample_rate=256,
+                                    max_header_size=256)
+        mutations = self.backend.client.set_multi.call_args[0][0]
+        vals = mutations[0][2]
+        self.assertEqual(vals["sFlowFsMaximumHeaderSize"], "256")
+
+    def test_set_sflow_port_no_rate_or_interval_raises(self):
+        with self.assertRaises(ValueError):
+            self.backend.set_sflow_port('1/1', receiver=1)
+
+    def test_set_sflow_port_unknown_interface(self):
+        with self.assertRaises(ValueError):
+            self.backend.set_sflow_port('9/9', receiver=1, sample_rate=256)
+
+    def test_set_sflow_port_single_string(self):
+        """set_sflow_port accepts a single string interface."""
+        self.backend.set_sflow_port('1/1', receiver=1, sample_rate=256)
+        mutations = self.backend.client.set_multi.call_args[0][0]
+        self.assertEqual(len(mutations), 1)
+
+    def test_set_sflow_staging(self):
+        """set_sflow in staging mode queues mutations."""
+        self.backend._staging = True
+        self.backend._mutations = []
+        self.backend.set_sflow(1, owner='test')
+        # Should queue, not call client
+        self.backend.client.set_indexed.assert_not_called()
+        self.assertEqual(len(self.backend._mutations), 1)
+
+    def test_set_sflow_port_staging(self):
+        """set_sflow_port in staging mode queues mutations."""
+        self.backend._staging = True
+        self.backend._mutations = []
+        self.backend.set_sflow_port('1/1', receiver=1, sample_rate=256)
+        self.backend.client.set_multi.assert_not_called()
+        self.assertEqual(len(self.backend._mutations), 1)
 
 
 if __name__ == '__main__':

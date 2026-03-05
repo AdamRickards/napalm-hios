@@ -657,6 +657,33 @@ class HIOSDriver(NetworkDriver):
             return self._get_active_connection().set_hidiscovery(status, blinking=blinking)
         raise NotImplementedError("set_hidiscovery is not implemented for this protocol")
 
+    def get_sflow(self):
+        if self.active_protocol == 'mops':
+            return self._get_active_connection().get_sflow()
+        raise NotImplementedError("get_sflow is only implemented for MOPS")
+
+    def set_sflow(self, receiver, address=None, port=None, owner=None,
+                  timeout=None, max_datagram_size=None):
+        if self.active_protocol == 'mops':
+            return self._get_active_connection().set_sflow(
+                receiver, address=address, port=port, owner=owner,
+                timeout=timeout, max_datagram_size=max_datagram_size)
+        raise NotImplementedError("set_sflow is only implemented for MOPS")
+
+    def get_sflow_port(self, interfaces=None, type=None):
+        if self.active_protocol == 'mops':
+            return self._get_active_connection().get_sflow_port(
+                interfaces=interfaces, type=type)
+        raise NotImplementedError("get_sflow_port is only implemented for MOPS")
+
+    def set_sflow_port(self, interfaces, receiver, sample_rate=None,
+                       interval=None, max_header_size=None):
+        if self.active_protocol == 'mops':
+            return self._get_active_connection().set_sflow_port(
+                interfaces, receiver, sample_rate=sample_rate,
+                interval=interval, max_header_size=max_header_size)
+        raise NotImplementedError("set_sflow_port is only implemented for MOPS")
+
     def get_snmp_information(self):
         if self.active_protocol in ('ssh', 'snmp', 'mops'):
             snmp_info = self._get_active_connection().get_snmp_information()

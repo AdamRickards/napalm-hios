@@ -228,6 +228,12 @@ def _decode_hex_ip(hex_str):
     return hex_str
 
 
+def _encode_hex_ip(ip_str):
+    """Encode IPv4 address to MOPS hex format. '192.168.1.4' -> 'c0 a8 01 04'"""
+    parts = ip_str.split('.')
+    return ' '.join(f'{int(p):02x}' for p in parts)
+
+
 def _mask_to_prefix(mask_str):
     """Convert dotted subnet mask to prefix length."""
     try:
@@ -3074,3 +3080,250 @@ class MOPSHIOS:
             if values:
                 self._apply_set("HM2-PLATFORM-SWITCHING-MIB",
                                 "hm2AgentSwitchKeepaliveGroup", values)
+
+    # ------------------------------------------------------------------
+    # sFlow (RFC 3176)
+    # ------------------------------------------------------------------
+
+    def get_sflow(self):
+        """Return sFlow agent info and receiver table.
+
+        Returns:
+            dict with:
+                'agent_version': str (e.g. '1.3;Hirschmann;10.3.04')
+                'agent_address': str (IP)
+                'receivers': {1..8: {owner, timeout, max_datagram_size,
+                    address_type, address, port, datagram_version}}
+        """
+        result = self.client.get_multi([
+            ("SFLOW-MIB", "sFlowAgent", [
+                "sFlowVersion", "sFlowAgentAddressType", "sFlowAgentAddress",
+            ]),
+            ("SFLOW-MIB", "sFlowRcvrEntry", [
+                "sFlowRcvrIndex", "sFlowRcvrOwner", "sFlowRcvrTimeout",
+                "sFlowRcvrMaximumDatagramSize", "sFlowRcvrAddressType",
+                "sFlowRcvrAddress", "sFlowRcvrPort",
+                "sFlowRcvrDatagramVersion",
+            ]),
+        ], decode_strings=False)
+
+        mibs = result["mibs"]
+        agent = mibs.get("SFLOW-MIB", {}).get("sFlowAgent", [{}])[0]
+        rcvr_entries = mibs.get("SFLOW-MIB", {}).get("sFlowRcvrEntry", [])
+
+        receivers = {}
+        for entry in rcvr_entries:
+            idx = _safe_int(entry.get("sFlowRcvrIndex", "0"))
+            if idx < 1:
+                continue
+            receivers[idx] = {
+                'owner': _decode_hex_string(
+                    entry.get("sFlowRcvrOwner", "")),
+                'timeout': _safe_int(
+                    entry.get("sFlowRcvrTimeout", "0")),
+                'max_datagram_size': _safe_int(
+                    entry.get("sFlowRcvrMaximumDatagramSize", "1400")),
+                'address_type': _safe_int(
+                    entry.get("sFlowRcvrAddressType", "1")),
+                'address': _decode_hex_ip(
+                    entry.get("sFlowRcvrAddress", "")),
+                'port': _safe_int(
+                    entry.get("sFlowRcvrPort", "6343")),
+                'datagram_version': _safe_int(
+                    entry.get("sFlowRcvrDatagramVersion", "5")),
+            }
+
+        return {
+            'agent_version': _decode_hex_string(
+                agent.get("sFlowVersion", "")),
+            'agent_address': _decode_hex_ip(
+                agent.get("sFlowAgentAddress", "")),
+            'receivers': receivers,
+        }
+
+    def set_sflow(self, receiver, address=None, port=None, owner=None,
+                  timeout=None, max_datagram_size=None):
+        """Configure an sFlow receiver.
+
+        Args:
+            receiver: int 1-8 (receiver index)
+            address: IP string (e.g. '192.168.1.100', '0.0.0.0' to clear)
+            port: UDP port (default 6343)
+            owner: owner string (set to claim receiver, '' to release)
+            timeout: seconds (-1=permanent, >0=countdown)
+            max_datagram_size: max datagram size in bytes
+
+        Owner must be set before other attributes on an unclaimed receiver.
+        Setting owner to '' releases the receiver and auto-clears all
+        bound samplers/pollers.
+        """
+        if not 1 <= receiver <= 8:
+            raise ValueError(f"receiver must be 1-8, got {receiver}")
+
+        index = {"sFlowRcvrIndex": str(receiver)}
+
+        # Owner must be sent as a separate SET — the device requires it
+        # before accepting other attributes on an unclaimed receiver.
+        if owner is not None:
+            self._apply_set_indexed(
+                "SFLOW-MIB", "sFlowRcvrEntry", index=index,
+                values={"sFlowRcvrOwner": encode_string(owner)})
+
+        values = {}
+        if address is not None:
+            values["sFlowRcvrAddress"] = _encode_hex_ip(address)
+            values["sFlowRcvrAddressType"] = "1"
+        if port is not None:
+            values["sFlowRcvrPort"] = str(int(port))
+        if timeout is not None:
+            values["sFlowRcvrTimeout"] = str(int(timeout))
+        if max_datagram_size is not None:
+            values["sFlowRcvrMaximumDatagramSize"] = str(
+                int(max_datagram_size))
+
+        if values:
+            self._apply_set_indexed(
+                "SFLOW-MIB", "sFlowRcvrEntry", index=index,
+                values=values)
+
+        if not self._staging:
+            return self.get_sflow()
+
+    def get_sflow_port(self, interfaces=None, type=None):
+        """Return sFlow sampler and poller config per port.
+
+        Args:
+            interfaces: list of port names (None=all)
+            type: 'sampler', 'poller', or None (both)
+
+        Returns:
+            {port_name: {sampler: {receiver, sample_rate, max_header_size},
+                         poller: {receiver, interval}}}
+        """
+        tables = []
+        if type is None or type == 'sampler':
+            tables.append(("SFLOW-MIB", "sFlowFsEntry", [
+                "sFlowFsDataSource", "sFlowFsInstance",
+                "sFlowFsReceiver", "sFlowFsPacketSamplingRate",
+                "sFlowFsMaximumHeaderSize",
+            ]))
+        if type is None or type == 'poller':
+            tables.append(("SFLOW-MIB", "sFlowCpEntry", [
+                "sFlowCpDataSource", "sFlowCpInstance",
+                "sFlowCpReceiver", "sFlowCpInterval",
+            ]))
+
+        mibs, ifindex_map = self._get_with_ifindex(
+            *tables, decode_strings=False)
+
+        # Build reverse map for filtering
+        iface_set = set(interfaces) if interfaces else None
+
+        result = {}
+        sflow = mibs.get("SFLOW-MIB", {})
+
+        if type is None or type == 'sampler':
+            for entry in sflow.get("sFlowFsEntry", []):
+                ds = entry.get("sFlowFsDataSource", "")
+                ifidx = ds.rsplit(".", 1)[-1] if "." in ds else ds
+                name = ifindex_map.get(ifidx, "")
+                if not name or name.startswith("cpu"):
+                    continue
+                if iface_set and name not in iface_set:
+                    continue
+                if name not in result:
+                    result[name] = {}
+                result[name]['sampler'] = {
+                    'receiver': _safe_int(
+                        entry.get("sFlowFsReceiver", "0")),
+                    'sample_rate': _safe_int(
+                        entry.get("sFlowFsPacketSamplingRate", "0")),
+                    'max_header_size': _safe_int(
+                        entry.get("sFlowFsMaximumHeaderSize", "128")),
+                }
+
+        if type is None or type == 'poller':
+            for entry in sflow.get("sFlowCpEntry", []):
+                ds = entry.get("sFlowCpDataSource", "")
+                ifidx = ds.rsplit(".", 1)[-1] if "." in ds else ds
+                name = ifindex_map.get(ifidx, "")
+                if not name or name.startswith("cpu"):
+                    continue
+                if iface_set and name not in iface_set:
+                    continue
+                if name not in result:
+                    result[name] = {}
+                result[name]['poller'] = {
+                    'receiver': _safe_int(
+                        entry.get("sFlowCpReceiver", "0")),
+                    'interval': _safe_int(
+                        entry.get("sFlowCpInterval", "0")),
+                }
+
+        return result
+
+    def set_sflow_port(self, interfaces, receiver, sample_rate=None,
+                       interval=None, max_header_size=None):
+        """Configure sFlow sampling/polling on ports.
+
+        Args:
+            interfaces: port name (str) or list of port names
+            receiver: int 0-8 (0=disable, 1-8=bind to receiver)
+            sample_rate: configure sampler (0=off, 256-65536)
+            interval: configure poller (0=off, seconds)
+            max_header_size: sampler max header size in bytes
+
+        At least one of sample_rate or interval must be provided.
+        When disabling (receiver=0), set receiver only — the device
+        auto-clears rate/interval.
+        """
+        if sample_rate is None and interval is None:
+            raise ValueError(
+                "At least one of sample_rate or interval must be provided")
+
+        interfaces = ([interfaces] if isinstance(interfaces, str)
+                      else list(interfaces))
+        ifindex_map = self._build_ifindex_map()
+        name_to_idx = {name: idx for idx, name in ifindex_map.items()}
+
+        mutations = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+
+            ds_oid = f"1.3.6.1.2.1.2.2.1.1.{ifidx}"
+
+            if sample_rate is not None:
+                # When unbinding (receiver=0), only send receiver —
+                # the device auto-clears rate and rejects combined SETs.
+                if receiver == 0:
+                    values = {"sFlowFsReceiver": "0"}
+                else:
+                    values = {
+                        "sFlowFsReceiver": str(int(receiver)),
+                        "sFlowFsPacketSamplingRate": str(int(sample_rate)),
+                    }
+                    if max_header_size is not None:
+                        values["sFlowFsMaximumHeaderSize"] = str(
+                            int(max_header_size))
+                mutations.append((
+                    "SFLOW-MIB", "sFlowFsEntry", values,
+                    {"sFlowFsDataSource": ds_oid,
+                     "sFlowFsInstance": "1"}))
+
+            if interval is not None:
+                if receiver == 0:
+                    values = {"sFlowCpReceiver": "0"}
+                else:
+                    values = {
+                        "sFlowCpReceiver": str(int(receiver)),
+                        "sFlowCpInterval": str(int(interval)),
+                    }
+                mutations.append((
+                    "SFLOW-MIB", "sFlowCpEntry", values,
+                    {"sFlowCpDataSource": ds_oid,
+                     "sFlowCpInstance": "1"}))
+
+        if mutations:
+            self._apply_mutations(mutations)

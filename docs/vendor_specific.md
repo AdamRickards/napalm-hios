@@ -758,6 +758,108 @@ auto-populated by the device based on `vlan_id`: setting `vlan_id=0`
 
 ---
 
+## sFlow (RFC 3176)
+
+Programmatic sFlow configuration — receivers, per-port flow sampling and
+counter polling. MOPS-only (SFLOW-MIB).
+
+### get_sflow()
+
+Returns agent info and the 8-slot receiver table.
+
+```python
+result = device.get_sflow()
+```
+
+```python
+{
+    'agent_version': '1.3;Hirschmann;10.3.04',
+    'agent_address': '192.168.1.4',
+    'receivers': {
+        1: {'owner': 'snoop', 'timeout': -1, 'max_datagram_size': 1400,
+            'address_type': 1, 'address': '192.168.1.100',
+            'port': 6343, 'datagram_version': 5},
+        2: {'owner': '', 'timeout': 0, 'max_datagram_size': 1400,
+            'address_type': 1, 'address': '0.0.0.0',
+            'port': 6343, 'datagram_version': 5},
+        # ...8 receivers total
+    }
+}
+```
+
+### set_sflow(receiver, address=None, port=None, owner=None, timeout=None, max_datagram_size=None)
+
+Configure an sFlow receiver. Owner must be set to claim a receiver before
+binding samplers/pollers. Setting owner to `''` releases the receiver and
+auto-clears all bound samplers/pollers.
+
+```python
+# Claim receiver 1 and configure
+device.set_sflow(1, owner='snoop', address='192.168.1.100', timeout=-1)
+
+# Release receiver (auto-clears bound samplers/pollers)
+device.set_sflow(1, owner='')
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `receiver` | `1`–`8` | required | Receiver index |
+| `address` | IP string | `None` | Collector IP address |
+| `port` | int | `None` | Collector UDP port |
+| `owner` | string | `None` | Owner (set to claim, `''` to release) |
+| `timeout` | int | `None` | Seconds (`-1`=permanent, `>0`=countdown) |
+| `max_datagram_size` | int | `None` | Maximum datagram size in bytes |
+
+### get_sflow_port(interfaces=None, type=None)
+
+Returns per-port sFlow sampler and poller configuration.
+
+```python
+result = device.get_sflow_port()              # all ports, both tables
+result = device.get_sflow_port(['1/1'])       # single port
+result = device.get_sflow_port(type='sampler') # sampler table only
+```
+
+```python
+{
+    '1/1': {
+        'sampler': {'receiver': 2, 'sample_rate': 256, 'max_header_size': 128},
+        'poller': {'receiver': 2, 'interval': 20},
+    },
+    # ...
+}
+```
+
+### set_sflow_port(interfaces, receiver, sample_rate=None, interval=None, max_header_size=None)
+
+Configure sFlow sampling and/or polling on ports. At least one of
+`sample_rate` or `interval` must be provided — they select which table
+to configure.
+
+```python
+# Enable sampler + poller on two ports
+device.set_sflow_port(['1/1', '1/2'], receiver=1, sample_rate=256, interval=20)
+
+# Disable sampler only (poller untouched)
+device.set_sflow_port('1/1', receiver=0, sample_rate=0)
+
+# Disable both
+device.set_sflow_port('1/1', receiver=0, sample_rate=0, interval=0)
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `interfaces` | `str` or `list` | required | Port(s) to configure |
+| `receiver` | `0`–`8` | required | Receiver to bind (`0`=unbind) |
+| `sample_rate` | int | `None` | Sampling rate (`256`–`65536`, `0`=off) |
+| `interval` | int | `None` | Polling interval in seconds (`0`=off) |
+| `max_header_size` | int | `None` | Max header capture size (sampler only) |
+
+**Note**: When unbinding (`receiver=0`), the device auto-clears rate/interval.
+The driver sends only the receiver field to avoid `commitFailed` errors.
+
+---
+
 ## HiDiscovery Protocol
 
 HiDiscovery is Belden's proprietary device discovery and configuration
