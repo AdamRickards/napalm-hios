@@ -274,8 +274,8 @@ OID_hm2CosQueueSchedulerType   = '1.3.6.1.4.1.248.12.3.3.2.4.1.2'
 OID_hm2CosQueueMinBandwidth    = '1.3.6.1.4.1.248.12.3.3.2.4.1.3'
 OID_hm2CosQueueMaxBandwidth    = '1.3.6.1.4.1.248.12.3.3.2.4.1.4'
 
-# P-BRIDGE-MIB — Port default priority (indexed by dot1dBasePort)
-OID_dot1dPortDefaultUserPriority = '1.3.6.1.2.1.17.6.1.3.1.1'
+# IEEE8021-BRIDGE-MIB — Port default priority (indexed by componentId.bridgePort)
+OID_ieee8021BridgePortDefaultUserPriority = '1.3.111.2.802.1.1.2.1.3.1.1.1'
 
 # HM2-L2FORWARDING-MIB — Traffic Class Mapping  1.3.6.1.4.1.248.11.30.1.2.*
 # dot1p → TC (indexed by priority 0-7)
@@ -3711,11 +3711,14 @@ class SNMPHIOS:
             'max_bw': OID_hm2CosQueueMaxBandwidth,
         }, engine)
 
-        # Default priority (indexed by dot1dBasePort — need bridge-port→ifIndex map)
+        # Default priority (IEEE8021-BRIDGE-MIB, suffix = componentId.bridgePort)
         bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
-        priority_data = await self._walk(OID_dot1dPortDefaultUserPriority, engine)
+        priority_data = await self._walk(
+            OID_ieee8021BridgePortDefaultUserPriority, engine)
         priority_by_idx = {}
-        for bp_num, prio_val in priority_data.items():
+        for suffix, prio_val in priority_data.items():
+            parts = suffix.split('.')
+            bp_num = parts[-1] if len(parts) >= 2 else suffix
             ifindex_val = bp_data.get(bp_num)
             if ifindex_val is not None:
                 priority_by_idx[str(ifindex_val)] = _snmp_int(prio_val)
@@ -3824,8 +3827,8 @@ class SNMPHIOS:
                 bp = idx_to_bp.get(ifidx)
                 if bp is not None:
                     sets.append((
-                        f"{OID_dot1dPortDefaultUserPriority}.{bp}",
-                        Integer32(int(default_priority))))
+                        f"{OID_ieee8021BridgePortDefaultUserPriority}.1.{bp}",
+                        Unsigned32(int(default_priority))))
             if queue_needed:
                 q_suffix = f"{ifidx}.{int(queue)}"
                 if scheduler is not None:

@@ -811,12 +811,14 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_qos is not implemented for this protocol")
 
     def set_qos(self, interface, trust_mode=None, shaping_rate=None,
-                queue=None, scheduler=None, min_bw=None, max_bw=None):
+                queue=None, scheduler=None, min_bw=None, max_bw=None,
+                default_priority=None):
         if self.active_protocol in ('mops', 'snmp', 'ssh'):
             return self._get_active_connection().set_qos(
                 interface, trust_mode=trust_mode, shaping_rate=shaping_rate,
                 queue=queue, scheduler=scheduler,
                 min_bw=min_bw, max_bw=max_bw,
+                default_priority=default_priority,
             )
         raise NotImplementedError("set_qos is not implemented for this protocol")
 

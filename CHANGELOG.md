@@ -1,15 +1,22 @@
 # Changelog
 
+## 1.13.1
+
+### Fix SNMP `set_qos(default_priority=)` and dispatcher passthrough
+
+- **SNMP OID**: HiOS implements `dot1dPortDefaultUserPriority` under IEEE8021-BRIDGE-MIB (`1.3.111.2.802.1.1.2.1.3.1.1.1`), not P-BRIDGE-MIB. Fixed OID, suffix parsing (`componentId.bridgePort`), and SNMP type (`Unsigned32`, not `Integer32`)
+- **Dispatcher**: `HIOSDriver.set_qos()` in `hios.py` now forwards `default_priority` kwarg to backends
+
 ## 1.13.0
 
 ### Driver: `default_priority` in `get_qos()` / `set_qos()`
 
-All 3 backends now read and write `dot1dPortDefaultUserPriority` (P-BRIDGE-MIB) — the per-port default 802.1p priority stamped on untagged ingress frames.
+All 3 backends now read and write `dot1dPortDefaultUserPriority` — the per-port default 802.1p priority stamped on untagged ingress frames.
 
 - **`get_qos()`** returns `default_priority` (int 0-7) per interface alongside existing `trust_mode`, `shaping_rate`, `queues`
 - **`set_qos(interface, default_priority=N)`** sets default PCP. New keyword argument, all other parameters unchanged
 - MOPS: P-BRIDGE-MIB `dot1dPortPriorityEntry` bundled into existing `_get_with_ifindex()` call (zero extra HTTP requests)
-- SNMP: `OID_dot1dPortDefaultUserPriority` walk with bridge-port→ifIndex mapping
+- SNMP: IEEE8021-BRIDGE-MIB walk with bridge-port→ifIndex mapping
 - SSH: parses Priority column from `show vlan port`, sets via `vlan priority <N>` in interface config mode
 
 ### VIKTOR: `qos` subcommand
