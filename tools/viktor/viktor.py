@@ -89,6 +89,8 @@ def parse_arguments():
     parser.add_argument('--protocol', default=None,
                         choices=['mops', 'snmp', 'ssh'],
                         help='protocol (default: mops)')
+    parser.add_argument('-i', '--interactive', action='store_true',
+                        help='80s-style guided wizard')
     parser.add_argument('--debug', action='store_true',
                         help='verbose logging')
     parser.add_argument('--dry-run', action='store_true',
@@ -163,11 +165,20 @@ def parse_config(config_file: str) -> dict:
     if not os.path.exists(config_file):
         raise FileNotFoundError(f"Configuration file '{config_file}' not found")
 
+    _BOOL_TRUE = {'true', 'yes', '1', 'on'}
+
     config = {
         'username': 'admin',
         'password': 'private',
         'protocol': 'mops',
         'devices': [],
+        'ring': None,
+        'save': False,
+        'debug': False,
+    }
+
+    _KNOWN_KEYS = {
+        'username', 'password', 'protocol', 'ring', 'save', 'debug',
     }
 
     with open(config_file, 'r') as f:
@@ -181,14 +192,22 @@ def parse_config(config_file: str) -> dict:
                 key = key.strip().lower()
                 val = val.strip()
 
+                if key not in _KNOWN_KEYS:
+                    logging.warning(f"Line {line_num}: unknown setting '{key}'")
+                    continue
+
                 if key == 'username':
                     config['username'] = val
                 elif key == 'password':
                     config['password'] = val
                 elif key == 'protocol':
                     config['protocol'] = val.lower()
-                else:
-                    logging.warning(f"Line {line_num}: unknown setting '{key}'")
+                elif key == 'ring':
+                    config['ring'] = int(val)
+                elif key == 'save':
+                    config['save'] = val.lower() in _BOOL_TRUE
+                elif key == 'debug':
+                    config['debug'] = val.lower() in _BOOL_TRUE
                 continue
 
             ip = line.split()[0]
@@ -304,6 +323,9 @@ def resolve_config(args) -> dict:
             'password': args.p or 'private',
             'protocol': args.protocol or 'mops',
             'devices': [args.d],
+            'ring': None,
+            'save': False,
+            'debug': False,
         }
     elif args.ips:
         # Parse --ips, but still read script.cfg for credentials if it exists
@@ -318,18 +340,27 @@ def resolve_config(args) -> dict:
                 'password': args.p or 'private',
                 'protocol': args.protocol or 'mops',
                 'devices': devices,
+                'ring': None,
+                'save': False,
+                'debug': False,
             }
     else:
         cfg_path = get_resource_path(args.c)
         config = parse_config(cfg_path)
 
-    # CLI overrides
+    # CLI overrides (CLI wins over cfg)
     if args.u:
         config['username'] = args.u
     if args.p:
         config['password'] = args.p
     if args.protocol:
         config['protocol'] = args.protocol
+    if args.m is not None:
+        config['ring'] = args.m
+    if args.save:
+        config['save'] = True
+    if args.debug:
+        config['debug'] = True
 
     if not config['devices']:
         raise ValueError("No devices specified — use -d <ip>, --ips, or add IPs to config file")
@@ -1570,11 +1601,280 @@ def cmd_qos(args, config, connections, fleet_data):
 
 
 # ---------------------------------------------------------------------------
+# Interactive wizard
+# ---------------------------------------------------------------------------
+
+def interactive_mode():
+    """80s warez-patcher-style guided wizard for VIKTOR."""
+    import subprocess
+
+    # ANSI
+    CY = '\033[36m'; MG = '\033[35m'; YL = '\033[33m'
+    GR = '\033[32m'; BD = '\033[1m'; DM = '\033[2m'; RS = '\033[0m'
+
+    def cls():
+        print('\033[2J\033[H', end='', flush=True)
+
+    def banner():
+        print(f"""
+  {MG}{BD}╦  ╦╦╦╔═╔╦╗╔═╗╦═╗{RS}
+  {MG}{BD}╚╗╔╝║╠╩╗ ║ ║ ║╠╦╝{RS}
+  {MG}{BD} ╚╝ ╩╩ ╩ ╩ ╚═╝╩╚═{RS}
+  {DM}VLAN Intent, Knowledgeable Topology-Optimized Rules{RS}
+  {CY}{'━' * 52}{RS}
+""")
+
+    def step(title):
+        cls()
+        banner()
+        print(f'  {BD}{title}{RS}\n')
+
+    def pick(text, options, default=1):
+        """options = list of (label, value) tuples. Returns value."""
+        for i, (label, _) in enumerate(options, 1):
+            mark = f'{YL}▸{RS}' if i == default else ' '
+            print(f'  {mark} {CY}{i}{RS}) {label}')
+        print()
+        while True:
+            raw = input(f'  {GR}▸{RS} {text} [{default}]: ').strip()
+            if not raw:
+                return options[default - 1][1]
+            try:
+                idx = int(raw)
+                if 1 <= idx <= len(options):
+                    return options[idx - 1][1]
+            except ValueError:
+                pass
+            print(f'  {YL}Pick 1–{len(options)}{RS}')
+
+    def ask(text, default=''):
+        hint = f' {DM}[{default}]{RS}' if default else ''
+        return input(f'  {GR}▸{RS} {text}{hint}: ').strip() or default
+
+    def yesno(text, default=False):
+        hint = 'Y/n' if default else 'y/N'
+        val = input(f'  {GR}▸{RS} {text} {DM}[{hint}]{RS}: ').strip().lower()
+        return val in ('y', 'yes') if val else default
+
+    try:
+        # ── 1. Devices ──
+        step('STEP 1 ─── DEVICES')
+
+        cfg_path = get_resource_path('script.cfg')
+        cfg = None
+        use_cfg = False
+        devices = []
+
+        if os.path.exists(cfg_path):
+            try:
+                cfg = parse_config(cfg_path)
+            except Exception:
+                cfg = None
+
+        if cfg and cfg['devices']:
+            print(f'  Found {CY}script.cfg{RS} with {len(cfg["devices"])} device(s):')
+            for ip in cfg['devices']:
+                print(f'    {CY}{ip}{RS}')
+            print()
+            if yesno('Use these?', default=True):
+                devices = cfg['devices']
+                use_cfg = True
+
+        if not devices:
+            raw = ask('Enter IPs (comma, range, or CIDR)')
+            if raw:
+                devices = parse_ips(raw)
+
+        if not devices:
+            print(f'\n  {YL}No devices. Exiting.{RS}\n')
+            return
+
+        # ── 2. Operation ──
+        step('STEP 2 ─── OPERATION')
+
+        ops = [
+            ('List VLANs',            'list'),
+            ('Create VLAN',           'create'),
+            ('Delete VLAN',           'delete'),
+            ('Rename VLAN',           'rename'),
+            ('Set access ports',      'access'),
+            ('Set trunk ports',       'trunk'),
+            ('Auto-trunk (LLDP)',     'auto-trunk'),
+            ('QoS — set default PCP', 'qos'),
+            ('Audit',                 'audit'),
+            ('Name consistency',      'names'),
+        ]
+        op = pick('Select', ops)
+
+        # ── 3. Parameters ──
+        OP_TITLE = {
+            'list': 'LIST VLANS', 'create': 'CREATE VLAN',
+            'delete': 'DELETE VLAN', 'rename': 'RENAME VLAN',
+            'access': 'ACCESS PORTS', 'trunk': 'TRUNK PORTS',
+            'auto-trunk': 'AUTO-TRUNK', 'qos': 'QOS — DEFAULT PCP',
+            'audit': 'AUDIT', 'names': 'NAME CONSISTENCY',
+        }
+        step(f'STEP 3 ─── {OP_TITLE[op]}')
+
+        argv = []
+        is_readonly = op in ('list', 'audit')
+
+        if op == 'list':
+            print(f'  {DM}No parameters needed.{RS}\n')
+            argv = ['vlan', 'list']
+        elif op == 'create':
+            vid = ask('VLAN ID')
+            name = ask('VLAN name (optional)')
+            argv = ['vlan', 'create', vid]
+            if name:
+                argv += ['--name', name]
+        elif op == 'delete':
+            vid = ask('VLAN ID')
+            argv = ['vlan', 'delete', vid]
+        elif op == 'rename':
+            vid = ask('VLAN ID')
+            name = ask('New name')
+            argv = ['vlan', 'rename', vid, name]
+        elif op == 'access':
+            ports = ask('Ports (e.g. 1/1-1/8)')
+            vid = ask('Access VLAN ID')
+            name = ask('Auto-create VLAN name (optional)')
+            argv = ['access', ports, vid]
+            if name:
+                argv += ['--name', name]
+        elif op == 'trunk':
+            ports = ask('Ports (e.g. 1/5,1/6)')
+            vids = ask('VLAN IDs (comma-separated)')
+            argv = ['trunk', ports, vids]
+        elif op == 'auto-trunk':
+            vid = ask('VLAN ID')
+            name = ask('Auto-create VLAN name (optional)')
+            argv = ['auto-trunk', vid]
+            if name:
+                argv += ['--name', name]
+        elif op == 'qos':
+            vids = ask('VLAN ID(s)')
+            pcp = ask('PCP value (0-7)')
+            if yesno('Include trunk ports?'):
+                argv = ['qos', vids, '--pcp', pcp, '--include-trunk']
+            else:
+                argv = ['qos', vids, '--pcp', pcp]
+        elif op == 'audit':
+            print(f'  {DM}Read-only health check. No parameters needed.{RS}\n')
+            argv = ['--audit']
+        elif op == 'names':
+            print(f'  {DM}Fix naming inconsistencies across fleet.{RS}\n')
+            argv = ['--names']
+
+        # ── 4. Ring filter ──
+        step('STEP 4 ─── RING FILTER')
+        print(f'  {DM}Limit operation to devices in a specific MRP ring?{RS}\n')
+        ring = None
+        if yesno('Filter by ring VLAN?'):
+            ring = ask('Ring VLAN ID')
+
+        # ── 5. Review ──
+        step('STEP 5 ─── REVIEW')
+
+        # Build display command
+        cmd_display = ['viktor.py']
+        if ring:
+            cmd_display += ['-m', ring]
+        cmd_display += argv
+        cli_str = ' '.join(cmd_display)
+
+        src = 'script.cfg' if use_cfg else 'manual'
+        w = 54
+        print(f'  {CY}┌{"─" * w}┐{RS}')
+        print(f'  {CY}│{RS}  Devices:  {YL}{len(devices)}{RS} ({src}){" " * (w - 15 - len(str(len(devices))) - len(src))}{CY}│{RS}')
+        if ring:
+            print(f'  {CY}│{RS}  Ring:     VLAN {YL}{ring}{RS}{" " * (w - 17 - len(str(ring)))}{CY}│{RS}')
+        print(f'  {CY}│{RS}  {DM}{cli_str:<{w - 2}}{RS}{CY}│{RS}')
+        print(f'  {CY}└{"─" * w}┘{RS}')
+        print()
+
+        action = pick('Go', [
+            ('Dry run — preview only', 'dry'),
+            ('Run live',               'live'),
+            ('Quit',                   'quit'),
+        ])
+
+        if action == 'quit':
+            print(f'\n  {DM}Later.{RS}\n')
+            return
+
+        # Build subprocess command
+        def build_cmd(dry_run=False, save=False):
+            cmd = [sys.executable, os.path.abspath(__file__)]
+            if use_cfg:
+                pass  # default script.cfg
+            else:
+                cmd += ['--ips', ','.join(devices)]
+            if cfg:
+                cmd += ['-u', cfg['username'], '-p', cfg['password']]
+                cmd += ['--protocol', cfg['protocol']]
+            if ring:
+                cmd += ['-m', ring]
+            if dry_run:
+                cmd.append('--dry-run')
+            if save:
+                cmd.append('--save')
+            cmd += argv
+            return cmd
+
+        print()
+        if action == 'dry':
+            subprocess.run(build_cmd(dry_run=True))
+            print()
+            if not yesno('Run live?'):
+                print(f'\n  {DM}Done.{RS}\n')
+                return
+
+        # Live run
+        do_save = False
+        if not is_readonly:
+            do_save = yesno('Save to NVM after?')
+        print()
+        subprocess.run(build_cmd(save=do_save))
+
+        # Offer to save cfg if devices were entered manually
+        if not use_cfg and devices:
+            print()
+            if yesno('Save devices to script.cfg for next time?'):
+                with open(cfg_path, 'w') as f:
+                    f.write('# VIKTOR — VLAN Intent, Knowledgeable Topology-Optimized Rules\n')
+                    f.write(f'username = {cfg["username"] if cfg else "admin"}\n')
+                    f.write(f'password = {cfg["password"] if cfg else "private"}\n')
+                    f.write(f'protocol = {cfg["protocol"] if cfg else "mops"}\n')
+                    f.write('\n# Devices\n')
+                    for ip in devices:
+                        f.write(f'{ip}\n')
+                print(f'\n  {GR}Saved to {cfg_path}{RS}')
+
+        print(f'\n  {DM}Done.{RS}\n')
+
+    except KeyboardInterrupt:
+        print(f'\n\n  {DM}Interrupted.{RS}\n')
+    except EOFError:
+        print(f'\n\n  {DM}Bye.{RS}\n')
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
     args = parse_arguments()
+
+    # Interactive mode: explicit -i flag, or no args at all with no script.cfg
+    if args.interactive:
+        return interactive_mode()
+    if (not args.d and not args.ips and not args.command
+            and not args.audit and not args.names
+            and not args.export and not args.import_file):
+        cfg_path = get_resource_path(args.c)
+        if not os.path.exists(cfg_path):
+            return interactive_mode()
 
     # Logging setup
     log_dir = os.path.join(
@@ -1585,7 +1885,16 @@ def main():
     log_filename = os.path.join(log_dir,
                                 f'viktor_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
 
-    log_level = logging.DEBUG if args.debug else logging.INFO
+    # Resolve config first so debug/save/ring come from cfg + CLI
+    try:
+        config = resolve_config(args)
+    except Exception as e:
+        print(f"\n  FATAL: {e}\n", file=sys.stderr)
+        sys.exit(1)
+
+    is_debug = config.get('debug', False)
+
+    log_level = logging.DEBUG if is_debug else logging.INFO
     logging.basicConfig(
         filename=log_filename,
         level=log_level,
@@ -1593,20 +1902,19 @@ def main():
     )
 
     console = logging.StreamHandler()
-    console.setLevel(logging.DEBUG if args.debug else logging.WARNING)
+    console.setLevel(logging.DEBUG if is_debug else logging.WARNING)
     console.setFormatter(logging.Formatter('%(levelname)s: %(message)s'))
     logging.getLogger().addHandler(console)
 
-    lib_level = logging.DEBUG if args.debug else logging.WARNING
+    lib_level = logging.DEBUG if is_debug else logging.WARNING
     for lib in ('paramiko', 'napalm', 'netmiko', 'urllib3', 'requests'):
         logging.getLogger(lib).setLevel(lib_level)
-    if args.debug:
+    if is_debug:
         logging.getLogger('napalm_hios.mops_client').setLevel(logging.DEBUG)
 
     start_time = time.time()
 
     try:
-        config = resolve_config(args)
 
         # Determine label for banner
         if args.audit:
@@ -1630,8 +1938,8 @@ def main():
         else:
             label = 'VLAN LIST'
 
-        if args.m:
-            label += f" (ring {args.m})"
+        if config['ring']:
+            label += f" (ring {config['ring']})"
 
         print_banner(label, config)
 
@@ -1669,8 +1977,8 @@ def main():
                 print(f"    {ip:<17s}{d['hostname']:<21s}{n_vlans} VLANs")
 
         # Ring selector filter
-        if args.m:
-            ring_vlan = args.m
+        if config['ring']:
+            ring_vlan = config['ring']
             fleet_data = filter_ring_members(fleet_data, ring_vlan)
             if not fleet_data:
                 print(f"\n  No devices have VLAN {ring_vlan} in egress table.")
@@ -1721,7 +2029,7 @@ def main():
             reached = cmd_vlan_list(args, config, connections, fleet_data)
 
         # Save if requested
-        if args.save and not args.dry_run:
+        if config['save'] and not args.dry_run:
             if args.audit or args.export:
                 print("\n  --save ignored for read-only operations")
             else:

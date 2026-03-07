@@ -13,6 +13,14 @@ pip install napalm-hios
 
 ## Quick Start
 
+Interactive wizard — walks you through every option step by step:
+
+```bash
+python viktor.py -i
+```
+
+Also launches automatically if no `script.cfg` exists and no arguments are given.
+
 Single device:
 
 ```bash
@@ -160,6 +168,7 @@ How it works:
 
 | Flag | Description |
 |------|-------------|
+| `-i` | Interactive wizard — guided step-by-step mode |
 | `-c <path>` | Config file (default: `script.cfg`) |
 | `-d <ip>` | Single device — no config file needed |
 | `--ips <spec>` | Comma list, last-octet range, or CIDR |
