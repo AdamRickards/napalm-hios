@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.12.1
+
+### Bug fix: get_vlan_egress() now includes VLANs with zero port membership
+
+All three backends filtered out VLANs with no egress ports. A freshly-created VLAN (e.g. `create_vlan(100, 'Test')`) would not appear in `get_vlan_egress()` until at least one port was assigned. Now empty VLANs are included with `'ports': {}`. Port-filtered calls (`get_vlan_egress('1/1')`) still correctly omit VLANs that don't match the filter.
+
+### Housekeeping
+
+- `version.py` updated to match setup.py (was still `1.11.1`)
+- `README.md` now lists `get_management` / `set_management`
+- Unit test suite: 150s → 7s (3 tests were hitting real network instead of mocks)
+- `test_ssh_hios.py` live test skipped unless `HIOS_HOSTNAME` env var set
+- `TODO.md` cleaned up (removed 10 completed items)
+
 ## 1.12.0
 
 ### Management Network Configuration — all 3 protocols

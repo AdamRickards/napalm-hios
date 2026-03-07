@@ -3134,7 +3134,7 @@ class SSHHIOS:
                     vlan_ports[interface] = mode
                 elif configured == 'Exclude':
                     vlan_ports[interface] = 'forbidden'
-            if vlan_ports:
+            if vlan_ports or not ports:
                 result[vlan_id] = {'name': name, 'ports': vlan_ports}
         return result
 

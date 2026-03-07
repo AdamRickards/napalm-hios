@@ -2004,6 +2004,21 @@ class TestLoopProtection(unittest.TestCase):
         result = self.backend.get_vlan_egress("1/2")
         self.assertNotIn(50, result)
 
+    def test_get_vlan_egress_empty_vlan_included(self):
+        """VLANs with zero port membership are included when unfiltered."""
+        self.backend._ifindex_map = {"1": "1/1"}
+        self.backend.client.get.return_value = [
+            {"ieee8021QBridgeVlanStaticVlanIndex": "999",
+             "ieee8021QBridgeVlanStaticName": "45 6d 70 74 79",
+             "ieee8021QBridgeVlanStaticEgressPorts": "00 00",
+             "ieee8021QBridgeVlanStaticUntaggedPorts": "00 00",
+             "ieee8021QBridgeVlanStaticForbiddenEgressPorts": ""},
+        ]
+
+        result = self.backend.get_vlan_egress()
+        self.assertIn(999, result)
+        self.assertEqual(result[999]['ports'], {})
+
     # ------------------------------------------------------------------
     # VLAN ingress/egress setters
     # ------------------------------------------------------------------

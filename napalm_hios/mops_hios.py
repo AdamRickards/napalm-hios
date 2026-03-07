@@ -1327,7 +1327,7 @@ class MOPSHIOS:
                         continue
                     port_modes[iface] = 'forbidden'
 
-            if port_modes:
+            if port_modes or not port_set:
                 vlans[vlan_id] = {'name': vlan_name, 'ports': port_modes}
 
         return vlans

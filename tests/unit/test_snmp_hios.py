@@ -2093,6 +2093,33 @@ class TestSNMPHIOS(unittest.TestCase):
         self.assertEqual(result[10]['ports']['1/1'], 'untagged')
         self.assertEqual(result[10]['ports']['1/2'], 'forbidden')
 
+    def test_get_vlan_egress_empty_vlan_included(self):
+        """VLANs with zero port membership are included when unfiltered."""
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1'}
+            return self.snmp._ifindex_map
+
+        async def mock_walk(oid, engine=None):
+            return {'1': '1'}
+
+        async def mock_walk_columns(oid_map, engine=None):
+            return {
+                '999': {
+                    'name': 'Empty',
+                    'egress': b'\x00',
+                    'untagged': b'\x00',
+                    'forbidden': b'\x00',
+                },
+            }
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
+            result = self.snmp.get_vlan_egress()
+
+        self.assertIn(999, result)
+        self.assertEqual(result[999]['ports'], {})
+
     # ------------------------------------------------------------------
     # VLAN ingress/egress setters
     # ------------------------------------------------------------------
