@@ -28,8 +28,10 @@ from clamp import (
     worker_connect, worker_gather_facts, worker_save,
     worker_enable_rstp_global, worker_teardown_loop_protection,
     worker_teardown_auto_disable, worker_teardown_rstp_full,
+    worker_teardown_storm_control,
     worker_delete_sub_ring, worker_disable_srm_global,
     print_results, run_phase0, rm_ring_needs_breaking, get_ring_ports_for_device,
+    gather_device_state, display_device_state, log_device_state_json,
 )
 
 
@@ -43,6 +45,8 @@ def parse_arguments():
                         help='Enable debug logging')
     parser.add_argument('--dry-run', action='store_true',
                         help='Parse config and show plan without executing')
+    parser.add_argument('--verify', action='store_true',
+                        help='Re-gather state after undeploy to confirm changes (logged to file)')
     return parser.parse_args()
 
 
@@ -104,6 +108,7 @@ def main():
         config = parse_config(config_path)
         if args.debug:
             config['debug'] = True
+        config['verify'] = args.verify
 
         print("\n" + "=" * 60)
         print("  MRP UNDEPLOY")
@@ -168,6 +173,12 @@ def main():
             has_mrp = any(
                 f.get('mrp', {}).get('configured', False) if f.get('mrp') else False
                 for f in device_facts.values()
+            )
+            has_storm_control = any(
+                any(p.get('broadcast', {}).get('enabled')
+                    for p in f.get('storm_control', {}).get('interfaces', {}).values())
+                for f in device_facts.values()
+                if f.get('storm_control')
             )
 
             # Detect sub-ring instances on any device
@@ -343,6 +354,25 @@ def main():
             if not has_loop_prot and not has_bpdu_guard:
                 log_print("\n  Steps 3-4: Skipped (no loop protection or BPDU Guard detected)")
 
+            # --- Step 4b: Tear down storm control (if detected) ---
+            if has_storm_control:
+                log_print("\n  Step 4b: Tearing down storm control...")
+                sc_results = []
+                with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
+                    futures = {}
+                    for dev in config['devices']:
+                        ip = dev['ip']
+                        device = connections.get(ip)
+                        if not device:
+                            continue
+                        all_ports = device_facts.get(ip, {}).get('all_ports', [])
+                        futures[pool.submit(
+                            worker_teardown_storm_control, device, dev, all_ports
+                        )] = dev
+                    for future in as_completed(futures):
+                        sc_results.append(future.result())
+                print_results("Step 4b — Storm Control Teardown", sc_results)
+
             # --- Step 5: Delete MRP ---
             if has_mrp:
                 log_print("\n  Step 5: Deleting MRP...")
@@ -399,6 +429,13 @@ def main():
                         log_print(f"  [{rsrm_ip}] port {rsrm_port} admin UP (RSRM, VLAN {sv})")
                     except Exception as e:
                         log_print(f"  WARNING: Cannot re-enable RSRM port {rsrm_port} on {rsrm_ip}: {e}")
+
+            # --- Verify: Re-gather state after undeploy ---
+            if config['verify']:
+                log_print("\n  Verify: Re-gathering state after undeploy...")
+                after_facts, _ = gather_device_state(config, connections)
+                display_device_state("AFTER", config, after_facts)
+                log_device_state_json("AFTER", after_facts)
 
             # --- Step 8: Save if configured ---
             if config['save']:

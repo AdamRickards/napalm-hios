@@ -113,6 +113,8 @@ Everything needed already exists in napalm-hios:
 - **Inter-vendor rings** — custom MRP domain UUIDs needed. Requires explicit config.
 - **LLDP-disabled networks** — if LLDP is off, we can't discover anything. Config file required.
 
+## Zero-Config Discovery Mode
+
 ### Priority
 
 This is a significant rework but not a rewrite — the deployment engine (phases, workers, verification) stays the same. The change is in how the deployment plan is built: from config file → from LLDP discovery. Both paths produce the same `config['rings']` dict that feeds into the existing deploy/undeploy logic.

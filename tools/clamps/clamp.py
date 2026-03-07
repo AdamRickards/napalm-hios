@@ -29,6 +29,7 @@ import logging
 import ipaddress
 import argparse
 import time
+import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -48,6 +49,17 @@ def log_print(msg: str):
     logging.info(msg)
 
 
+def log_device_state_json(label, device_facts):
+    """Dump full device state to logfile as JSON (not console)."""
+    def _json_default(obj):
+        if isinstance(obj, set):
+            return sorted(obj)
+        return str(obj)
+    logging.info(f"--- {label} ---")
+    for ip, facts in sorted(device_facts.items()):
+        logging.info(f"[{ip}] {label}: {json.dumps(facts, default=_json_default, indent=2)}")
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Deploy MRP ring across HiOS switches')
     parser.add_argument('-c', '--config', default='script.cfg',
@@ -63,6 +75,10 @@ def parse_arguments():
     parser.add_argument('--migrate-edge', nargs='?', const='auto',
                         metavar='MODE', default=None,
                         help='Migrate edge strategy (auto-toggles, or specify: loop, rstp-full, rstp)')
+    parser.add_argument('--no-storm-control', action='store_true',
+                        help='Skip storm control deployment on edge ports')
+    parser.add_argument('--verify', action='store_true',
+                        help='Re-gather state after deploy to confirm changes (logged to file)')
     return parser.parse_args()
 
 
@@ -104,6 +120,9 @@ def parse_config(config_file: str) -> dict:
         'protocol': 'mops',
         'edge_protection': 'rstp-full',
         'auto_disable_timer': None,
+        'storm_control': True,
+        'storm_control_threshold': 100,
+        'storm_control_unit': 'pps',
         'force': False,
         'devices': [],       # flat list (backward compat for connect/gather)
         'rings': {},         # keyed by VLAN — built after parsing
@@ -142,6 +161,16 @@ def parse_config(config_file: str) -> dict:
                     logging.warning(f"Line {line_num}: unknown edge_protection '{val}', using 'loop'")
             elif line.startswith('auto_disable_timer '):
                 config['auto_disable_timer'] = int(line.split(None, 1)[1])
+            elif line.startswith('storm_control_threshold '):
+                config['storm_control_threshold'] = int(line.split(None, 1)[1])
+            elif line.startswith('storm_control_unit '):
+                val = line.split(None, 1)[1].lower().strip()
+                if val in ('pps', 'percent'):
+                    config['storm_control_unit'] = val
+                else:
+                    logging.warning(f"Line {line_num}: unknown storm_control_unit '{val}', using 'pps'")
+            elif line.startswith('storm_control '):
+                config['storm_control'] = line.split(None, 1)[1].lower() in ('true', 'yes', '1')
             elif line.startswith('force '):
                 config['force'] = line.split(None, 1)[1].lower() in ('true', 'yes', '1')
             elif line.startswith('debug '):
@@ -371,6 +400,11 @@ def print_plan(config: dict):
     print("=" * 60)
     print(f"  Protocol:        {config['protocol'].upper()}")
     print(f"  Edge protection: {edge_str(config)}")
+    if config.get('storm_control'):
+        unit = config['storm_control_unit']
+        print(f"  Storm control:   broadcast {config['storm_control_threshold']} {unit} on edge ports")
+    else:
+        print(f"  Storm control:   disabled")
     print(f"  Save to NVM:     {'Yes (after ring verified)' if config['save'] else 'No (RAM only)'}")
     print("-" * 60)
 
@@ -450,6 +484,7 @@ def worker_gather_facts(device, dev, is_l2s_possible=True):
         'loop_protection': None,
         'all_ports': [],
         'interfaces': {},
+        'storm_control': None,
         'srm_ports': set(),
     }
     try:
@@ -481,6 +516,11 @@ def worker_gather_facts(device, dev, is_l2s_possible=True):
                 result['loop_protection'] = device.get_loop_protection()
             except Exception as e:
                 logging.warning(f"[{ip}] get_loop_protection failed: {e}")
+
+        try:
+            result['storm_control'] = device.get_storm_control()
+        except Exception as e:
+            logging.warning(f"[{ip}] get_storm_control failed: {e}")
 
         # Get interface states (needed for ring port up/down check + all_ports list)
         try:
@@ -652,6 +692,56 @@ def worker_setup_auto_disable(device, dev, all_ports, timer, reason='loop-protec
             device.commit_staging()
 
         return ip, True, f"auto-disable ({reason}) timer={timer}s on {len(ports)} ports"
+    except Exception as e:
+        return ip, False, str(e)
+
+
+def worker_setup_storm_control(device, dev, all_ports, ring_ports, threshold, unit='pps'):
+    """Thread worker: enable broadcast storm control on edge ports.
+
+    Broadcast only — CPU death path is ARP starvation through the
+    VLAN-unaware rate limiter (~450 pps shared). Multicast/unknown-unicast
+    not limited (MRP test frames, IGMP, PTP need multicast).
+
+    Ring ports excluded — MRP traffic is multicast-heavy.
+    """
+    ip = dev['ip']
+    try:
+        ring_set = set(ring_ports)
+        edge_ports = [p for p in all_ports if p not in ring_set]
+
+        staging = _start_staging(device)
+
+        device.set_storm_control(
+            interface=edge_ports,
+            unit=unit,
+            broadcast_enabled=True,
+            broadcast_threshold=threshold,
+        )
+
+        if staging:
+            device.commit_staging()
+
+        return ip, True, f"storm control broadcast {threshold} {unit} on {len(edge_ports)} edge ports"
+    except Exception as e:
+        return ip, False, str(e)
+
+
+def worker_teardown_storm_control(device, dev, all_ports):
+    """Thread worker: disable broadcast storm control on all ports."""
+    ip = dev['ip']
+    try:
+        staging = _start_staging(device)
+
+        device.set_storm_control(
+            interface=all_ports,
+            broadcast_enabled=False,
+        )
+
+        if staging:
+            device.commit_staging()
+
+        return ip, True, "broadcast storm control disabled"
     except Exception as e:
         return ip, False, str(e)
 
@@ -993,9 +1083,8 @@ def rm_ring_needs_breaking(device_facts, rm_dev):
     return p1_up and p2_up
 
 
-def run_phase0(config, connections):
-    """Gather facts from all devices. Returns (device_facts, l2s_devices)."""
-    log_print("\n  Phase 0: Gathering current state...")
+def gather_device_state(config, connections):
+    """Parallel gather of facts from all devices. Returns (device_facts, l2s_devices)."""
     device_facts = {}
     l2s_devices = []
 
@@ -1012,7 +1101,17 @@ def run_phase0(config, connections):
             if err:
                 logging.warning(f"[{ip}] gather_facts partial failure: {err}")
 
-    log_print("\n  Phase 0: Current State")
+    for dev in config['devices']:
+        ip = dev['ip']
+        if ip in device_facts and device_facts[ip].get('sw_level') == 'L2S':
+            l2s_devices.append(ip)
+
+    return device_facts, l2s_devices
+
+
+def display_device_state(label, config, device_facts):
+    """Print summary table of device state with a custom label."""
+    log_print(f"\n  {label}")
     log_print("  " + "-" * 55)
     for dev in config['devices']:
         ip = dev['ip']
@@ -1033,12 +1132,21 @@ def run_phase0(config, connections):
         bg_state = '?'
         if facts['rstp']:
             bg_state = 'on' if facts['rstp'].get('bpdu_guard') else 'off'
+        sc_state = '?'
+        if facts['storm_control'] is not None:
+            sc_ifaces = facts['storm_control'].get('interfaces', {})
+            sc_on = sum(1 for p in sc_ifaces.values() if p.get('broadcast', {}).get('enabled'))
+            sc_state = str(sc_on) if sc_on else 'off'
         role_tag = 'RM' if dev['role'] == 'manager' else 'RC'
-        log_print(f"  {ip:22s} [{sw}] MRP={mrp_state}, RSTP={rstp_state}, LP={lp_state}, BG={bg_state}  ({role_tag})")
+        log_print(f"  {ip:22s} [{sw}] MRP={mrp_state}, RSTP={rstp_state}, LP={lp_state}, BG={bg_state}, SC={sc_state}  ({role_tag})")
 
-        if sw == 'L2S':
-            l2s_devices.append(ip)
 
+def run_phase0(config, connections):
+    """Gather facts from all devices. Returns (device_facts, l2s_devices)."""
+    log_print("\n  Phase 0: Gathering current state...")
+    device_facts, l2s_devices = gather_device_state(config, connections)
+    display_device_state("Phase 0: Current State", config, device_facts)
+    log_device_state_json("BEFORE", device_facts)
     return device_facts, l2s_devices
 
 
@@ -1154,6 +1262,28 @@ def deploy_edge_protection(config, connections, device_facts, l2s_devices):
                 results.append(future.result())
         print_results("Phase 3 — RSTP Full", results)
 
+    # Storm control — all modes (broadcast rate limit on edge ports)
+    if config.get('storm_control'):
+        threshold = config['storm_control_threshold']
+        unit = config['storm_control_unit']
+        log_print(f"\n  Phase 3 — Storm control: broadcast {threshold} {unit} on edge ports...")
+        sc_results = []
+        with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
+            futures = {}
+            for dev in config['devices']:
+                ip = dev['ip']
+                device = connections.get(ip)
+                if not device:
+                    continue
+                all_ports = device_facts.get(ip, {}).get('all_ports', [])
+                ring_ports = get_ring_ports_for_device(config, ip)
+                futures[pool.submit(
+                    worker_setup_storm_control, device, dev, all_ports, ring_ports, threshold, unit
+                )] = dev
+            for future in as_completed(futures):
+                sc_results.append(future.result())
+        print_results("Phase 3 — Storm Control", sc_results)
+
 
 # ---------------------------------------------------------------------------
 # Main deploy flow
@@ -1196,9 +1326,12 @@ def main():
         if args.debug:
             config['debug'] = True
 
-        # CLI override
+        # CLI overrides
         if args.edge:
             config['edge_protection'] = args.edge
+        if args.no_storm_control:
+            config['storm_control'] = False
+        config['verify'] = args.verify
 
         # Route to migrate-edge mode if requested
         if args.migrate_edge is not None:
@@ -1450,6 +1583,13 @@ def main():
 
                 if not all_sub_healthy:
                     log_print("\n  WARNING: One or more sub-rings not healthy.")
+
+            # --- Verify: Re-gather state after deploy ---
+            if config['verify']:
+                log_print("\n  Verify: Re-gathering state after deploy...")
+                after_facts, _ = gather_device_state(config, connections)
+                display_device_state("AFTER", config, after_facts)
+                log_device_state_json("AFTER", after_facts)
 
             # --- Phase 8: Save ---
             if config['save']:
@@ -1754,6 +1894,28 @@ def run_migrate_edge(args, config, log_filename):
         if target in ('rstp-full', 'rstp'):
             time.sleep(2)
 
+        # Storm control — deploy with new edge protection (all modes)
+        if config.get('storm_control'):
+            threshold = config['storm_control_threshold']
+            unit = config['storm_control_unit']
+            log_print(f"\n  Storm control: broadcast {threshold} {unit} on edge ports...")
+            sc_results = []
+            with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
+                futures = {}
+                for dev in config['devices']:
+                    ip = dev['ip']
+                    device = connections.get(ip)
+                    if not device:
+                        continue
+                    all_ports = device_facts.get(ip, {}).get('all_ports', [])
+                    ring_ports = ring_ports_map.get(ip, [dev['port1'], dev['port2']])
+                    futures[pool.submit(
+                        worker_setup_storm_control, device, dev, all_ports, ring_ports, threshold, unit
+                    )] = dev
+                for future in as_completed(futures):
+                    sc_results.append(future.result())
+            print_results("Storm Control", sc_results)
+
         # Phase 2: Tear down OLD protection
         log_print("\n  Phase 2: Tearing down old edge protection...")
 
@@ -1824,6 +1986,13 @@ def run_migrate_edge(args, config, log_filename):
 
         if not healthy:
             log_print("\n  WARNING: Ring not healthy after migration. Check manually.\n")
+
+        # Verify: Re-gather state after migration
+        if config['verify']:
+            log_print("\n  Verify: Re-gathering state after migration...")
+            after_facts, _ = gather_device_state(config, connections)
+            display_device_state("AFTER", config, after_facts)
+            log_device_state_json("AFTER", after_facts)
 
         # Phase 4: Save
         if config['save']:

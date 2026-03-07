@@ -167,6 +167,7 @@ Per Device:
                     │  MRP, RSTP,  │  check edge protection mode
                     │  interfaces  │  L2S safety abort if needed
                     │  sub-ring    │  get_mrp_sub_ring() port discovery
+                    │              │  BEFORE JSON → logfile (always)
                     └──────┬───────┘
                            │
                   ┌────────▼────────┐
@@ -207,7 +208,8 @@ Per Device:
                ┌──────▼───────┐
                │  Phase 3     │  deploy edge protection
                │  (mode       │  rstp-full / loop / rstp
-               │   specific)  │  sub-ring ports excluded
+               │   specific)  │  + storm control (broadcast 100 pps)
+               │              │  sub-ring ports excluded
                └──────┬───────┘
                       │
                 ┌─────▼──────┐
@@ -255,6 +257,10 @@ Per Device:
                 │          │
                 ├──────────┘
                 │
+         ┌──────▼─────────────┐
+         │  Verify (--verify) │  re-gather → AFTER JSON → logfile
+         └──────┬─────────────┘
+                │
          ┌──────▼───────┐
          │  Phase 8     │  save to NVM (if configured)
          └──────────────┘
@@ -270,9 +276,10 @@ ports, and save preference.
 Phase 0: Gather facts
   │
   ├─ has_sub_rings?  → get_mrp_sub_ring() on each device
-  ├─ has_loop_prot?  → tear down loop prot + auto-disable
-  ├─ has_bpdu_guard? → tear down rstp-full (admin edge, BPDU Guard, auto-disable)
-  ├─ has_mrp?        → delete MRP (main ring + sub-ring RCs)
+  ├─ has_loop_prot?    → tear down loop prot + auto-disable
+  ├─ has_bpdu_guard?   → tear down rstp-full (admin edge, BPDU Guard, auto-disable)
+  ├─ has_storm_ctrl?   → tear down broadcast storm control on edge ports
+  ├─ has_mrp?          → delete MRP (main ring + sub-ring RCs)
   │
   └─ ALWAYS: restore RSTP global + per-port on ring ports
              (factory default redundancy state)
@@ -293,6 +300,7 @@ Step 2: Delete sub-rings (if detected)
 
 Step 3: Tear down loop protection (if detected)
 Step 4: Tear down RSTP Full (if BPDU Guard detected)
+Step 4b: Tear down storm control (if detected)
 Step 5: Delete MRP on main ring devices
 Step 6: Restore RSTP (global + per-port on ring ports)
 Step 7: Restore all broken ports (RM port2 + RSRM ports admin UP)
@@ -379,6 +387,87 @@ BPDU Guard catches it in microseconds — recovery is invisible. Different
 default timers reflect this fundamental difference.
 
 Explicit `auto_disable_timer` in config overrides the default for either mode.
+
+## Storm Control — CPU Protection
+
+Storm control limits broadcast ingress rate on edge ports. This protects the
+CPU from ARP starvation during broadcast storms on any VLAN.
+
+### Why broadcast storms kill management
+
+The HiOS CPU port (`cpu/1`) receives broadcast from ALL VLANs — not just the
+management VLAN. This is observed behaviour on BRS50 switches (TI AM3358 CPSW):
+
+- The internal rate limiter between ASIC and CPU is ~450 pps, shared across
+  all VLANs (VLAN-unaware)
+- During a broadcast storm on any VLAN, storm traffic saturates the shared pipe
+- Management ARP (VLAN 60) starves — ARP entries expire, switch becomes
+  unreachable
+- CPU is not overloaded (50% idle) — the failure is ARP starvation, not
+  CPU exhaustion
+- MRP/SRM ring failover is ASIC-level and unaffected — data plane stays up
+
+### Why 100 pps
+
+Observed formula: `CPU broadcast pps ≈ limiter_per_port × num_loop_ports × 0.8`
+
+With 100 pps per edge port and a 2-port loop: 100 × 2 × 0.8 = 160 pps reaching
+CPU. The ~450 pps watermark leaves ~300 pps for management ARP — 0% management
+loss confirmed over 120s soak test.
+
+No legitimate end device sends 100 broadcast packets/sec. Blackstart worst case
+(unmanaged switch, 8 devices behind one port) peaks at ~30-50 pps.
+
+### What CLAMPS configures
+
+```
+Per Device (all edge protection modes):
+  ┌───────────────────────────────────────────────────┐
+  │ Storm Control: broadcast 100 pps                  │
+  │                                                   │
+  │ Ring Ports (1/5, 1/6 + sub-ring ports):           │
+  │   Storm Control: OFF (MRP uses multicast heavily) │
+  │                                                   │
+  │ Edge Ports (all others):                          │
+  │   Storm Control: broadcast ON, 100 pps            │
+  │   Multicast: OFF (legitimate protocols need it)   │
+  │   Unknown Unicast: OFF (hard to distinguish)      │
+  └───────────────────────────────────────────────────┘
+```
+
+Disabled with `storm_control false` in config or `--no-storm-control` CLI flag.
+Threshold adjustable: `storm_control_threshold <value>` (default 100).
+Unit adjustable: `storm_control_unit pps` or `storm_control_unit percent` (default pps).
+
+## Structured Logging (Before/After)
+
+Every run dumps full structured state to the logfile as JSON — the complete
+`get_mrp()`, `get_rstp()`, `get_loop_protection()`, `get_auto_disable()`,
+`get_storm_control()` dicts per device.
+
+```
+BEFORE: Always logged (no flag needed)
+  │  Phase 0 gathers state → summary table on console
+  │  Full JSON dumped to logfile only (not console)
+  │
+AFTER: Opt-in via --verify
+  │  Re-gathers state after all deploy/undeploy phases
+  │  Summary table on console + full JSON to logfile
+  │  Costs one extra gather round (~5s for 4 devices)
+```
+
+The logfile is the audit record. Console stays clean with the one-line
+summary per device. The JSON blocks are labelled `--- BEFORE ---` and
+`--- AFTER ---` with per-device entries:
+
+```
+--- BEFORE ---
+[192.168.1.80] BEFORE: {"mrp": {...}, "rstp": {...}, ...}
+[192.168.1.82] BEFORE: {"mrp": {...}, "rstp": {...}, ...}
+```
+
+Sets (e.g. `srm_ports`) are serialized as sorted lists. All other
+non-JSON-native types fall back to `str()`.
 
 ## Loop Protection: How It Works and Why It's Limited
 

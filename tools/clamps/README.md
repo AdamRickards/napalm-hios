@@ -43,6 +43,11 @@ recovery_delay 200ms      # 200ms, 500ms, 30ms, 10ms
 edge_protection rstp-full  # rstp-full (recommended), loop, rstp
 # auto_disable_timer 30   # omit for smart default: loop=0, rstp-full=30
 
+# Storm control — broadcast rate limiting on edge ports (see LOGIC.md)
+# storm_control true       # default: true
+# storm_control_threshold 100  # default: 100
+# storm_control_unit pps   # pps or percent (default: pps)
+
 # Protocol and save behavior
 protocol mops              # mops (recommended), snmp, ssh
 save false                 # true = save to NVM after ring verified healthy
@@ -152,6 +157,7 @@ python clamp.py --edge rstp              # legacy RSTP
 python clamp.py -c ring2.cfg             # custom config file
 python clamp.py --dry-run                # show plan, no changes
 python clamp.py --debug                  # verbose MOPS logging
+python clamp.py --verify                 # re-gather state after deploy
 ```
 
 ### Undeploy
@@ -162,6 +168,7 @@ factory default redundancy config (RSTP global + all ports on).
 ```bash
 python unclamp.py                        # clean everything
 python unclamp.py --dry-run              # show what would be cleaned
+python unclamp.py --verify               # re-gather state after undeploy
 ```
 
 ### Migrate Edge Protection
@@ -191,6 +198,7 @@ Phase 0: Gather facts (parallel)
   │  SW level, MRP, RSTP, loop prot, auto-disable, interfaces
   │  Sub-ring port discovery via get_mrp_sub_ring()
   │  L2S safety check (abort if loop mode + L2S without force)
+  │  BEFORE state dumped to logfile as JSON (always)
   │
 Phase 1a: Break main ring (RM port2 admin DOWN)
   │  Skipped if ring ports not both up
@@ -220,6 +228,9 @@ Phase 6: Configure sub-rings (per sub-ring VLAN)
 Phase 7: Verify sub-rings (3x retry per sub-ring on SRM)
   │  Check ring_state + redundancy on each SRM device
   │
+Verify: Re-gather state (--verify only)
+  │  AFTER state dumped to logfile as JSON
+  │
 Phase 8: Save to NVM (parallel, if save=true)
 ```
 
@@ -230,6 +241,7 @@ Connect (parallel)
   │
 Phase 0: Gather facts (parallel)
   │  Detect: loop protection? BPDU Guard? MRP? Sub-rings?
+  │  BEFORE state dumped to logfile as JSON (always)
   │
 Step 1: Break all ring paths (prevent loops during teardown)
   │  1a: RSRM ports admin DOWN (sub-ring paths)
@@ -253,6 +265,9 @@ Step 6: Restore RSTP (always)
   │  6b: Per-port enable on ring ports
   │
 Step 7: Restore all broken ports (RM port2 + RSRM ports)
+  │
+Verify: Re-gather state (--verify only)
+  │  AFTER state dumped to logfile as JSON
   │
 Step 8: Save to NVM (if save=true)
 ```
