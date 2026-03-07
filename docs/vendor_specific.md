@@ -930,7 +930,7 @@ and management priority.
 
 ### get_qos()
 
-Returns per-port QoS trust mode, shaping rate, and per-queue scheduling.
+Returns per-port QoS trust mode, default priority, shaping rate, and per-queue scheduling.
 
 ```python
 result = device.get_qos()
@@ -942,6 +942,7 @@ result = device.get_qos()
     'interfaces': {
         '1/1': {
             'trust_mode': 'dot1p',      # 'untrusted' | 'dot1p' | 'ip-precedence' | 'ip-dscp'
+            'default_priority': 0,      # 0-7 — port default PCP for untagged frames
             'shaping_rate': 0,          # percent (0 = no limit)
             'queues': {
                 0: {'scheduler': 'strict', 'min_bw': 0, 'max_bw': 0},
@@ -975,12 +976,19 @@ device.set_qos('1/1', queue=7, scheduler='weighted', min_bw=10, max_bw=50)
 
 # Set shaping rate (MOPS/SNMP only)
 device.set_qos('1/1', shaping_rate=80)
+
+# Set default PCP for untagged frames
+device.set_qos('1/1', default_priority=3)
+
+# Set default PCP on multiple ports
+device.set_qos(['1/1', '1/2', '1/3', '1/4'], default_priority=5)
 ```
 
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
 | `interface` | `str` or `list` | required | Port(s) to configure |
 | `trust_mode` | `'untrusted'`, `'dot1p'`, `'ip-precedence'`, `'ip-dscp'` | `None` | Per-port trust mode |
+| `default_priority` | `0`–`7` | `None` | Port default PCP for untagged ingress frames |
 | `shaping_rate` | `0`–`100` | `None` | Egress shaping rate (percent, 0 = no limit) |
 | `queue` | `0`–`7` | `None` | Queue index (required for scheduler/bandwidth) |
 | `scheduler` | `'strict'`, `'weighted'` | `None` | Queue scheduling type |

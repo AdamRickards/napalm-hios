@@ -109,7 +109,7 @@ device.close()
 - `get_sflow()` — sFlow agent and receiver configuration
 - `get_sflow_port()` — per-port sFlow sampler and poller config
 - `get_storm_control()` — per-port broadcast/multicast/unicast ingress rate limiting
-- `get_qos()` — per-port trust mode, queue scheduling, shaping rate
+- `get_qos()` — per-port trust mode, default priority, queue scheduling, shaping rate
 - `get_qos_mapping()` — global dot1p→TC and DSCP→TC mapping tables
 - `get_management_priority()` — management frame priority (dot1p + ip-dscp)
 - `get_management()` — management network config (IP, VLAN, protocol, IPv6)
@@ -137,7 +137,7 @@ device.close()
 - `set_sflow()` — configure sFlow receivers
 - `set_sflow_port()` — configure per-port sFlow sampling and polling
 - `set_storm_control()` — set per-port storm control thresholds and enable/disable
-- `set_qos()` — set per-port trust mode, shaping rate, queue scheduling
+- `set_qos()` — set per-port trust mode, default priority, shaping rate, queue scheduling
 - `set_qos_mapping()` — set global dot1p→TC and DSCP→TC mappings
 - `set_management_priority()` — set management frame priority values
 - `set_management()` — set management network config (IP, VLAN, protocol, IPv6)

@@ -27,6 +27,8 @@
 - [ ] `get_tftp()` / `set_tftp()` — TFTP config management. Two functions: manual config pull from TFTP server, and enable/disable auto-backup on save. **Unlocks**: [POLO](tools/polo/TODO.md), MOHAWC `--tftp-pull`
 - [ ] `get_syslog()` / `set_syslog()` — syslog server config (destination IP/port, severity filter, facility). MOPS + SNMP, SSH stub. **Unlocks**: [SNOOP](tools/snoop/TODO.md) syslog listener, fleet-wide log aggregation
 - [ ] `get_users()` / `set_user()` / `delete_user()` — local user account CRUD. Create/modify/delete user accounts with role (admin/operator/guest). **Unlocks**: fleet-wide credential management, audit-ready accounts (e.g. per-tool service accounts)
+- [ ] SSH backend: extract `_enter_interface()` helper — the 4-line pattern `self.cli(f'interface {iface}')` + check for Error/Invalid + raise ValueError is repeated 8+ times across setters. Single helper with consistent error message
+- [ ] SNMP backend: extract `_build_bp_to_name()` helper — the bridge port walk + dict build loop (`_walk(OID_dot1dBasePortIfIndex)` → `{bp_num: ifmap.get(str(ifindex_val))}`) is repeated 6 times across vlan/mac/sflow getters. One async helper, called with engine param
 
 ## CLAMPS
 
@@ -74,6 +76,12 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 - [ ] Config export: download running config as XML/profile via MOPS HTTPS endpoints
 - [ ] Config import: upload profile/XML to device, activate as running config
 - [ ] Firmware update: upload firmware image, trigger install + reboot
+
+## SSH CLI State Machine
+
+- [ ] CLI context navigator — track current mode (User → Privileged Exec → Global Config → Interface Range / VLAN Database) from prompt detection. Single `_ensure_context(mode, target=None)` replaces all `_config_mode()` / `self.cli('exit')` / `self.cli(f'interface {iface}')` patterns. Each setter declares what it needs, navigator handles transitions
+- [ ] Wire up `local/cli_ref_hios_merged.json` — 1,849 commands already have `mode` and `privilege` fields. Setter functions can look up required context from the JSON instead of hardcoding. New CLI features become: define command name → state machine handles navigation automatically
+- [ ] Port loop optimisation — setters that loop over ports currently bounce in/out of interface mode per port. State machine stays in Interface Range and just switches ports. Fewer CLI round-trips on SSH
 
 ## Backburner
 

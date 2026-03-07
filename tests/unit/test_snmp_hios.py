@@ -2621,7 +2621,7 @@ class TestSNMPHIOS(unittest.TestCase):
             return {OID_hm2CosQueueNumQueuesPerPort: 8}
 
         walk_call_count = [0]
-        async def mock_walk(oid_map, engine=None):
+        async def mock_walk_columns(oid_map, engine=None):
             walk_call_count[0] += 1
             if walk_call_count[0] == 1:  # trust
                 return {'1': {'trust': 2}, '2': {'trust': 2}}
@@ -2635,12 +2635,21 @@ class TestSNMPHIOS(unittest.TestCase):
                     '2.1': {'scheduler': 1, 'min_bw': 0, 'max_bw': 0},
                 }
 
+        walk_raw_count = [0]
+        async def mock_walk(oid, engine=None):
+            walk_raw_count[0] += 1
+            if walk_raw_count[0] == 1:  # bridge port → ifIndex
+                return {'1': 1, '2': 2}
+            else:  # default priority
+                return {'1': 0, '2': 0}
+
         async def mock_ifmap(engine=None):
             self.snmp._ifindex_map = {'1': '1/1', '2': '1/2'}
             return self.snmp._ifindex_map
 
         with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
-             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
              patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
             result = self.snmp.get_qos()
 
@@ -2648,16 +2657,17 @@ class TestSNMPHIOS(unittest.TestCase):
         self.assertEqual(sorted(result['interfaces'].keys()), ['1/1', '1/2'])
         p = result['interfaces']['1/1']
         self.assertEqual(p['trust_mode'], 'dot1p')
+        self.assertEqual(p['default_priority'], 0)
         self.assertEqual(p['shaping_rate'], 0)
         self.assertEqual(p['queues'][0]['scheduler'], 'strict')
 
     def test_get_qos_configured(self):
-        """Port with ip-dscp trust, weighted queue, shaping."""
+        """Port with ip-dscp trust, weighted queue, shaping, PCP 5."""
         async def mock_scalar(*oids):
             return {OID_hm2CosQueueNumQueuesPerPort: 8}
 
         walk_call_count = [0]
-        async def mock_walk(oid_map, engine=None):
+        async def mock_walk_columns(oid_map, engine=None):
             walk_call_count[0] += 1
             if walk_call_count[0] == 1:
                 return {'5': {'trust': 4}}  # ip-dscp
@@ -2669,17 +2679,27 @@ class TestSNMPHIOS(unittest.TestCase):
                     '5.7': {'scheduler': 1, 'min_bw': 0, 'max_bw': 0},
                 }
 
+        walk_raw_count = [0]
+        async def mock_walk(oid, engine=None):
+            walk_raw_count[0] += 1
+            if walk_raw_count[0] == 1:  # bridge port → ifIndex
+                return {'5': 5}
+            else:  # default priority
+                return {'5': 5}
+
         async def mock_ifmap(engine=None):
             self.snmp._ifindex_map = {'5': '1/5'}
             return self.snmp._ifindex_map
 
         with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
-             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
              patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
             result = self.snmp.get_qos()
 
         p = result['interfaces']['1/5']
         self.assertEqual(p['trust_mode'], 'ip-dscp')
+        self.assertEqual(p['default_priority'], 5)
         self.assertEqual(p['shaping_rate'], 50)
         self.assertEqual(p['queues'][0]['scheduler'], 'weighted')
         self.assertEqual(p['queues'][0]['min_bw'], 10)
@@ -2692,7 +2712,7 @@ class TestSNMPHIOS(unittest.TestCase):
             return {OID_hm2CosQueueNumQueuesPerPort: 8}
 
         walk_call_count = [0]
-        async def mock_walk(oid_map, engine=None):
+        async def mock_walk_columns(oid_map, engine=None):
             walk_call_count[0] += 1
             if walk_call_count[0] == 1:
                 return {'1': {'trust': 2}, '100': {'trust': 2}}
@@ -2701,12 +2721,16 @@ class TestSNMPHIOS(unittest.TestCase):
             else:
                 return {}
 
+        async def mock_walk(oid, engine=None):
+            return {'1': 1}  # only physical port
+
         async def mock_ifmap(engine=None):
             self.snmp._ifindex_map = {'1': '1/1', '100': 'cpu0'}
             return self.snmp._ifindex_map
 
         with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
-             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
              patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
             result = self.snmp.get_qos()
 

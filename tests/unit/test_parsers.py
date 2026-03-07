@@ -1005,7 +1005,7 @@ class TestQoSParser(unittest.TestCase):
         self.ssh._in_config_mode = False
 
     def test_get_qos_trust(self):
-        """Parse trust mode per port."""
+        """Parse trust mode and default priority per port."""
         trust_output = (
             'Intf  Trust Mode\n'
             '----  ----------\n'
@@ -1020,18 +1020,30 @@ class TestQoSParser(unittest.TestCase):
             '1         0       0       strict\n'
             '7         0       0       strict\n'
         )
+        vlan_port_output = (
+            'Interface VLAN ID Frame Types  Filtering Priority\n'
+            '--------- ------- ------------ --------- --------\n'
+            '1/1       1       admit all    disable   0\n'
+            '1/2       1       admit all    disable   3\n'
+            '1/3       5       admit all    enable    7\n'
+        )
 
         def mock_cli(cmd, **kw):
             if 'trust' in cmd:
                 return {'show classofservice trust': trust_output}
+            if 'vlan port' in cmd:
+                return {'show vlan port': vlan_port_output}
             return {'show cos-queue': queue_output}
 
         self.ssh.cli = mock_cli
         result = self.ssh.get_qos()
 
         self.assertEqual(result['interfaces']['1/1']['trust_mode'], 'dot1p')
+        self.assertEqual(result['interfaces']['1/1']['default_priority'], 0)
         self.assertEqual(result['interfaces']['1/2']['trust_mode'], 'untrusted')
+        self.assertEqual(result['interfaces']['1/2']['default_priority'], 3)
         self.assertEqual(result['interfaces']['1/3']['trust_mode'], 'ip-dscp')
+        self.assertEqual(result['interfaces']['1/3']['default_priority'], 7)
         self.assertEqual(result['num_queues'], 3)
 
     def test_get_qos_mapping_dot1p(self):

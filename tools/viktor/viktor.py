@@ -145,6 +145,16 @@ def parse_arguments():
     p_autotrunk.add_argument('--name', default=None,
                               help='create VLAN with this name if missing')
 
+    # qos
+    p_qos = subparsers.add_parser('qos',
+                                    help='set default PCP on ports carrying a VLAN')
+    p_qos.add_argument('vlan_ids',
+                        help='VLAN ID or comma-separated list (e.g. 5 or 5,6,10)')
+    p_qos.add_argument('--pcp', type=int, required=True,
+                        help='default PCP value (0-7)')
+    p_qos.add_argument('--include-trunk', action='store_true',
+                        help='also set PCP on inter-switch trunk ports (default: edge only)')
+
     return parser.parse_args()
 
 
@@ -1466,6 +1476,100 @@ def cmd_import(args, config, connections, fleet_data):
 
 
 # ---------------------------------------------------------------------------
+# QoS — set default PCP on ports carrying a VLAN
+# ---------------------------------------------------------------------------
+
+def worker_set_qos(device, ip, ports, pcp, use_staging):
+    """Set default PCP on ports."""
+    try:
+        if use_staging:
+            try:
+                device.start_staging()
+            except (NotImplementedError, AttributeError):
+                use_staging = False
+
+        device.set_qos(ports, default_priority=pcp)
+
+        if use_staging:
+            device.commit_staging()
+
+        return ip, True, f"PCP {pcp} on {', '.join(ports)}"
+    except Exception as e:
+        if use_staging:
+            try:
+                device.discard_staging()
+            except Exception:
+                pass
+        return ip, False, str(e)
+
+
+def cmd_qos(args, config, connections, fleet_data):
+    """Set default PCP on edge ports carrying specified VLANs."""
+    vlan_ids = parse_vlan_list(args.vlan_ids)
+    pcp = args.pcp
+    include_trunk = args.include_trunk
+    use_staging = config['protocol'] == 'mops'
+
+    if pcp < 0 or pcp > 7:
+        print(f"  [ERROR] PCP must be 0-7, got {pcp}")
+        return 0
+
+    # Build trunk port set from LLDP
+    trunk_ports = {}  # {ip: set(port_names)}
+    if not include_trunk:
+        links = build_lldp_links(fleet_data)
+        for local_ip, local_port, remote_ip, remote_port in links:
+            trunk_ports.setdefault(local_ip, set()).add(local_port)
+            trunk_ports.setdefault(remote_ip, set()).add(remote_port)
+
+    # For each device, find ports carrying any of the target VLANs
+    plan = {}  # {ip: [ports_to_set]}
+    for ip, data in fleet_data.items():
+        egress = data.get('egress', {})
+        device_trunk = trunk_ports.get(ip, set())
+        ports = set()
+        for vid in vlan_ids:
+            if vid in egress:
+                vlan_ports = egress[vid].get('ports', {})
+                for port, mode in vlan_ports.items():
+                    if mode in ('tagged', 'untagged'):
+                        if include_trunk or port not in device_trunk:
+                            ports.add(port)
+        if ports:
+            plan[ip] = sorted(ports, key=natural_sort_key)
+
+    # Display plan
+    mode_label = "all" if include_trunk else "edge"
+    vlan_str = ', '.join(str(v) for v in vlan_ids)
+    print(f"\n  Setting PCP {pcp} on {mode_label} ports carrying VLAN(s) {vlan_str}:")
+    for ip in config['devices']:
+        if ip in plan:
+            hostname = fleet_data[ip].get('hostname', ip)
+            print(f"    {ip:<17s}{hostname:<21s}{', '.join(plan[ip])}")
+    if not plan:
+        print("    (no matching ports found)")
+        return 0
+
+    if args.dry_run:
+        print("\n  [DRY RUN] No changes applied.")
+        return len(plan)
+
+    # Deploy
+    results = []
+    with ThreadPoolExecutor(max_workers=len(connections)) as pool:
+        futures = {
+            pool.submit(worker_set_qos, device, ip, plan[ip], pcp,
+                        use_staging): ip
+            for ip, device in connections.items()
+            if ip in plan
+        }
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    return format_results(results, config)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1521,6 +1625,8 @@ def main():
             label = 'TRUNK'
         elif args.command == 'auto-trunk':
             label = 'AUTO-TRUNK'
+        elif args.command == 'qos':
+            label = 'QOS'
         else:
             label = 'VLAN LIST'
 
@@ -1545,7 +1651,7 @@ def main():
             sys.exit(1)
 
         # Determine if we need LLDP data
-        need_lldp = (args.audit or args.command == 'auto-trunk')
+        need_lldp = (args.audit or args.command in ('auto-trunk', 'qos'))
 
         # Gather fleet data
         print("  Gathering VLAN data...")
@@ -1608,6 +1714,8 @@ def main():
             reached = cmd_trunk(args, config, connections, fleet_data)
         elif args.command == 'auto-trunk':
             reached = cmd_auto_trunk(args, config, connections, fleet_data)
+        elif args.command == 'qos':
+            reached = cmd_qos(args, config, connections, fleet_data)
         else:
             # Default: vlan list
             reached = cmd_vlan_list(args, config, connections, fleet_data)

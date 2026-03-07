@@ -3537,6 +3537,10 @@ class MOPSHIOS:
                 "hm2AgentCosQueueMinBandwidth",
                 "hm2AgentCosQueueMaxBandwidth",
             ]),
+            ("P-BRIDGE-MIB", "dot1dPortPriorityEntry", [
+                "dot1dBasePort",
+                "dot1dPortDefaultUserPriority",
+            ]),
             decode_strings=False,
         )
 
@@ -3564,6 +3568,16 @@ class MOPSHIOS:
                 continue
             shaping_by_idx[idx] = _safe_int(
                 entry.get("hm2AgentCosQueueIntfShapingRate", "0"))
+
+        # Default priority per port (P-BRIDGE-MIB, indexed by dot1dBasePort)
+        priority_by_idx = {}
+        pbridge_mib = mibs.get("P-BRIDGE-MIB", {})
+        for entry in pbridge_mib.get("dot1dPortPriorityEntry", []):
+            idx = entry.get("dot1dBasePort", "")
+            if not idx or idx == "0":
+                continue
+            priority_by_idx[idx] = _safe_int(
+                entry.get("dot1dPortDefaultUserPriority", "0"))
 
         # Queue scheduling per port per queue
         queues_by_idx = {}
@@ -3593,6 +3607,7 @@ class MOPSHIOS:
                 continue
             interfaces[name] = {
                 'trust_mode': trust_by_idx.get(idx, 'dot1p'),
+                'default_priority': priority_by_idx.get(idx, 0),
                 'shaping_rate': shaping_by_idx.get(idx, 0),
                 'queues': queues_by_idx.get(idx, {}),
             }
@@ -3603,7 +3618,8 @@ class MOPSHIOS:
         }
 
     def set_qos(self, interface, trust_mode=None, shaping_rate=None,
-                queue=None, scheduler=None, min_bw=None, max_bw=None):
+                queue=None, scheduler=None, min_bw=None, max_bw=None,
+                default_priority=None):
         """Set per-port QoS trust mode, shaping rate, or queue scheduling.
 
         Args:
@@ -3614,6 +3630,7 @@ class MOPSHIOS:
             scheduler: 'strict' or 'weighted'
             min_bw: int 0-100 (percent, weighted queue minimum)
             max_bw: int 0-100 (percent, weighted queue maximum)
+            default_priority: int 0-7 (port default PCP for untagged frames)
         """
         interfaces = ([interface] if isinstance(interface, str)
                       else list(interface))
@@ -3663,6 +3680,14 @@ class MOPSHIOS:
                     {"hm2AgentCosQueueIntfShapingRate":
                      str(int(shaping_rate))},
                     {"hm2AgentCosQueueIntfIndex": ifidx}))
+
+            if default_priority is not None:
+                mutations.append((
+                    "P-BRIDGE-MIB",
+                    "dot1dPortPriorityEntry",
+                    {"dot1dPortDefaultUserPriority":
+                     str(int(default_priority))},
+                    {"dot1dBasePort": ifidx}))
 
             if queue_needed:
                 q_values = {}

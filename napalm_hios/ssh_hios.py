@@ -2581,11 +2581,23 @@ class SSHHIOS:
                 'max_bw': max_bw,
             }
 
+        # Default priority per port from 'show vlan port' Priority column
+        priority_by_port = {}
+        vlan_port_out = self.cli('show vlan port')['show vlan port']
+        for fields in parse_table(vlan_port_out, min_fields=5):
+            if '/' not in fields[0]:
+                continue
+            try:
+                priority_by_port[fields[0]] = int(fields[-1])
+            except (ValueError, IndexError):
+                pass
+
         # Build interfaces dict
         interfaces = {}
         for port, mode in trust_by_port.items():
             interfaces[port] = {
                 'trust_mode': mode,
+                'default_priority': priority_by_port.get(port, 0),
                 'shaping_rate': 0,  # not available via CLI
                 'queues': dict(queues),  # same for all ports in CLI
             }
@@ -2596,7 +2608,8 @@ class SSHHIOS:
         }
 
     def set_qos(self, interface, trust_mode=None, shaping_rate=None,
-                queue=None, scheduler=None, min_bw=None, max_bw=None):
+                queue=None, scheduler=None, min_bw=None, max_bw=None,
+                default_priority=None):
         """Set per-port QoS trust mode or queue scheduling."""
         if trust_mode is not None and trust_mode not in self._QOS_TRUST_CLI:
             raise ValueError(
@@ -2626,6 +2639,16 @@ class SSHHIOS:
                     if 'Error' in resp or 'Invalid' in resp:
                         raise ValueError(f"Unknown interface '{iface}'")
                     self.cli(f'classofservice trust {trust_mode}')
+                    self.cli('exit')
+
+            # Default priority is per-interface
+            if default_priority is not None:
+                for iface in interfaces:
+                    output = self.cli(f'interface {iface}')
+                    resp = output.get(f'interface {iface}', '')
+                    if 'Error' in resp or 'Invalid' in resp:
+                        raise ValueError(f"Unknown interface '{iface}'")
+                    self.cli(f'vlan priority {int(default_priority)}')
                     self.cli('exit')
 
             # Queue scheduling is global

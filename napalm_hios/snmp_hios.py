@@ -274,6 +274,9 @@ OID_hm2CosQueueSchedulerType   = '1.3.6.1.4.1.248.12.3.3.2.4.1.2'
 OID_hm2CosQueueMinBandwidth    = '1.3.6.1.4.1.248.12.3.3.2.4.1.3'
 OID_hm2CosQueueMaxBandwidth    = '1.3.6.1.4.1.248.12.3.3.2.4.1.4'
 
+# P-BRIDGE-MIB — Port default priority (indexed by dot1dBasePort)
+OID_dot1dPortDefaultUserPriority = '1.3.6.1.2.1.17.6.1.3.1.1'
+
 # HM2-L2FORWARDING-MIB — Traffic Class Mapping  1.3.6.1.4.1.248.11.30.1.2.*
 # dot1p → TC (indexed by priority 0-7)
 OID_hm2TrafficClass             = '1.3.6.1.4.1.248.11.30.1.2.1.1.2'
@@ -3708,6 +3711,15 @@ class SNMPHIOS:
             'max_bw': OID_hm2CosQueueMaxBandwidth,
         }, engine)
 
+        # Default priority (indexed by dot1dBasePort — need bridge-port→ifIndex map)
+        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
+        priority_data = await self._walk(OID_dot1dPortDefaultUserPriority, engine)
+        priority_by_idx = {}
+        for bp_num, prio_val in priority_data.items():
+            ifindex_val = bp_data.get(bp_num)
+            if ifindex_val is not None:
+                priority_by_idx[str(ifindex_val)] = _snmp_int(prio_val)
+
         # Build per-port queue dict from compound suffix ifIndex.queueIndex
         queues_by_idx = {}
         for suffix, cols in queue_rows.items():
@@ -3737,6 +3749,7 @@ class SNMPHIOS:
             interfaces[name] = {
                 'trust_mode': self._QOS_TRUST_MODE.get(
                     _snmp_int(cols.get('trust', 2)), 'dot1p'),
+                'default_priority': priority_by_idx.get(suffix, 0),
                 'shaping_rate': _snmp_int(
                     shaping_cols.get('shaping', 0)),
                 'queues': queues_by_idx.get(suffix, {}),
@@ -3748,15 +3761,18 @@ class SNMPHIOS:
         }
 
     def set_qos(self, interface, trust_mode=None, shaping_rate=None,
-                queue=None, scheduler=None, min_bw=None, max_bw=None):
+                queue=None, scheduler=None, min_bw=None, max_bw=None,
+                default_priority=None):
         """Set per-port QoS trust mode, shaping rate, or queue scheduling."""
         return asyncio.run(self._set_qos_async(
             interface, trust_mode, shaping_rate,
             queue, scheduler, min_bw, max_bw,
+            default_priority,
         ))
 
     async def _set_qos_async(self, interface, trust_mode, shaping_rate,
-                              queue, scheduler, min_bw, max_bw):
+                              queue, scheduler, min_bw, max_bw,
+                              default_priority=None):
         interfaces = ([interface] if isinstance(interface, str)
                       else list(interface))
         engine = SnmpEngine()
@@ -3784,6 +3800,13 @@ class SNMPHIOS:
                 "queue index (0-7) required when setting "
                 "scheduler, min_bw, or max_bw")
 
+        # Build ifIndex→bridgePort reverse map for default_priority
+        idx_to_bp = {}
+        if default_priority is not None:
+            bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
+            idx_to_bp = {str(ifidx_val): bp_num
+                         for bp_num, ifidx_val in bp_data.items()}
+
         sets = []
         for iface in interfaces:
             ifidx = name_to_idx.get(iface)
@@ -3797,6 +3820,12 @@ class SNMPHIOS:
                 sets.append((
                     f"{OID_hm2CosQueueIntfShapingRate}.{ifidx}",
                     Unsigned32(int(shaping_rate))))
+            if default_priority is not None:
+                bp = idx_to_bp.get(ifidx)
+                if bp is not None:
+                    sets.append((
+                        f"{OID_dot1dPortDefaultUserPriority}.{bp}",
+                        Integer32(int(default_priority))))
             if queue_needed:
                 q_suffix = f"{ifidx}.{int(queue)}"
                 if scheduler is not None:

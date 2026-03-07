@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.13.0
+
+### Driver: `default_priority` in `get_qos()` / `set_qos()`
+
+All 3 backends now read and write `dot1dPortDefaultUserPriority` (P-BRIDGE-MIB) — the per-port default 802.1p priority stamped on untagged ingress frames.
+
+- **`get_qos()`** returns `default_priority` (int 0-7) per interface alongside existing `trust_mode`, `shaping_rate`, `queues`
+- **`set_qos(interface, default_priority=N)`** sets default PCP. New keyword argument, all other parameters unchanged
+- MOPS: P-BRIDGE-MIB `dot1dPortPriorityEntry` bundled into existing `_get_with_ifindex()` call (zero extra HTTP requests)
+- SNMP: `OID_dot1dPortDefaultUserPriority` walk with bridge-port→ifIndex mapping
+- SSH: parses Priority column from `show vlan port`, sets via `vlan priority <N>` in interface config mode
+
+### VIKTOR: `qos` subcommand
+
+Set default PCP on edge ports carrying a VLAN, fleet-wide:
+
+```
+viktor qos 5 --pcp 3                    # edge ports carrying VLAN 5 → PCP 3
+viktor qos 5 --pcp 3 --include-trunk    # edge + trunk ports
+viktor qos 5,6,10 --pcp 3              # multiple VLANs
+```
+
+- LLDP-based edge/trunk classification (same as `auto-trunk`)
+- VLAN egress table for port→VLAN membership lookup
+- `--include-trunk` to also set PCP on inter-switch links
+- MOPS staging, parallel deployment, `--dry-run` support
+
+## CLAMPS
+
+### Structured before/after logging
+
+Phase 0 gather now dumps full structured device state (MRP, RSTP, loop protection, auto-disable, storm control dicts) to the logfile as JSON. BEFORE state logged unconditionally on every run. `--verify` flag re-gathers AFTER state post-deploy for audit comparison. Console stays clean — JSON goes to logfile only.
+
+### Storm control unit option
+
+New `storm_control_unit` config option (`pps` or `percent`, default `pps`). Previously hardcoded to pps.
+
 ## 1.12.1
 
 ### Bug fix: get_vlan_egress() now includes VLANs with zero port membership
