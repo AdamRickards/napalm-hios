@@ -1605,8 +1605,11 @@ def cmd_qos(args, config, connections, fleet_data):
 # ---------------------------------------------------------------------------
 
 def interactive_mode():
-    """80s warez-patcher-style guided wizard for VIKTOR."""
-    import subprocess
+    """REPL-style multi-turn session for VIKTOR.
+
+    Connect once, stay connected, run multiple operations in a loop.
+    Save prompt at quit — single NVM write for the whole session.
+    """
 
     # ANSI
     CY = '\033[36m'; MG = '\033[35m'; YL = '\033[33m'
@@ -1630,7 +1633,6 @@ def interactive_mode():
         print(f'  {BD}{title}{RS}\n')
 
     def pick(text, options, default=1):
-        """options = list of (label, value) tuples. Returns value."""
         for i, (label, _) in enumerate(options, 1):
             mark = f'{YL}▸{RS}' if i == default else ' '
             print(f'  {mark} {CY}{i}{RS}) {label}')
@@ -1656,29 +1658,47 @@ def interactive_mode():
         val = input(f'  {GR}▸{RS} {text} {DM}[{hint}]{RS}: ').strip().lower()
         return val in ('y', 'yes') if val else default
 
+    def pause():
+        input(f'\n  {DM}Press Enter...{RS}')
+
+    connections = {}
     try:
-        # ── 1. Devices ──
-        step('STEP 1 ─── DEVICES')
+        # ── 1. Credentials & Protocol ──
+        step('STEP 1 ─── CREDENTIALS')
+        username = ask('Username', 'admin')
+        password = ask('Password', 'private')
+        protocol = pick('Protocol', [
+            ('MOPS — HTTPS, atomic writes (recommended)', 'mops'),
+            ('SNMP — SNMPv3, no session state', 'snmp'),
+            ('SSH — CLI parsing', 'ssh'),
+        ])
+
+        # ── 2. Devices ──
+        step('STEP 2 ─── DEVICES')
 
         cfg_path = get_resource_path('script.cfg')
-        cfg = None
+        cfg_devices = []
         use_cfg = False
-        devices = []
 
         if os.path.exists(cfg_path):
             try:
                 cfg = parse_config(cfg_path)
+                cfg_devices = cfg.get('devices', [])
             except Exception:
-                cfg = None
+                pass
 
-        if cfg and cfg['devices']:
-            print(f'  Found {CY}script.cfg{RS} with {len(cfg["devices"])} device(s):')
-            for ip in cfg['devices']:
+        if cfg_devices:
+            print(f'  Found {CY}script.cfg{RS} with {len(cfg_devices)} device(s):')
+            for ip in cfg_devices:
                 print(f'    {CY}{ip}{RS}')
             print()
             if yesno('Use these?', default=True):
-                devices = cfg['devices']
+                devices = cfg_devices
                 use_cfg = True
+            else:
+                devices = []
+        else:
+            devices = []
 
         if not devices:
             raw = ask('Enter IPs (comma, range, or CIDR)')
@@ -1689,173 +1709,279 @@ def interactive_mode():
             print(f'\n  {YL}No devices. Exiting.{RS}\n')
             return
 
-        # ── 2. Operation ──
-        step('STEP 2 ─── OPERATION')
-
-        ops = [
-            ('List VLANs',            'list'),
-            ('Create VLAN',           'create'),
-            ('Delete VLAN',           'delete'),
-            ('Rename VLAN',           'rename'),
-            ('Set access ports',      'access'),
-            ('Set trunk ports',       'trunk'),
-            ('Auto-trunk (LLDP)',     'auto-trunk'),
-            ('QoS — set default PCP', 'qos'),
-            ('Audit',                 'audit'),
-            ('Name consistency',      'names'),
-        ]
-        op = pick('Select', ops)
-
-        # ── 3. Parameters ──
-        OP_TITLE = {
-            'list': 'LIST VLANS', 'create': 'CREATE VLAN',
-            'delete': 'DELETE VLAN', 'rename': 'RENAME VLAN',
-            'access': 'ACCESS PORTS', 'trunk': 'TRUNK PORTS',
-            'auto-trunk': 'AUTO-TRUNK', 'qos': 'QOS — DEFAULT PCP',
-            'audit': 'AUDIT', 'names': 'NAME CONSISTENCY',
-        }
-        step(f'STEP 3 ─── {OP_TITLE[op]}')
-
-        argv = []
-        is_readonly = op in ('list', 'audit')
-
-        if op == 'list':
-            print(f'  {DM}No parameters needed.{RS}\n')
-            argv = ['vlan', 'list']
-        elif op == 'create':
-            vid = ask('VLAN ID')
-            name = ask('VLAN name (optional)')
-            argv = ['vlan', 'create', vid]
-            if name:
-                argv += ['--name', name]
-        elif op == 'delete':
-            vid = ask('VLAN ID')
-            argv = ['vlan', 'delete', vid]
-        elif op == 'rename':
-            vid = ask('VLAN ID')
-            name = ask('New name')
-            argv = ['vlan', 'rename', vid, name]
-        elif op == 'access':
-            ports = ask('Ports (e.g. 1/1-1/8)')
-            vid = ask('Access VLAN ID')
-            name = ask('Auto-create VLAN name (optional)')
-            argv = ['access', ports, vid]
-            if name:
-                argv += ['--name', name]
-        elif op == 'trunk':
-            ports = ask('Ports (e.g. 1/5,1/6)')
-            vids = ask('VLAN IDs (comma-separated)')
-            argv = ['trunk', ports, vids]
-        elif op == 'auto-trunk':
-            vid = ask('VLAN ID')
-            name = ask('Auto-create VLAN name (optional)')
-            argv = ['auto-trunk', vid]
-            if name:
-                argv += ['--name', name]
-        elif op == 'qos':
-            vids = ask('VLAN ID(s)')
-            pcp = ask('PCP value (0-7)')
-            if yesno('Include trunk ports?'):
-                argv = ['qos', vids, '--pcp', pcp, '--include-trunk']
-            else:
-                argv = ['qos', vids, '--pcp', pcp]
-        elif op == 'audit':
-            print(f'  {DM}Read-only health check. No parameters needed.{RS}\n')
-            argv = ['--audit']
-        elif op == 'names':
-            print(f'  {DM}Fix naming inconsistencies across fleet.{RS}\n')
-            argv = ['--names']
-
-        # ── 4. Ring filter ──
-        step('STEP 4 ─── RING FILTER')
-        print(f'  {DM}Limit operation to devices in a specific MRP ring?{RS}\n')
+        # ── 3. Ring filter ──
+        step('STEP 3 ─── RING FILTER')
+        print(f'  {DM}Limit operations to devices in a specific MRP ring?{RS}\n')
         ring = None
         if yesno('Filter by ring VLAN?'):
-            ring = ask('Ring VLAN ID')
+            ring_str = ask('Ring VLAN ID')
+            ring = int(ring_str)
 
-        # ── 5. Review ──
-        step('STEP 5 ─── REVIEW')
+        # Build config
+        config = {
+            'username': username,
+            'password': password,
+            'protocol': protocol,
+            'devices': devices,
+            'ring': ring,
+            'save': False,
+            'debug': False,
+        }
 
-        # Build display command
-        cmd_display = ['viktor.py']
-        if ring:
-            cmd_display += ['-m', ring]
-        cmd_display += argv
-        cli_str = ' '.join(cmd_display)
+        # ── Connect ──
+        cls()
+        banner()
+        print(f'  {BD}CONNECTING{RS}\n')
 
-        src = 'script.cfg' if use_cfg else 'manual'
-        w = 54
-        print(f'  {CY}┌{"─" * w}┐{RS}')
-        print(f'  {CY}│{RS}  Devices:  {YL}{len(devices)}{RS} ({src}){" " * (w - 15 - len(str(len(devices))) - len(src))}{CY}│{RS}')
-        if ring:
-            print(f'  {CY}│{RS}  Ring:     VLAN {YL}{ring}{RS}{" " * (w - 17 - len(str(ring)))}{CY}│{RS}')
-        print(f'  {CY}│{RS}  {DM}{cli_str:<{w - 2}}{RS}{CY}│{RS}')
-        print(f'  {CY}└{"─" * w}┘{RS}')
-        print()
-
-        action = pick('Go', [
-            ('Dry run — preview only', 'dry'),
-            ('Run live',               'live'),
-            ('Quit',                   'quit'),
-        ])
-
-        if action == 'quit':
-            print(f'\n  {DM}Later.{RS}\n')
+        from napalm import get_network_driver
+        driver = get_network_driver('hios')
+        connections = connect_all(driver, config)
+        if not connections:
+            print(f'\n  {YL}No devices reachable. Exiting.{RS}\n')
             return
 
-        # Build subprocess command
-        def build_cmd(dry_run=False, save=False):
-            cmd = [sys.executable, os.path.abspath(__file__)]
-            if use_cfg:
-                pass  # default script.cfg
-            else:
-                cmd += ['--ips', ','.join(devices)]
-            if cfg:
-                cmd += ['-u', cfg['username'], '-p', cfg['password']]
-                cmd += ['--protocol', cfg['protocol']]
-            if ring:
-                cmd += ['-m', ring]
-            if dry_run:
-                cmd.append('--dry-run')
-            if save:
-                cmd.append('--save')
-            cmd += argv
-            return cmd
+        # Initial gather (always with LLDP for max flexibility)
+        print("  Gathering VLAN data...")
+        fleet_data = gather_fleet(connections, need_lldp=True)
+        if not fleet_data:
+            print(f'\n  {YL}No data gathered. Exiting.{RS}\n')
+            close_all(connections)
+            return
 
-        print()
-        if action == 'dry':
-            subprocess.run(build_cmd(dry_run=True))
-            print()
-            if not yesno('Run live?'):
-                print(f'\n  {DM}Done.{RS}\n')
+        for ip in config['devices']:
+            if ip in fleet_data:
+                d = fleet_data[ip]
+                n_vlans = len(d['egress'])
+                print(f"    {ip:<17s}{d['hostname']:<21s}{n_vlans} VLANs")
+
+        # Ring filter
+        if ring:
+            fleet_data = filter_ring_members(fleet_data, ring)
+            if not fleet_data:
+                print(f'\n  {YL}No devices have VLAN {ring} in egress table.{RS}\n')
+                close_all(connections)
                 return
+            connections = {ip: dev for ip, dev in connections.items()
+                          if ip in fleet_data}
+            print(f"\n  Ring {ring}: {len(fleet_data)} member(s)")
+            for ip, data in fleet_data.items():
+                rp = ', '.join(sorted(data.get('ring_ports', set()),
+                                      key=natural_sort_key))
+                print(f"    {ip:<17s}{data['hostname']:<21s}ring ports: {rp}")
 
-        # Live run
-        do_save = False
-        if not is_readonly:
-            do_save = yesno('Save to NVM after?')
-        print()
-        subprocess.run(build_cmd(save=do_save))
+        pause()
 
-        # Offer to save cfg if devices were entered manually
+        changed = False
+
+        # ── REPL loop ──
+        while True:
+            cls()
+            banner()
+            n_dev = len(connections)
+            ring_tag = f'  ring {ring}' if ring else ''
+            print(f'  {BD}SESSION{RS}  {CY}{n_dev}{RS} device(s) via {protocol.upper()}{ring_tag}\n')
+
+            ops = [
+                ('List VLANs',            'list'),
+                ('Create VLAN',           'create'),
+                ('Delete VLAN',           'delete'),
+                ('Rename VLAN',           'rename'),
+                ('Set access ports',      'access'),
+                ('Set trunk ports',       'trunk'),
+                ('Auto-trunk (LLDP)',     'auto-trunk'),
+                ('QoS — set default PCP', 'qos'),
+                ('Audit',                 'audit'),
+                ('Name consistency',      'names'),
+                ('Quit',                  'quit'),
+            ]
+            op = pick('What next?', ops)
+
+            if op == 'quit':
+                break
+
+            # ── Gather parameters ──
+            print()
+            mock = argparse.Namespace(dry_run=False)
+            cmd_func = None
+
+            if op == 'list':
+                cmd_func = cmd_vlan_list
+
+            elif op == 'create':
+                vid = ask('VLAN ID')
+                name = ask('VLAN name (optional)')
+                mock.vlan_id = int(vid)
+                mock.name = name
+                cmd_func = cmd_vlan_create
+
+            elif op == 'delete':
+                vid = ask('VLAN ID')
+                mock.vlan_id = int(vid)
+                if mock.vlan_id == 1:
+                    print(f'\n  {YL}Cannot delete VLAN 1 (default VLAN).{RS}')
+                    pause()
+                    continue
+                cmd_func = cmd_vlan_delete
+
+            elif op == 'rename':
+                vid = ask('VLAN ID')
+                name = ask('New name')
+                mock.vlan_id = int(vid)
+                mock.name = name
+                cmd_func = cmd_vlan_rename
+
+            elif op == 'access':
+                ports = ask('Ports (e.g. 1/1-1/8)')
+                vid = ask('Access VLAN ID')
+                name = ask('Auto-create VLAN name (optional)')
+                mock.ports = ports
+                mock.vlan_id = int(vid)
+                mock.name = name if name else None
+                cmd_func = cmd_access
+
+            elif op == 'trunk':
+                ports = ask('Ports (e.g. 1/5,1/6)')
+                vids = ask('VLAN IDs (comma-separated)')
+                mock.ports = ports
+                mock.vlan_ids = vids
+                cmd_func = cmd_trunk
+
+            elif op == 'auto-trunk':
+                vid = ask('VLAN ID')
+                name = ask('Auto-create VLAN name (optional)')
+                mock.vlan_id = int(vid)
+                mock.name = name if name else None
+                cmd_func = cmd_auto_trunk
+
+            elif op == 'qos':
+                vids = ask('VLAN ID(s)')
+                pcp = ask('PCP value (0-7)')
+                inc_trunk = yesno('Include trunk ports?')
+                mock.vlan_ids = vids
+                mock.pcp = int(pcp)
+                mock.include_trunk = inc_trunk
+                cmd_func = cmd_qos
+
+            elif op == 'audit':
+                cmd_func = cmd_audit
+
+            elif op == 'names':
+                cmd_func = cmd_names
+
+            if not cmd_func:
+                continue
+
+            # ── Execute ──
+            is_readonly = op in ('list', 'audit')
+
+            if is_readonly:
+                try:
+                    cmd_func(mock, config, connections, fleet_data)
+                except SystemExit:
+                    pass
+                except Exception as e:
+                    print(f'\n  {YL}Error: {e}{RS}')
+                pause()
+                continue
+
+            # Mutating — offer dry/live/back
+            has_dry_run = op in ('access', 'trunk', 'auto-trunk', 'qos', 'names')
+
+            if has_dry_run:
+                action = pick('Go', [
+                    ('Dry run — preview only', 'dry'),
+                    ('Run live',               'live'),
+                    ('Back',                   'back'),
+                ])
+            else:
+                # Simple mutations (create/delete/rename) — confirm or back
+                n = len(connections)
+                if op == 'create':
+                    label = f'VLAN {mock.vlan_id}'
+                    if mock.name:
+                        label += f' ({mock.name})'
+                    print(f'  Will create {label} on {n} device(s)')
+                elif op == 'delete':
+                    print(f'  Will delete VLAN {mock.vlan_id} from {n} device(s)')
+                elif op == 'rename':
+                    print(f'  Will rename VLAN {mock.vlan_id} → "{mock.name}" on {n} device(s)')
+                print()
+                action = pick('Go', [
+                    ('Run live', 'live'),
+                    ('Back',     'back'),
+                ])
+
+            if action == 'back':
+                continue
+
+            if action == 'dry':
+                mock.dry_run = True
+                try:
+                    cmd_func(mock, config, connections, fleet_data)
+                except SystemExit:
+                    pass
+                except Exception as e:
+                    print(f'\n  {YL}Error: {e}{RS}')
+                print()
+                if not yesno('Run live?'):
+                    pause()
+                    continue
+                mock.dry_run = False
+
+            # Live run
+            print()
+            try:
+                cmd_func(mock, config, connections, fleet_data)
+                changed = True
+            except SystemExit:
+                pass
+            except Exception as e:
+                print(f'\n  {YL}Error: {e}{RS}')
+
+            # Re-gather after mutation
+            print(f'\n  {DM}Refreshing fleet data...{RS}')
+            fleet_data = gather_fleet(connections, need_lldp=True)
+
+            pause()
+
+        # ── Quit ──
+        if changed:
+            print()
+            if yesno('Save all changes to NVM?'):
+                print()
+                save_ok = 0
+                for ip, device in connections.items():
+                    try:
+                        device.save_config()
+                        save_ok += 1
+                        print(f'  {GR}[OK]{RS}   {ip}')
+                    except Exception as e:
+                        print(f'  {YL}[FAIL]{RS} {ip} — {e}')
+                print(f'\n  {save_ok}/{len(connections)} saved to NVM')
+
         if not use_cfg and devices:
             print()
             if yesno('Save devices to script.cfg for next time?'):
                 with open(cfg_path, 'w') as f:
                     f.write('# VIKTOR — VLAN Intent, Knowledgeable Topology-Optimized Rules\n')
-                    f.write(f'username = {cfg["username"] if cfg else "admin"}\n')
-                    f.write(f'password = {cfg["password"] if cfg else "private"}\n')
-                    f.write(f'protocol = {cfg["protocol"] if cfg else "mops"}\n')
+                    f.write(f'username = {username}\n')
+                    f.write(f'password = {password}\n')
+                    f.write(f'protocol = {protocol}\n')
+                    if ring:
+                        f.write(f'ring = {ring}\n')
                     f.write('\n# Devices\n')
                     for ip in devices:
                         f.write(f'{ip}\n')
                 print(f'\n  {GR}Saved to {cfg_path}{RS}')
 
-        print(f'\n  {DM}Done.{RS}\n')
+        close_all(connections)
+        print(f'\n  {DM}Later.{RS}\n')
 
     except KeyboardInterrupt:
+        close_all(connections)
         print(f'\n\n  {DM}Interrupted.{RS}\n')
     except EOFError:
+        close_all(connections)
         print(f'\n\n  {DM}Bye.{RS}\n')
 
 

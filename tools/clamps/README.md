@@ -19,6 +19,16 @@ ring health, and supports live edge strategy migration — all from a single con
 
 ## Quick Start
 
+Interactive wizard — walks you through credentials, devices, ring settings, and edge protection step by step:
+
+```bash
+python clamp.py -i
+```
+
+Also launches automatically if no `script.cfg` exists and no arguments are given.
+
+Or use a config file:
+
 1. Edit `script.cfg` with your device IPs and credentials
 2. Deploy: `python clamp.py`
 3. Verify the ring is healthy (tool does this automatically)
@@ -152,6 +162,7 @@ Not recommended for production. Use `rstp-full` instead.
 
 ```bash
 python clamp.py                          # default: rstp-full
+python clamp.py -i                       # interactive wizard
 python clamp.py --edge loop              # loop protection
 python clamp.py --edge rstp              # legacy RSTP
 python clamp.py -c ring2.cfg             # custom config file

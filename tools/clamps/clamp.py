@@ -60,12 +60,313 @@ def log_device_state_json(label, device_facts):
         logging.info(f"[{ip}] {label}: {json.dumps(facts, default=_json_default, indent=2)}")
 
 
+def interactive_mode():
+    """80s warez-patcher-style guided wizard for CLAMPS."""
+    import subprocess
+
+    # ANSI
+    CY = '\033[36m'; MG = '\033[35m'; YL = '\033[33m'
+    GR = '\033[32m'; BD = '\033[1m'; DM = '\033[2m'; RS = '\033[0m'
+
+    def cls():
+        print('\033[2J\033[H', end='', flush=True)
+
+    def banner():
+        print(f"""
+  {MG}{BD}╔═╗╦  ╔═╗╔╦╗╔═╗╔═╗{RS}
+  {MG}{BD}║  ║  ╠═╣║║║╠═╝╚═╗{RS}
+  {MG}{BD}╚═╝╩═╝╩ ╩╩ ╩╩  ╚═╝{RS}
+  {DM}Configuration of Loops, Access, MRP, Protection, and Sub-rings{RS}
+  {CY}{'━' * 62}{RS}
+""")
+
+    def step(title):
+        cls()
+        banner()
+        print(f'  {BD}{title}{RS}\n')
+
+    def pick(text, options, default=1):
+        for i, (label, _) in enumerate(options, 1):
+            mark = f'{YL}▸{RS}' if i == default else ' '
+            print(f'  {mark} {CY}{i}{RS}) {label}')
+        print()
+        while True:
+            raw = input(f'  {GR}▸{RS} {text} [{default}]: ').strip()
+            if not raw:
+                return options[default - 1][1]
+            try:
+                idx = int(raw)
+                if 1 <= idx <= len(options):
+                    return options[idx - 1][1]
+            except ValueError:
+                pass
+            print(f'  {YL}Pick 1–{len(options)}{RS}')
+
+    def ask(text, default=''):
+        hint = f' {DM}[{default}]{RS}' if default else ''
+        return input(f'  {GR}▸{RS} {text}{hint}: ').strip() or default
+
+    def yesno(text, default=False):
+        hint = 'Y/n' if default else 'y/N'
+        val = input(f'  {GR}▸{RS} {text} {DM}[{hint}]{RS}: ').strip().lower()
+        return val in ('y', 'yes') if val else default
+
+    try:
+        # ── 1. Credentials ──
+        step('STEP 1 ─── CREDENTIALS')
+        username = ask('Username', 'admin')
+        password = ask('Password', 'private')
+        protocol = pick('Protocol', [
+            ('MOPS — HTTPS, atomic writes (recommended)', 'mops'),
+            ('SNMP — SNMPv3, no session state', 'snmp'),
+            ('SSH — CLI parsing', 'ssh'),
+        ])
+
+        # ── 2. Main ring devices ──
+        step('STEP 2 ─── MAIN RING DEVICES')
+        print(f'  {DM}Enter devices one at a time. First device = Ring Manager by default.{RS}')
+        print(f'  {DM}Default ring ports: 1/5 + 1/6. Override per device if needed.{RS}\n')
+
+        default_p1 = ask('Default ring port 1', '1/5')
+        default_p2 = ask('Default ring port 2', '1/6')
+        print()
+
+        main_devices = []
+        while True:
+            ip = ask(f'Device IP (enter to finish)' if main_devices else 'Ring Manager IP')
+            if not ip:
+                if len(main_devices) < 2:
+                    print(f'  {YL}Need at least 2 devices for a ring.{RS}')
+                    continue
+                break
+            if not is_valid_ipv4(ip):
+                print(f'  {YL}Invalid IP.{RS}')
+                continue
+
+            p1 = ask(f'  Ports for {ip}', f'{default_p1} {default_p2}')
+            ports = p1.split()
+            port1 = ports[0] if len(ports) >= 1 else default_p1
+            port2 = ports[1] if len(ports) >= 2 else default_p2
+
+            role = 'manager' if not main_devices else 'client'
+            main_devices.append({'ip': ip, 'port1': port1, 'port2': port2, 'role': role})
+            tag = f' {YL}[RM]{RS}' if role == 'manager' else ''
+            print(f'  {GR}+{RS} {ip} {port1} ↔ {port2}{tag}\n')
+
+        # ── 3. Sub-rings ──
+        step('STEP 3 ─── SUB-RINGS')
+        print(f'  {DM}Sub-rings branch off the main ring at two points (SRM + RSRM).{RS}')
+        print(f'  {DM}Each sub-ring needs its own VLAN and at least the two branch points.{RS}\n')
+
+        sub_rings = []
+        while yesno('Add a sub-ring?'):
+            print()
+            sr_vlan = ask('Sub-ring VLAN ID')
+
+            main_ips = [d['ip'] for d in main_devices]
+            print(f'\n  {DM}Main ring devices: {", ".join(main_ips)}{RS}')
+
+            srm_ip = ask('SRM (sub-ring manager) IP')
+            srm_port = ask(f'  SRM port on {srm_ip}')
+
+            rsrm_ip = ask('RSRM (redundant sub-ring manager) IP')
+            rsrm_port = ask(f'  RSRM port on {rsrm_ip}')
+
+            sr_clients = []
+            print(f'\n  {DM}Add sub-ring clients (devices on the sub-ring, not branch points).{RS}')
+            while True:
+                rc_ip = ask('  RC IP (enter to finish)')
+                if not rc_ip:
+                    break
+                if not is_valid_ipv4(rc_ip):
+                    print(f'  {YL}Invalid IP.{RS}')
+                    continue
+                rc_ports = ask(f'    Ports for {rc_ip}', f'{default_p1} {default_p2}')
+                parts = rc_ports.split()
+                sr_clients.append({
+                    'ip': rc_ip,
+                    'port1': parts[0] if len(parts) >= 1 else default_p1,
+                    'port2': parts[1] if len(parts) >= 2 else default_p2,
+                })
+                print(f'  {GR}+{RS} RC {rc_ip}')
+
+            sub_rings.append({
+                'vlan': sr_vlan,
+                'srm': {'ip': srm_ip, 'port': srm_port},
+                'rsrm': {'ip': rsrm_ip, 'port': rsrm_port},
+                'clients': sr_clients,
+            })
+            print(f'\n  {GR}Sub-ring VLAN {sr_vlan}: SRM={srm_ip}:{srm_port} RSRM={rsrm_ip}:{rsrm_port} + {len(sr_clients)} client(s){RS}\n')
+
+        # ── 4. Ring settings ──
+        step('STEP 4 ─── RING SETTINGS')
+        vlan = ask('Main ring VLAN', '100')
+        recovery = pick('Recovery delay', [
+            ('200ms (standard)',   '200ms'),
+            ('500ms (slow)',       '500ms'),
+            ('30ms (fast)',        '30ms'),
+            ('10ms (fastest)',     '10ms'),
+        ])
+
+        # ── 5. Edge protection ──
+        step('STEP 5 ─── EDGE PROTECTION')
+        edge = pick('Strategy', [
+            ('rstp-full — BPDU Guard + admin edge + auto-disable (recommended)', 'rstp-full'),
+            ('loop — keepalive-based, L2A+ only',                                'loop'),
+            ('rstp — legacy per-port disable (minimal protection)',               'rstp'),
+        ])
+
+        storm = yesno('Enable storm control on edge ports?', default=True)
+        storm_threshold = '100'
+        storm_unit = 'pps'
+        if storm:
+            storm_threshold = ask('  Broadcast threshold', '100')
+            storm_unit = pick('  Unit', [
+                ('pps (packets per second)', 'pps'),
+                ('percent',                  'percent'),
+            ])
+
+        timer_default = '30' if edge == 'rstp-full' else '0'
+        timer = ask('Auto-disable recovery timer (seconds, 0=stay down)', timer_default)
+
+        save_nvm = yesno('Save to NVM after ring verified?')
+
+        # ── 6. Review ──
+        step('STEP 6 ─── REVIEW')
+
+        w = 60
+        print(f'  {CY}┌{"─" * w}┐{RS}')
+        print(f'  {CY}│{RS}  Protocol:        {YL}{protocol.upper():<{w - 21}}{RS}{CY}│{RS}')
+        print(f'  {CY}│{RS}  Edge protection: {YL}{edge:<{w - 21}}{RS}{CY}│{RS}')
+        storm_str = f'broadcast {storm_threshold} {storm_unit}' if storm else 'disabled'
+        print(f'  {CY}│{RS}  Storm control:   {storm_str:<{w - 20}}{CY}│{RS}')
+        print(f'  {CY}│{RS}  Save to NVM:     {"yes" if save_nvm else "no (RAM only)":<{w - 20}}{CY}│{RS}')
+        print(f'  {CY}├{"─" * w}┤{RS}')
+        print(f'  {CY}│{RS}  {BD}Main Ring (VLAN {vlan}){RS}{" " * (w - 20 - len(vlan))}{CY}│{RS}')
+        for dev in main_devices:
+            tag = ' [RM]' if dev['role'] == 'manager' else ''
+            line = f'    {dev["ip"]:17s} {dev["port1"]} ↔ {dev["port2"]}{tag}'
+            print(f'  {CY}│{RS}{line:<{w}}{CY}│{RS}')
+        for sr in sub_rings:
+            print(f'  {CY}│{RS}  {BD}Sub-Ring (VLAN {sr["vlan"]}){RS}{" " * (w - 19 - len(sr["vlan"]))}{CY}│{RS}')
+            line = f'    {sr["srm"]["ip"]:17s} {sr["srm"]["port"]:<14s} [SRM]'
+            print(f'  {CY}│{RS}{line:<{w}}{CY}│{RS}')
+            line = f'    {sr["rsrm"]["ip"]:17s} {sr["rsrm"]["port"]:<14s} [RSRM]'
+            print(f'  {CY}│{RS}{line:<{w}}{CY}│{RS}')
+            for rc in sr['clients']:
+                line = f'    {rc["ip"]:17s} {rc["port1"]} ↔ {rc["port2"]}'
+                print(f'  {CY}│{RS}{line:<{w}}{CY}│{RS}')
+        print(f'  {CY}└{"─" * w}┘{RS}')
+        print()
+
+        action = pick('Go', [
+            ('Dry run — show plan only', 'dry'),
+            ('Deploy ring',              'live'),
+            ('Quit',                     'quit'),
+        ])
+
+        if action == 'quit':
+            print(f'\n  {DM}Later.{RS}\n')
+            return
+
+        # Build script.cfg content
+        cfg_lines = []
+        cfg_lines.append(f'username {username}')
+        cfg_lines.append(f'password {password}')
+        cfg_lines.append(f'protocol {protocol}')
+        cfg_lines.append(f'port1 {default_p1}')
+        cfg_lines.append(f'port2 {default_p2}')
+        cfg_lines.append(f'vlan {vlan}')
+        cfg_lines.append(f'recovery_delay {recovery}')
+        cfg_lines.append(f'edge_protection {edge}')
+        cfg_lines.append(f'auto_disable_timer {timer}')
+        if storm:
+            cfg_lines.append(f'storm_control true')
+            cfg_lines.append(f'storm_control_threshold {storm_threshold}')
+            cfg_lines.append(f'storm_control_unit {storm_unit}')
+        else:
+            cfg_lines.append(f'storm_control false')
+        cfg_lines.append(f'save {"true" if save_nvm else "false"}')
+        cfg_lines.append('')
+
+        # Main ring devices
+        for dev in main_devices:
+            parts = [dev['ip']]
+            if dev['port1'] != default_p1 or dev['port2'] != default_p2:
+                parts += [dev['port1'], dev['port2']]
+            if dev['role'] == 'manager':
+                parts.append('RM')
+            cfg_lines.append(' '.join(parts))
+
+        # Sub-ring devices
+        for sr in sub_rings:
+            cfg_lines.append('')
+            cfg_lines.append(f'{sr["srm"]["ip"]} SRM {sr["vlan"]} {sr["srm"]["port"]}')
+            cfg_lines.append(f'{sr["rsrm"]["ip"]} RSRM {sr["vlan"]} {sr["rsrm"]["port"]}')
+            for rc in sr['clients']:
+                parts = [rc['ip'], 'RC', sr['vlan']]
+                if rc['port1'] != default_p1 or rc['port2'] != default_p2:
+                    parts += [rc['port1'], rc['port2']]
+                cfg_lines.append(' '.join(parts))
+
+        # Write temp config
+        tmp_cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.interactive.cfg')
+        with open(tmp_cfg, 'w') as f:
+            f.write('\n'.join(cfg_lines) + '\n')
+
+        # Run clamp.py with the generated config
+        cmd = [sys.executable, os.path.abspath(__file__), '-c', tmp_cfg]
+        if action == 'dry':
+            cmd.append('--dry-run')
+
+        print()
+        subprocess.run(cmd)
+
+        if action == 'dry':
+            print()
+            if not yesno('Deploy ring?'):
+                try:
+                    os.remove(tmp_cfg)
+                except OSError:
+                    pass
+                print(f'\n  {DM}Done.{RS}\n')
+                return
+            # Run live
+            live_cmd = [sys.executable, os.path.abspath(__file__), '-c', tmp_cfg]
+            print()
+            subprocess.run(live_cmd)
+
+        # Clean up temp config
+        try:
+            os.remove(tmp_cfg)
+        except OSError:
+            pass
+
+        # Offer to save as script.cfg
+        print()
+        if yesno('Save this configuration as script.cfg?'):
+            save_path = get_resource_path('script.cfg')
+            with open(save_path, 'w') as f:
+                f.write('# CLAMPS — Generated by interactive mode\n')
+                f.write('\n'.join(cfg_lines) + '\n')
+            print(f'\n  {GR}Saved to {save_path}{RS}')
+
+        print(f'\n  {DM}Done.{RS}\n')
+
+    except KeyboardInterrupt:
+        print(f'\n\n  {DM}Interrupted.{RS}\n')
+    except EOFError:
+        print(f'\n\n  {DM}Bye.{RS}\n')
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Deploy MRP ring across HiOS switches')
     parser.add_argument('-c', '--config', default='script.cfg',
                         help='Path to configuration file (default: script.cfg)')
     parser.add_argument('-t', '--timeout', type=int, default=30,
                         help='Connection timeout in seconds (default: 30)')
+    parser.add_argument('-i', '--interactive', action='store_true',
+                        help='Guided interactive wizard')
     parser.add_argument('--debug', action='store_true',
                         help='Enable debug logging (MOPS XML detail)')
     parser.add_argument('--dry-run', action='store_true',
@@ -1291,6 +1592,13 @@ def deploy_edge_protection(config, connections, device_facts, l2s_devices):
 
 def main():
     args = parse_arguments()
+
+    # Interactive mode: explicit -i, or no script.cfg and no args
+    if args.interactive:
+        return interactive_mode()
+    cfg_path = get_resource_path(args.config)
+    if not os.path.exists(cfg_path) and not args.dry_run and args.migrate_edge is None:
+        return interactive_mode()
 
     # Logging setup
     log_dir = os.path.join(

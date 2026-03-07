@@ -13,13 +13,13 @@ pip install napalm-hios
 
 ## Quick Start
 
-Interactive wizard — walks you through every option step by step:
+Interactive session — connects once, then loops through operations:
 
 ```bash
 python viktor.py -i
 ```
 
-Also launches automatically if no `script.cfg` exists and no arguments are given.
+Walks you through credentials, device selection, and ring filter, then opens a multi-turn REPL: pick an operation, set parameters, dry-run or go live, repeat. Save to NVM once at quit. Also launches automatically if no `script.cfg` exists and no arguments are given.
 
 Single device:
 
