@@ -5,7 +5,7 @@ Fleet-wide VLAN provisioning for Hirschmann HiOS switches. Connects to multiple 
 ## Requirements
 
 - Python 3.7+
-- `napalm-hios >= 1.8.0`
+- `napalm-hios >= 1.13.0`
 
 ```bash
 pip install napalm-hios
@@ -87,6 +87,19 @@ Discover inter-switch links via LLDP and tag them for a VLAN. Pairs with `-m` fo
 python viktor.py auto-trunk 5 --name "Cameras"       # all devices
 python viktor.py -m100 auto-trunk 5                   # ring 100 only
 ```
+
+### `qos`
+
+Set default PCP (802.1p priority) on ports carrying a VLAN. Uses LLDP to skip inter-switch trunk ports by default — only edge ports get changed.
+
+```bash
+python viktor.py qos 5 --pcp 3                    # edge ports carrying VLAN 5 → PCP 3
+python viktor.py qos 5 --pcp 3 --include-trunk    # edge + trunk ports
+python viktor.py qos 5,6,10 --pcp 3               # multiple VLANs
+python viktor.py -m100 qos 5 --pcp 3              # ring 100 only
+```
+
+PCP is a per-port setting (not per-VLAN). VIKTOR uses the VLAN as a selector — "find all ports carrying VLAN X, set their default PCP to Y." Requires `napalm-hios >= 1.13.0`.
 
 ## Fleet-Wide Operations
 

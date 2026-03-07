@@ -249,6 +249,61 @@ The `--names` subcommand uses majority vote to fix these: the name
 used by the most devices wins. Ties broken alphabetically. Empty
 names always lose to non-empty.
 
+## QoS via Naming Convention (future)
+
+VLAN name prefix determines QoS class. No explicit QoS configuration needed.
+
+```
+VLAN naming convention:
+  AC-*  → Application Control  (PCP 5)  PLC ↔ I/O
+  AM-*  → Application Monitoring (PCP 4)  PLC ↔ SCADA
+  NM-*  → Network Monitoring   (PCP 6)  SNMP, SSH, sFlow
+  NC-*  → Network Control      (PCP 7)  STP, MRP, LLDP
+  (none) → Best effort          (PCP 0-3)
+
+Priority hierarchy: NC > NM > AC > AM > *
+```
+
+The `--names` subcommand already enforces naming consistency across the fleet. Adding QoS meaning to the prefixes means `viktor rename` pointed at a fleet = instant QoS intent for the entire system.
+
+### Deployment flow
+
+```
+VLAN name prefix
+  → QoS class (from naming convention)
+    → read egress table (which ports carry this VLAN)
+      → configure PCP/TC mapping on those ports
+        → NILS verifies
+```
+
+### L3 boundary handling
+
+PCP dies at L3 hops (VLAN header rebuilt). DSCP (IP header) survives. Strategy depends on SW level of the edge device:
+
+```
+For each VLAN with a QoS prefix:
+  For each port carrying that VLAN:
+    Does the path to other members cross L3?
+      │
+      ├─ NO → PCP is sufficient
+      │
+      └─ YES → need DSCP to survive the hop
+               │
+               ├─ Edge is L2A → ACL stamps DSCP at edge (cheapest)
+               ├─ Edge is L2S → can't remark, upstream must handle
+               └─ Edge is L3  → trust DSCP on routed interface
+```
+
+NILS provides the topology graph and SW levels. VIKTOR applies the strategy.
+
+### Management VLAN
+
+Special case: `network management priority dot1p` + `network management priority ip-dscp` set fleet-wide. Management VLAN inherits NM class from naming (`NM-MGMT`) or is detected from device config (`get_management_vlan()`).
+
+### Engineering port exception
+
+`"role": "engineering"` declared in documentation (can't be discovered). Gets split ACL: dstip matching switch management IPs → NM priority, everything else → default. Management IPs known from NILS discovery data.
+
 ## Config Resolution
 
 ```
