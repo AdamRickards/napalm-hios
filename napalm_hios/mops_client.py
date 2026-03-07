@@ -396,14 +396,20 @@ class MOPSClient:
         """Query a single MIB node.
 
         Returns: list of entry dicts
+
+        Attribute-level errors (e.g. noSuchName on one column) are
+        silently ignored — the attribute is simply absent from the
+        returned dicts.  Callers already use .get() with defaults.
+        MIB-level and node-level errors still raise MOPSError.
         """
         xml = self._build_get_request([(mib_name, node_name, attributes)])
         response = self._send(xml)
         parsed = self._parse_response(response, decode_strings=decode_strings)
 
-        if parsed["errors"]:
-            err = parsed["errors"][0]
-            raise MOPSError(f"{err['mib']}/{err.get('node', '?')}: {err['error']}")
+        for err in parsed["errors"]:
+            if "attribute" not in err:
+                raise MOPSError(
+                    f"{err['mib']}/{err.get('node', '?')}: {err['error']}")
 
         return parsed["mibs"].get(mib_name, {}).get(node_name, [])
 

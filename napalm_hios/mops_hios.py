@@ -1978,7 +1978,8 @@ class MOPSHIOS:
             'protocols': protocols,
         }
 
-        # Relay — only on L3 devices (noSuchName on BRS50)
+        # Relay — only on L3 devices (noSuchName on L2, attribute
+        # simply absent from response thanks to partial-error tolerance)
         relay_raw = e.get("hm2NetHiDiscoveryRelay", "")
         if relay_raw:
             result['relay'] = _safe_int(relay_raw) == 1
