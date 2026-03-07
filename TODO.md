@@ -22,6 +22,7 @@
 ## Vendor-specific methods (driver)
 
 - [ ] `get_vlan_egress()` should include VLANs with zero port membership — currently all three backends (MOPS line 1315, SSH line 2530, SNMP line 1339) skip VLANs where `port_modes` is empty. The data is there from the MIB/CLI, the driver just drops it. Fix: always include the VLAN with an empty ports dict. Discovered via VIKTOR `vlan list` not showing freshly-created VLANs until a port is assigned
+- [ ] `set_mrp()` advanced_mode parameter — `get_mrp()` returns `advanced_mode` (OID `hm2MrpMRMReactOnLinkChange`) but `set_mrp()` doesn't accept it. Despite the "MRM" in the OID name, this applies to ALL ring participants. More critical on clients than the manager — enables link-down detection on RCs so they immediately signal the MRM to start recovery, dramatically faster failover in Hirschmann-only rings. Currently defaults to True on 10.3.04 but should be explicitly settable
 - [ ] `set_access_port(port(s), vlan_id)` — atomic access mode change via MOPS `set_multi`. Reads VLAN table + ifIndex, then in a single POST: add untagged on new VLAN, remove from old VLAN(s), set PVID. Currently VIKTOR does this as staged egress + separate PVID call (two round-trips, measurable blip). Same function design should accommodate management VLAN migration: egress + PVID + management VLAN ID all in one atomic set. MOPS-only (SSH/SNMP fall back to current multi-call approach). Benchmark improvement with [BLIP](tools/blip/TODO.md). **Mirror**: VIKTOR TODO in `tools/viktor/TODO.md` — update both when complete
 - [ ] Multi-get composition — `get_multi()` API that lets callers request multiple getters in one HTTP POST. Phase 0 gather (CLAMPS, VIKTOR, AARON) gets all facts in a single round-trip. Each additional safety check (SRM ports, VLAN egress, etc.) costs zero extra HTTP requests
 - [ ] `get_tftp()` / `set_tftp()` — TFTP config management. Two functions: manual config pull from TFTP server, and enable/disable auto-backup on save. **Unlocks**: [POLO](tools/polo/TODO.md), MOHAWC `--tftp-pull`
@@ -52,7 +53,9 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 - [x] v1.0 — `vlan list/create/delete/rename`, `access`, `trunk`, `auto-trunk`, `--audit`, `--names`, `--export`, `--import`, `-m` ring selector
 - [ ] `-fi` support — read device list from [site index](tools/SITE_INDEX.md)
 - [ ] `--entry` topology-safe ordering — cross-tool build
-- [ ] Management VLAN migration — needs driver `set_management_vlan()` / `set_management_ip()`
+- [ ] Management VLAN migration — furthest-first ordering, atomic entry switch config. See [VIKTOR TODO](tools/viktor/TODO.md) for full design
+- [ ] QoS via naming convention — VLAN name prefix (`AC-`/`AM-`/`NM-`/`NC-`) = automatic QoS. `--names` + rename = instant fleet-wide QoS intent. See [VIKTOR TODO](tools/viktor/TODO.md) for full design
+- [ ] L3 boundary DSCP mapping — auto-detect L3 hops that drop PCP, configure DSCP trust/remap. Strategy varies by SW level (L2A: edge ACL, L2S: upstream, L3: trust DSCP)
 
 ## MOHAWC
 
@@ -68,11 +71,19 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 - [Site Index](tools/SITE_INDEX.md) — shared `-fi` cross-tool JSON, master CLI, PyPI extras
 - [Architecture](tools/ARCHITECTURE.md) — 8 key design insights
 
-## CLI Reference Parser
+## QoS / TSN (future)
 
-- [ ] Parse `local/RM_CLI_HiOS-10300_Overview_en.pdf` (500+ pages) into structured JSON
-- [ ] Per-command metadata: section, title, page, command string, mode, privilege level, negate form, params
-- [ ] Output: `local/cli_reference.json` — speeds up all future SSH backend work
+- [x] `get_qos()` / `set_qos()` — per-port trust mode, queue scheduling, shaping rate. All 3 protocols
+- [x] `get_qos_mapping()` / `set_qos_mapping()` — global dot1p→TC and DSCP→TC mappings. All 3 protocols
+- [x] `get_management_priority()` / `set_management_priority()` — management frame priority (dot1p + ip-dscp). All 3 protocols
+- [x] `get_storm_control()` / `set_storm_control()` — per-port broadcast/multicast/unicast ingress rate limiting. All 3 protocols
+- [ ] TSN getters/setters — gate control lists, stream filters, PTP config, traffic scheduling. MOPS will have the OIDs (everything in HiOS backend is SNMP). Hard part is designing a sane abstraction over the MIB tables. **Unlocks**: NILS TSN enricher, deterministic scheduling config
+
+## CLI Reference Data
+
+Already parsed in `HiOS-Config-Utility/` — 1,849 commands across 4 HiOS versions (9.0, 9.2, 10.0, 10.3). Parser: `parse_cli_ref.py`, merged: `cli_ref_hios_merged.json`. Per-command: section, chapter, command, mode, privilege, format, no-form, params, `_since` version.
+
+- [x] `local/cli_ref_hios_merged.json` — 1,849 commands, 4 versions (9.0–10.3), version-aware `_since` field. Source: `HiOS-Config-Utility/cli_ref_hios_merged.json`. `local/` is gitignored
 
 ## Future — Config import/export + firmware update
 

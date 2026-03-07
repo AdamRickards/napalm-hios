@@ -68,6 +68,16 @@ from napalm_hios.snmp_hios import (
     OID_hm2FMProfileFingerprintVerified,
     OID_hm2ConfigWatchdogAdminStatus, OID_hm2ConfigWatchdogOperStatus,
     OID_hm2ConfigWatchdogTimeInterval, OID_hm2ConfigWatchdogTimerValue,
+    OID_hm2StormBucketType,
+    OID_sFlowVersion, OID_sFlowAgentAddress,
+    OID_sFlowRcvrOwner, OID_sFlowRcvrTimeout, OID_sFlowRcvrMaxDgramSize,
+    OID_sFlowRcvrAddressType, OID_sFlowRcvrAddress, OID_sFlowRcvrPort,
+    OID_sFlowRcvrDgramVersion,
+    OID_hm2CosMapIntfTrustMode, OID_hm2CosQueueNumQueuesPerPort,
+    OID_hm2CosQueueIntfShapingRate, OID_hm2CosQueueSchedulerType,
+    OID_hm2CosQueueMinBandwidth, OID_hm2CosQueueMaxBandwidth,
+    OID_hm2TrafficClass, OID_hm2CosMapIpDscpTrafficClass,
+    OID_hm2NetVlanPriority, OID_hm2NetIpDscpPriority,
 )
 from napalm.base.exceptions import ConnectionException
 
@@ -2240,6 +2250,493 @@ class TestSNMPHIOS(unittest.TestCase):
         self.assertEqual(len(set_calls), 1)
         self.assertIn(OID_dot1qVlanStaticRowStatus, set_calls[0][0])
         self.assertEqual(int(set_calls[0][1]), 6)  # destroy
+
+
+    # ------------------------------------------------------------------
+    # Storm Control
+    # ------------------------------------------------------------------
+
+    def test_get_storm_control_default(self):
+        """All ports disabled, percent unit, multi-bucket."""
+        async def mock_scalar(*oids):
+            return {OID_hm2StormBucketType: 2}
+
+        async def mock_walk(oid_map, engine=None):
+            return {
+                '1': {'unit': 1, 'bcast_mode': 2, 'bcast_threshold': 0,
+                      'mcast_mode': 2, 'mcast_threshold': 0,
+                      'ucast_mode': 2, 'ucast_threshold': 0},
+                '2': {'unit': 1, 'bcast_mode': 2, 'bcast_threshold': 0,
+                      'mcast_mode': 2, 'mcast_threshold': 0,
+                      'ucast_mode': 2, 'ucast_threshold': 0},
+            }
+
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '2': '1/2'}
+            return self.snmp._ifindex_map
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_storm_control()
+
+        self.assertEqual(result['bucket_type'], 'multi-bucket')
+        self.assertEqual(sorted(result['interfaces'].keys()), ['1/1', '1/2'])
+        p = result['interfaces']['1/1']
+        self.assertEqual(p['unit'], 'percent')
+        self.assertFalse(p['broadcast']['enabled'])
+        self.assertEqual(p['broadcast']['threshold'], 0)
+
+    def test_get_storm_control_active_port(self):
+        """Port with broadcast enabled at 100 pps."""
+        async def mock_scalar(*oids):
+            return {OID_hm2StormBucketType: 2}
+
+        async def mock_walk(oid_map, engine=None):
+            return {
+                '11': {'unit': 2, 'bcast_mode': 1, 'bcast_threshold': 100,
+                       'mcast_mode': 2, 'mcast_threshold': 0,
+                       'ucast_mode': 2, 'ucast_threshold': 0},
+            }
+
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'11': '1/11'}
+            return self.snmp._ifindex_map
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_storm_control()
+
+        p = result['interfaces']['1/11']
+        self.assertEqual(p['unit'], 'pps')
+        self.assertTrue(p['broadcast']['enabled'])
+        self.assertEqual(p['broadcast']['threshold'], 100)
+
+    def test_get_storm_control_single_bucket(self):
+        async def mock_scalar(*oids):
+            return {OID_hm2StormBucketType: 1}
+
+        async def mock_walk(oid_map, engine=None):
+            return {'1': {'unit': 1, 'bcast_mode': 2, 'bcast_threshold': 0,
+                          'mcast_mode': 2, 'mcast_threshold': 0,
+                          'ucast_mode': 2, 'ucast_threshold': 0}}
+
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1'}
+            return self.snmp._ifindex_map
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_storm_control()
+
+        self.assertEqual(result['bucket_type'], 'single-bucket')
+
+    def test_get_storm_control_skips_cpu(self):
+        async def mock_scalar(*oids):
+            return {OID_hm2StormBucketType: 2}
+
+        async def mock_walk(oid_map, engine=None):
+            return {
+                '1': {'unit': 1, 'bcast_mode': 2, 'bcast_threshold': 0,
+                      'mcast_mode': 2, 'mcast_threshold': 0,
+                      'ucast_mode': 2, 'ucast_threshold': 0},
+                '25': {'unit': 1, 'bcast_mode': 2, 'bcast_threshold': 0,
+                       'mcast_mode': 2, 'mcast_threshold': 0,
+                       'ucast_mode': 2, 'ucast_threshold': 0},
+            }
+
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '25': 'cpu/1'}
+            return self.snmp._ifindex_map
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_storm_control()
+
+        self.assertEqual(list(result['interfaces'].keys()), ['1/1'])
+
+    def test_set_storm_control_bad_unit(self):
+        with self.assertRaises(ValueError):
+            self.snmp.set_storm_control('1/1', unit='bps')
+
+    def test_set_storm_control_bad_port(self):
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1'}
+            return self.snmp._ifindex_map
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            with self.assertRaises(ValueError):
+                self.snmp.set_storm_control('9/9', broadcast_enabled=True)
+
+    # ── sFlow ────────────────────────────────────────────────────
+
+    def test_get_sflow_default(self):
+        """All receivers unconfigured, agent info parsed."""
+        async def mock_scalar(*oids):
+            return {
+                OID_sFlowVersion: '1.3;Hirschmann;10.3.04',
+                OID_sFlowAgentAddress: '192.168.1.4',
+            }
+
+        async def mock_walk(oid_map, engine=None):
+            rows = {}
+            for i in range(1, 9):
+                rows[str(i)] = {
+                    'owner': '', 'timeout': 0,
+                    'max_datagram_size': 1400,
+                    'address_type': 1,
+                    'address': '0.0.0.0',
+                    'port': 6343, 'datagram_version': 5,
+                }
+            return rows
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_sflow()
+
+        self.assertEqual(result['agent_version'], '1.3;Hirschmann;10.3.04')
+        self.assertEqual(result['agent_address'], '192.168.1.4')
+        self.assertEqual(len(result['receivers']), 8)
+        r1 = result['receivers'][1]
+        self.assertEqual(r1['owner'], '')
+        self.assertEqual(r1['timeout'], 0)
+        self.assertEqual(r1['address'], '0.0.0.0')
+        self.assertEqual(r1['port'], 6343)
+
+    def test_get_sflow_configured_receiver(self):
+        """Receiver with owner and address parsed correctly."""
+        async def mock_scalar(*oids):
+            return {
+                OID_sFlowVersion: '1.3;Hirschmann;10.3.04',
+                OID_sFlowAgentAddress: '192.168.1.4',
+            }
+
+        async def mock_walk(oid_map, engine=None):
+            return {
+                '1': {
+                    'owner': 'snoop', 'timeout': -1,
+                    'max_datagram_size': 1400,
+                    'address_type': 1,
+                    'address': '192.168.1.100',
+                    'port': 6343, 'datagram_version': 5,
+                },
+                '2': {
+                    'owner': '', 'timeout': 0,
+                    'max_datagram_size': 1400,
+                    'address_type': 1,
+                    'address': '0.0.0.0',
+                    'port': 6343, 'datagram_version': 5,
+                },
+            }
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_sflow()
+
+        r1 = result['receivers'][1]
+        self.assertEqual(r1['owner'], 'snoop')
+        self.assertEqual(r1['timeout'], -1)
+        self.assertEqual(r1['address'], '192.168.1.100')
+        r2 = result['receivers'][2]
+        self.assertEqual(r2['owner'], '')
+
+    def test_get_sflow_port_default(self):
+        """All ports unconfigured."""
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '2': '1/2'}
+            return self.snmp._ifindex_map
+
+        async def mock_walk(oid_map, engine=None):
+            # Compound suffix: 11.1.3.6.1.2.1.2.2.1.1.{ifIndex}.1
+            return {
+                '11.1.3.6.1.2.1.2.2.1.1.1.1': {
+                    'receiver': 0, 'sample_rate': 0,
+                    'max_header_size': 128,
+                },
+                '11.1.3.6.1.2.1.2.2.1.1.2.1': {
+                    'receiver': 0, 'sample_rate': 0,
+                    'max_header_size': 128,
+                },
+            }
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_sflow_port()
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result['1/1']['sampler']['receiver'], 0)
+        self.assertEqual(result['1/1']['sampler']['sample_rate'], 0)
+
+    def test_get_sflow_port_configured(self):
+        """Port with sampler and poller active."""
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '11': '1/11'}
+            return self.snmp._ifindex_map
+
+        call_count = [0]
+
+        async def mock_walk(oid_map, engine=None):
+            call_count[0] += 1
+            if call_count[0] == 1:  # sampler
+                return {
+                    '11.1.3.6.1.2.1.2.2.1.1.1.1': {
+                        'receiver': 0, 'sample_rate': 0,
+                        'max_header_size': 128,
+                    },
+                    '11.1.3.6.1.2.1.2.2.1.1.11.1': {
+                        'receiver': 1, 'sample_rate': 256,
+                        'max_header_size': 128,
+                    },
+                }
+            else:  # poller
+                return {
+                    '11.1.3.6.1.2.1.2.2.1.1.1.1': {
+                        'receiver': 0, 'interval': 0,
+                    },
+                    '11.1.3.6.1.2.1.2.2.1.1.11.1': {
+                        'receiver': 1, 'interval': 20,
+                    },
+                }
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_sflow_port()
+
+        p11 = result['1/11']
+        self.assertEqual(p11['sampler']['receiver'], 1)
+        self.assertEqual(p11['sampler']['sample_rate'], 256)
+        self.assertEqual(p11['poller']['receiver'], 1)
+        self.assertEqual(p11['poller']['interval'], 20)
+
+    def test_get_sflow_port_filter(self):
+        """Interface filter returns only requested ports."""
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '2': '1/2'}
+            return self.snmp._ifindex_map
+
+        async def mock_walk(oid_map, engine=None):
+            return {
+                '11.1.3.6.1.2.1.2.2.1.1.1.1': {
+                    'receiver': 0, 'sample_rate': 0,
+                    'max_header_size': 128,
+                },
+                '11.1.3.6.1.2.1.2.2.1.1.2.1': {
+                    'receiver': 0, 'sample_rate': 0,
+                    'max_header_size': 128,
+                },
+            }
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_sflow_port(interfaces=['1/1'])
+
+        self.assertEqual(list(result.keys()), ['1/1'])
+
+    def test_get_sflow_port_skips_cpu(self):
+        """CPU interfaces filtered out."""
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '100': 'cpu/1'}
+            return self.snmp._ifindex_map
+
+        async def mock_walk(oid_map, engine=None):
+            return {
+                '11.1.3.6.1.2.1.2.2.1.1.1.1': {
+                    'receiver': 0, 'sample_rate': 0,
+                    'max_header_size': 128,
+                },
+                '11.1.3.6.1.2.1.2.2.1.1.100.1': {
+                    'receiver': 0, 'sample_rate': 0,
+                    'max_header_size': 128,
+                },
+            }
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_sflow_port()
+
+        self.assertIn('1/1', result)
+        self.assertNotIn('cpu/1', result)
+
+    def test_set_sflow_bad_receiver(self):
+        with self.assertRaises(ValueError):
+            self.snmp.set_sflow(0, owner='test')
+        with self.assertRaises(ValueError):
+            self.snmp.set_sflow(9, owner='test')
+
+    def test_set_sflow_port_bad_port(self):
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1'}
+            return self.snmp._ifindex_map
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            with self.assertRaises(ValueError):
+                self.snmp.set_sflow_port('9/9', receiver=1, sample_rate=256)
+
+    def test_set_sflow_port_no_rate_or_interval(self):
+        with self.assertRaises(ValueError):
+            self.snmp.set_sflow_port('1/1', receiver=1)
+
+
+    # ── QoS ──────────────────────────────────────────────────────
+
+    def test_get_qos_default(self):
+        """All ports dot1p trust, strict scheduling, no shaping."""
+        async def mock_scalar(*oids):
+            return {OID_hm2CosQueueNumQueuesPerPort: 8}
+
+        walk_call_count = [0]
+        async def mock_walk(oid_map, engine=None):
+            walk_call_count[0] += 1
+            if walk_call_count[0] == 1:  # trust
+                return {'1': {'trust': 2}, '2': {'trust': 2}}
+            elif walk_call_count[0] == 2:  # shaping
+                return {'1': {'shaping': 0}, '2': {'shaping': 0}}
+            else:  # queues
+                return {
+                    '1.0': {'scheduler': 1, 'min_bw': 0, 'max_bw': 0},
+                    '1.1': {'scheduler': 1, 'min_bw': 0, 'max_bw': 0},
+                    '2.0': {'scheduler': 1, 'min_bw': 0, 'max_bw': 0},
+                    '2.1': {'scheduler': 1, 'min_bw': 0, 'max_bw': 0},
+                }
+
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '2': '1/2'}
+            return self.snmp._ifindex_map
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_qos()
+
+        self.assertEqual(result['num_queues'], 8)
+        self.assertEqual(sorted(result['interfaces'].keys()), ['1/1', '1/2'])
+        p = result['interfaces']['1/1']
+        self.assertEqual(p['trust_mode'], 'dot1p')
+        self.assertEqual(p['shaping_rate'], 0)
+        self.assertEqual(p['queues'][0]['scheduler'], 'strict')
+
+    def test_get_qos_configured(self):
+        """Port with ip-dscp trust, weighted queue, shaping."""
+        async def mock_scalar(*oids):
+            return {OID_hm2CosQueueNumQueuesPerPort: 8}
+
+        walk_call_count = [0]
+        async def mock_walk(oid_map, engine=None):
+            walk_call_count[0] += 1
+            if walk_call_count[0] == 1:
+                return {'5': {'trust': 4}}  # ip-dscp
+            elif walk_call_count[0] == 2:
+                return {'5': {'shaping': 50}}
+            else:
+                return {
+                    '5.0': {'scheduler': 2, 'min_bw': 10, 'max_bw': 80},
+                    '5.7': {'scheduler': 1, 'min_bw': 0, 'max_bw': 0},
+                }
+
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'5': '1/5'}
+            return self.snmp._ifindex_map
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_qos()
+
+        p = result['interfaces']['1/5']
+        self.assertEqual(p['trust_mode'], 'ip-dscp')
+        self.assertEqual(p['shaping_rate'], 50)
+        self.assertEqual(p['queues'][0]['scheduler'], 'weighted')
+        self.assertEqual(p['queues'][0]['min_bw'], 10)
+        self.assertEqual(p['queues'][0]['max_bw'], 80)
+        self.assertEqual(p['queues'][7]['scheduler'], 'strict')
+
+    def test_get_qos_skips_cpu(self):
+        """CPU interfaces are excluded."""
+        async def mock_scalar(*oids):
+            return {OID_hm2CosQueueNumQueuesPerPort: 8}
+
+        walk_call_count = [0]
+        async def mock_walk(oid_map, engine=None):
+            walk_call_count[0] += 1
+            if walk_call_count[0] == 1:
+                return {'1': {'trust': 2}, '100': {'trust': 2}}
+            elif walk_call_count[0] == 2:
+                return {'1': {'shaping': 0}, '100': {'shaping': 0}}
+            else:
+                return {}
+
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1', '100': 'cpu0'}
+            return self.snmp._ifindex_map
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_qos()
+
+        self.assertIn('1/1', result['interfaces'])
+        self.assertNotIn('cpu0', result['interfaces'])
+
+    def test_set_qos_bad_trust_mode(self):
+        with self.assertRaises(ValueError):
+            self.snmp.set_qos('1/1', trust_mode='badval')
+
+    def test_set_qos_bad_scheduler(self):
+        with self.assertRaises(ValueError):
+            self.snmp.set_qos('1/1', scheduler='round-robin')
+
+    def test_set_qos_queue_needed_no_index(self):
+        with self.assertRaises(ValueError):
+            self.snmp.set_qos('1/1', min_bw=50)
+
+    def test_set_qos_bad_port(self):
+        async def mock_ifmap(engine=None):
+            self.snmp._ifindex_map = {'1': '1/1'}
+            return self.snmp._ifindex_map
+
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            with self.assertRaises(ValueError):
+                self.snmp.set_qos('9/9', trust_mode='dot1p')
+
+    def test_get_qos_mapping(self):
+        """dot1p and DSCP mapping tables."""
+        walk_call_count = [0]
+        async def mock_walk(oid_map, engine=None):
+            walk_call_count[0] += 1
+            if walk_call_count[0] == 1:  # dot1p
+                return {
+                    '0': {'tc': 2}, '1': {'tc': 0}, '2': {'tc': 1},
+                    '3': {'tc': 3}, '4': {'tc': 4}, '5': {'tc': 5},
+                    '6': {'tc': 6}, '7': {'tc': 7},
+                }
+            else:  # dscp
+                return {
+                    '0': {'tc': 0}, '8': {'tc': 1}, '46': {'tc': 5},
+                }
+
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_qos_mapping()
+
+        self.assertEqual(result['dot1p'][0], 2)
+        self.assertEqual(result['dot1p'][7], 7)
+        self.assertEqual(result['dscp'][0], 0)
+        self.assertEqual(result['dscp'][46], 5)
+
+    def test_get_management_priority(self):
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2NetVlanPriority: 3,
+                OID_hm2NetIpDscpPriority: 46,
+            }
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_management_priority()
+
+        self.assertEqual(result['dot1p'], 3)
+        self.assertEqual(result['ip_dscp'], 46)
 
 
 class TestEncodePortlist(unittest.TestCase):

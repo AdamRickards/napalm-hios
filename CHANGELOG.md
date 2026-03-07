@@ -1,5 +1,53 @@
 # Changelog
 
+## 1.11.0 — 2026-03-07
+
+### Storm Control — all 3 protocols
+
+Per-port ingress storm control for broadcast, multicast, and unicast traffic:
+
+- **`get_storm_control()`** — global bucket type + per-port unit (pps/percent), per-traffic-type enabled/threshold for broadcast, multicast, unicast
+- **`set_storm_control(interface, ...)`** — configure unit, enable/disable and set threshold per traffic type. Multi-interface support (str or list)
+
+MIB: HM2-TRAFFICMGMT-MIB. CLI: `storm-control ingress broadcast/multicast/unknown-unicast`. 10 new unit tests.
+
+### sFlow — SNMP + SSH backends
+
+sFlow was MOPS-only in 1.10.0. Now all 4 methods work on all 3 protocols:
+
+- **`get_sflow()`** — SNMP: walks SFLOW-MIB receiver table + agent scalars. SSH: parses `show sflow agent` + `show sflow receiver`.
+- **`set_sflow(receiver, ...)`** — SNMP: SET on sFlowRcvrEntry columns. SSH: `sflow receiver <N>` config mode commands.
+- **`get_sflow_port(interfaces, type)`** — SNMP: walks sFlowFsEntry (sampler) + sFlowCpEntry (poller). SSH: parses `show sflow sampler` + `show sflow poller` tables.
+- **`set_sflow_port(interfaces, receiver, ...)`** — SNMP: SET on sampler/poller table entries. SSH: `sflow sampler`/`sflow poller` interface mode commands.
+
+Dispatcher updated from MOPS-only to all 3 protocols. 24 new unit tests (12 SNMP + 12 SSH).
+
+### QoS — all 3 protocols
+
+6 new vendor-specific methods for Quality of Service configuration:
+
+- **`get_qos()`** — per-port trust mode (untrusted/dot1p/ip-precedence/ip-dscp), shaping rate, and per-queue scheduling (strict/weighted) with min/max bandwidth. Returns `num_queues` (device capability, typically 8).
+- **`set_qos(interface, ...)`** — set trust mode, shaping rate, or per-queue scheduler/bandwidth. `queue` parameter required when setting scheduler/min_bw/max_bw. Multi-interface support.
+- **`get_qos_mapping()`** — global dot1p→TC (8 entries) and DSCP→TC (64 entries) traffic class mapping tables.
+- **`set_qos_mapping(dot1p, dscp)`** — set individual dot1p and/or DSCP→TC mappings. Only provided entries are changed.
+- **`get_management_priority()`** — management frame priority: dot1p (0-7) and ip_dscp (0-63) values used by the switch for management reply frames.
+- **`set_management_priority(dot1p, ip_dscp)`** — set management frame priority values.
+
+MIBs: HM2-PLATFORM-QOS-COS-MIB (trust, queues, shaping), HM2-L2FORWARDING-MIB (dot1p/DSCP→TC mapping), HM2-NETCONFIG-MIB (management priority).
+
+SSH note: `set_management_priority()` uses privileged exec mode (`network management priority`), not config mode. `shaping_rate` in `get_qos()` returns 0 on SSH (not available via CLI).
+
+15 new unit tests (9 SNMP + 6 SSH parser).
+
+### Live verification
+
+All new features tested on BRS50 (.4, .80, .82, .85) and GRS1042 (.254) across all 3 protocols. Cross-protocol verification confirmed identical output for all getters. All setters verified with cross-protocol read-back.
+
+### Unit tests
+
+- 49 new tests: 10 storm control + 24 sFlow (SNMP + SSH) + 15 QoS (SNMP + SSH)
+- 493 total passing, 1 pre-existing fixture error
+
 ## 1.10.0 — 2026-03-05
 
 ### sFlow support (MOPS-only) — RFC 3176

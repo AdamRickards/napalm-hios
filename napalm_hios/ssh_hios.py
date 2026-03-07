@@ -2247,6 +2247,480 @@ class SSHHIOS:
         finally:
             self._exit_config_mode()
 
+    # ── Storm Control ────────────────────────────────────────────
+
+    def get_storm_control(self):
+        """Return per-port storm control configuration.
+
+        Parses 'show storm-control ingress' output:
+            Intf  Mode  Level  Mode  Level  Mode  Level
+            1/1   disabled  0%  disabled  0%  disabled  0%
+            1/11  enabled  100 pps  disabled  0 pps  disabled  0 pps
+        Level is "N%" (one token) or "N pps" (two tokens).
+        """
+        output = self.cli('show storm-control ingress')[
+            'show storm-control ingress']
+
+        interfaces = {}
+        rows = parse_table(output, min_fields=5)
+        for fields in rows:
+            if '/' not in fields[0]:
+                continue
+            intf = fields[0]
+            # Parse 3 groups of (mode, level) from remaining tokens.
+            # Level: "0%" = one token (percent), "100 pps" = two tokens.
+            tokens = fields[1:]
+            groups = []
+            i = 0
+            while i < len(tokens) and len(groups) < 3:
+                mode = tokens[i].lower()
+                i += 1
+                if i >= len(tokens):
+                    groups.append((mode, 0, 'percent'))
+                    break
+                level_str = tokens[i]
+                i += 1
+                if level_str.endswith('%'):
+                    threshold = int(level_str[:-1])
+                    unit = 'percent'
+                else:
+                    threshold = int(level_str)
+                    unit = 'pps'
+                    if i < len(tokens) and tokens[i] == 'pps':
+                        i += 1
+                groups.append((mode, threshold, unit))
+
+            # All 3 groups share the same unit per port
+            port_unit = groups[0][2] if groups else 'percent'
+            bc = groups[0] if len(groups) > 0 else ('disabled', 0, 'percent')
+            mc = groups[1] if len(groups) > 1 else ('disabled', 0, 'percent')
+            uc = groups[2] if len(groups) > 2 else ('disabled', 0, 'percent')
+
+            interfaces[intf] = {
+                'unit': port_unit,
+                'broadcast': {
+                    'enabled': bc[0] in ('enabled', 'enable', 'active'),
+                    'threshold': bc[1],
+                },
+                'multicast': {
+                    'enabled': mc[0] in ('enabled', 'enable', 'active'),
+                    'threshold': mc[1],
+                },
+                'unicast': {
+                    'enabled': uc[0] in ('enabled', 'enable', 'active'),
+                    'threshold': uc[1],
+                },
+            }
+
+        return {
+            'bucket_type': '',  # not available via CLI
+            'interfaces': interfaces,
+        }
+
+    def set_storm_control(self, interface, unit=None,
+                          broadcast_enabled=None, broadcast_threshold=None,
+                          multicast_enabled=None, multicast_threshold=None,
+                          unicast_enabled=None, unicast_threshold=None):
+        """Set per-port storm control configuration."""
+        if unit is not None and unit not in ('percent', 'pps'):
+            raise ValueError(
+                f"Invalid unit '{unit}': use 'percent' or 'pps'")
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
+        self._config_mode()
+        try:
+            for iface in interfaces:
+                output = self.cli(f'interface {iface}')
+                resp = output.get(f'interface {iface}', '')
+                if 'Error' in resp or 'Invalid' in resp:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                if unit is not None:
+                    self.cli(f'storm-control ingress unit {unit}')
+                if broadcast_enabled is not None:
+                    if broadcast_enabled:
+                        self.cli('storm-control ingress broadcast operation')
+                    else:
+                        self.cli(
+                            'no storm-control ingress broadcast operation')
+                if broadcast_threshold is not None:
+                    self.cli('storm-control ingress broadcast threshold '
+                             f'{int(broadcast_threshold)}')
+                if multicast_enabled is not None:
+                    if multicast_enabled:
+                        self.cli('storm-control ingress multicast operation')
+                    else:
+                        self.cli(
+                            'no storm-control ingress multicast operation')
+                if multicast_threshold is not None:
+                    self.cli('storm-control ingress multicast threshold '
+                             f'{int(multicast_threshold)}')
+                if unicast_enabled is not None:
+                    if unicast_enabled:
+                        self.cli('storm-control ingress unicast operation')
+                    else:
+                        self.cli(
+                            'no storm-control ingress unicast operation')
+                if unicast_threshold is not None:
+                    self.cli('storm-control ingress unicast threshold '
+                             f'{int(unicast_threshold)}')
+                self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    # ── sFlow ─────────────────────────────────────────────────────
+
+    def get_sflow(self):
+        """Return sFlow agent info and receiver table."""
+        # Agent info — dot-key format
+        agent_out = self.cli('show sflow agent')['show sflow agent']
+        agent = parse_dot_keys(agent_out)
+        version = agent.get('sFlow version', '').strip()
+        address = agent.get('IP address', '').strip()
+
+        # Receivers — table format with wide variable-width owner column.
+        # Parse from the right: ip, port, max_dgram, timeout are fixed,
+        # owner is everything between index and timeout (may be empty).
+        rcvr_out = self.cli('show sflow receivers')['show sflow receivers']
+        receivers = {}
+        rows = parse_table(rcvr_out, min_fields=4)
+        for fields in rows:
+            try:
+                idx = int(fields[0])
+            except (ValueError, IndexError):
+                continue
+            if idx < 1:
+                continue
+            # Last 4 fields are always: timeout, max_dgram, port, ip
+            # Timeout: '-' means permanent (-1)
+            addr = fields[-1]
+            port = int(fields[-2])
+            max_dg = int(fields[-3])
+            tout_raw = fields[-4]
+            tout = -1 if tout_raw == '-' else int(tout_raw)
+            # Owner is everything between index and the 4 right fields
+            owner_parts = fields[1:-4]
+            owner = ' '.join(owner_parts)
+            receivers[idx] = {
+                'owner': owner,
+                'timeout': tout,
+                'max_datagram_size': max_dg,
+                'address_type': 1,
+                'address': addr,
+                'port': port,
+                'datagram_version': 5,  # not shown in CLI table
+            }
+
+        return {
+            'agent_version': version,
+            'agent_address': address,
+            'receivers': receivers,
+        }
+
+    def set_sflow(self, receiver, address=None, port=None, owner=None,
+                  timeout=None, max_datagram_size=None):
+        """Configure an sFlow receiver."""
+        if not 1 <= receiver <= 8:
+            raise ValueError(f"receiver must be 1-8, got {receiver}")
+        self._config_mode()
+        try:
+            # Owner+timeout can be combined; other params need separate cmds
+            if owner is not None:
+                cmd = f'sflow receiver {receiver} owner {owner}'
+                if timeout is not None:
+                    cmd += f' timeout {int(timeout)}'
+                    timeout = None  # already sent
+                self.cli(cmd)
+            if timeout is not None:
+                self.cli(f'sflow receiver {receiver} timeout {int(timeout)}')
+            if address is not None:
+                self.cli(f'sflow receiver {receiver} ip {address}')
+            if port is not None:
+                self.cli(f'sflow receiver {receiver} port {int(port)}')
+            if max_datagram_size is not None:
+                self.cli(f'sflow receiver {receiver} maxdatagram '
+                         f'{int(max_datagram_size)}')
+        finally:
+            self._exit_config_mode()
+
+    def get_sflow_port(self, interfaces=None, type=None):
+        """Return sFlow sampler and poller config per port."""
+        iface_set = set(interfaces) if interfaces else None
+        result = {}
+
+        if type is None or type == 'sampler':
+            out = self.cli('show sflow samplers')['show sflow samplers']
+            rows = parse_table(out, min_fields=4)
+            for fields in rows:
+                if '/' not in fields[0]:
+                    continue
+                name = fields[0]
+                if iface_set and name not in iface_set:
+                    continue
+                if name not in result:
+                    result[name] = {}
+                result[name]['sampler'] = {
+                    'receiver': int(fields[1]) if len(fields) > 1 else 0,
+                    'sample_rate': int(fields[2]) if len(fields) > 2 else 0,
+                    'max_header_size': int(fields[3]) if len(fields) > 3 else 128,
+                }
+
+        if type is None or type == 'poller':
+            out = self.cli('show sflow pollers')['show sflow pollers']
+            rows = parse_table(out, min_fields=3)
+            for fields in rows:
+                if '/' not in fields[0]:
+                    continue
+                name = fields[0]
+                if iface_set and name not in iface_set:
+                    continue
+                if name not in result:
+                    result[name] = {}
+                result[name]['poller'] = {
+                    'receiver': int(fields[1]) if len(fields) > 1 else 0,
+                    'interval': int(fields[2]) if len(fields) > 2 else 0,
+                }
+
+        return result
+
+    def set_sflow_port(self, interfaces, receiver, sample_rate=None,
+                       interval=None, max_header_size=None):
+        """Configure sFlow sampling/polling on ports."""
+        if sample_rate is None and interval is None:
+            raise ValueError(
+                "At least one of sample_rate or interval must be provided")
+        interfaces = ([interfaces] if isinstance(interfaces, str)
+                      else list(interfaces))
+        self._config_mode()
+        try:
+            for iface in interfaces:
+                self.cli(f'interface {iface}')
+                if sample_rate is not None:
+                    if receiver == 0:
+                        self.cli('sflow sampler receiver 0')
+                    else:
+                        cmd = (f'sflow sampler receiver {int(receiver)}'
+                               f' rate {int(sample_rate)}')
+                        self.cli(cmd)
+                    if max_header_size is not None and receiver != 0:
+                        self.cli(
+                            f'sflow sampler maxheadersize '
+                            f'{int(max_header_size)}')
+                if interval is not None:
+                    if receiver == 0:
+                        self.cli('sflow poller receiver 0')
+                    else:
+                        self.cli(
+                            f'sflow poller receiver {int(receiver)}'
+                            f' interval {int(interval)}')
+                self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    # ── QoS ───────────────────────────────────────────────────────
+
+    _QOS_TRUST_CLI = {
+        'untrusted': 'untrusted', 'dot1p': 'dot1p',
+        'ip-dscp': 'ip-dscp', 'ip-precedence': 'ip-precedence',
+    }
+
+    def get_qos(self):
+        """Return per-port QoS trust mode and queue scheduling.
+
+        Parses 'show classofservice trust' and 'show cos-queue'.
+        """
+        # Trust mode per port
+        trust_out = self.cli('show classofservice trust')[
+            'show classofservice trust']
+        trust_rows = parse_table(trust_out, min_fields=2)
+
+        trust_by_port = {}
+        for fields in trust_rows:
+            if '/' not in fields[0]:
+                continue
+            port = fields[0]
+            mode = fields[1].lower().strip()
+            # Normalise: "trustdot1p" → "dot1p", "trustipdscp" → "ip-dscp"
+            if mode == 'trustdot1p':
+                mode = 'dot1p'
+            elif mode == 'trustipdscp':
+                mode = 'ip-dscp'
+            elif mode == 'trustipprecedence':
+                mode = 'ip-precedence'
+            trust_by_port[port] = mode
+
+        # Queue scheduling (global — applies to all ports)
+        queue_out = self.cli('show cos-queue')['show cos-queue']
+        queue_rows = parse_table(queue_out, min_fields=2)
+
+        queues = {}
+        for fields in queue_rows:
+            try:
+                qidx = int(fields[0])
+            except (ValueError, IndexError):
+                continue
+            # Fields vary: queue_id, min_bw, max_bw, scheduler_type
+            scheduler = 'strict'
+            min_bw = 0
+            max_bw = 0
+            for f in fields[1:]:
+                fl = f.lower()
+                if fl in ('strict', 'weighted'):
+                    scheduler = fl
+                elif '%' not in fl:
+                    try:
+                        val = int(fl)
+                        if min_bw == 0 and max_bw == 0:
+                            min_bw = val
+                        else:
+                            max_bw = val
+                    except ValueError:
+                        pass
+            queues[qidx] = {
+                'scheduler': scheduler,
+                'min_bw': min_bw,
+                'max_bw': max_bw,
+            }
+
+        # Build interfaces dict
+        interfaces = {}
+        for port, mode in trust_by_port.items():
+            interfaces[port] = {
+                'trust_mode': mode,
+                'shaping_rate': 0,  # not available via CLI
+                'queues': dict(queues),  # same for all ports in CLI
+            }
+
+        return {
+            'num_queues': len(queues) if queues else 8,
+            'interfaces': interfaces,
+        }
+
+    def set_qos(self, interface, trust_mode=None, shaping_rate=None,
+                queue=None, scheduler=None, min_bw=None, max_bw=None):
+        """Set per-port QoS trust mode or queue scheduling."""
+        if trust_mode is not None and trust_mode not in self._QOS_TRUST_CLI:
+            raise ValueError(
+                f"Invalid trust_mode '{trust_mode}': use "
+                "'untrusted', 'dot1p', 'ip-precedence', 'ip-dscp'")
+        if scheduler is not None and scheduler not in ('strict', 'weighted'):
+            raise ValueError(
+                f"Invalid scheduler '{scheduler}': "
+                "use 'strict' or 'weighted'")
+        queue_needed = (scheduler is not None or min_bw is not None
+                        or max_bw is not None)
+        if queue_needed and queue is None:
+            raise ValueError(
+                "queue index (0-7) required when setting "
+                "scheduler, min_bw, or max_bw")
+
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
+
+        self._config_mode()
+        try:
+            # Trust mode is per-interface
+            if trust_mode is not None:
+                for iface in interfaces:
+                    output = self.cli(f'interface {iface}')
+                    resp = output.get(f'interface {iface}', '')
+                    if 'Error' in resp or 'Invalid' in resp:
+                        raise ValueError(f"Unknown interface '{iface}'")
+                    self.cli(f'classofservice trust {trust_mode}')
+                    self.cli('exit')
+
+            # Queue scheduling is global
+            if scheduler is not None:
+                self.cli(f'cos-queue {scheduler} {int(queue)}')
+            if min_bw is not None:
+                self.cli(
+                    f'cos-queue min-bandwidth {int(queue)} {int(min_bw)}')
+            if max_bw is not None:
+                self.cli(
+                    f'cos-queue max-bandwidth {int(queue)} {int(max_bw)}')
+        finally:
+            self._exit_config_mode()
+
+    def get_qos_mapping(self):
+        """Return global dot1p and DSCP to traffic class mapping tables."""
+        # dot1p mapping
+        dot1p_out = self.cli('show classofservice dot1p-mapping')[
+            'show classofservice dot1p-mapping']
+        dot1p_rows = parse_table(dot1p_out, min_fields=2)
+
+        dot1p = {}
+        for fields in dot1p_rows:
+            try:
+                prio = int(fields[0])
+                tc = int(fields[1])
+                dot1p[prio] = tc
+            except (ValueError, IndexError):
+                continue
+
+        # DSCP mapping
+        dscp_out = self.cli('show classofservice ip-dscp-mapping')[
+            'show classofservice ip-dscp-mapping']
+        dscp_rows = parse_table(dscp_out, min_fields=2)
+
+        dscp = {}
+        for fields in dscp_rows:
+            try:
+                dval = int(fields[0])
+                tc = int(fields[1])
+                dscp[dval] = tc
+            except (ValueError, IndexError):
+                continue
+
+        return {'dot1p': dot1p, 'dscp': dscp}
+
+    def set_qos_mapping(self, dot1p=None, dscp=None):
+        """Set global dot1p and/or DSCP to traffic class mappings."""
+        self._config_mode()
+        try:
+            if dot1p is not None:
+                for prio, tc in dot1p.items():
+                    self.cli(f'classofservice dot1p-mapping '
+                             f'{int(prio)} {int(tc)}')
+            if dscp is not None:
+                for dval, tc in dscp.items():
+                    self.cli(f'classofservice ip-dscp-mapping '
+                             f'{int(dval)} {int(tc)}')
+        finally:
+            self._exit_config_mode()
+
+    def get_management_priority(self):
+        """Return management frame priority settings."""
+        output = self.cli('show network parms')['show network parms']
+        d = parse_dot_keys(output)
+
+        dot1p = 0
+        ip_dscp = 0
+        for key, val in d.items():
+            kl = key.lower()
+            if 'vlan' in kl and 'prio' in kl:
+                try:
+                    dot1p = int(val.strip())
+                except ValueError:
+                    pass
+            elif 'dscp' in kl and 'prio' in kl:
+                try:
+                    ip_dscp = int(val.strip())
+                except ValueError:
+                    pass
+
+        return {'dot1p': dot1p, 'ip_dscp': ip_dscp}
+
+    def set_management_priority(self, dot1p=None, ip_dscp=None):
+        """Set management frame priority."""
+        self._enable()
+        try:
+            if dot1p is not None:
+                self.cli(f'network management priority dot1p {int(dot1p)}')
+            if ip_dscp is not None:
+                self.cli(
+                    f'network management priority ip-dscp {int(ip_dscp)}')
+        finally:
+            self._disable()
+
     # ── RSTP ──────────────────────────────────────────────────────
 
     def get_rstp(self):

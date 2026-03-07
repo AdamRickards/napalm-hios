@@ -658,31 +658,31 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("set_hidiscovery is not implemented for this protocol")
 
     def get_sflow(self):
-        if self.active_protocol == 'mops':
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
             return self._get_active_connection().get_sflow()
-        raise NotImplementedError("get_sflow is only implemented for MOPS")
+        raise NotImplementedError("get_sflow is not implemented for this protocol")
 
     def set_sflow(self, receiver, address=None, port=None, owner=None,
                   timeout=None, max_datagram_size=None):
-        if self.active_protocol == 'mops':
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
             return self._get_active_connection().set_sflow(
                 receiver, address=address, port=port, owner=owner,
                 timeout=timeout, max_datagram_size=max_datagram_size)
-        raise NotImplementedError("set_sflow is only implemented for MOPS")
+        raise NotImplementedError("set_sflow is not implemented for this protocol")
 
     def get_sflow_port(self, interfaces=None, type=None):
-        if self.active_protocol == 'mops':
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
             return self._get_active_connection().get_sflow_port(
                 interfaces=interfaces, type=type)
-        raise NotImplementedError("get_sflow_port is only implemented for MOPS")
+        raise NotImplementedError("get_sflow_port is not implemented for this protocol")
 
     def set_sflow_port(self, interfaces, receiver, sample_rate=None,
                        interval=None, max_header_size=None):
-        if self.active_protocol == 'mops':
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
             return self._get_active_connection().set_sflow_port(
                 interfaces, receiver, sample_rate=sample_rate,
                 interval=interval, max_header_size=max_header_size)
-        raise NotImplementedError("set_sflow_port is only implemented for MOPS")
+        raise NotImplementedError("set_sflow_port is not implemented for this protocol")
 
     def get_snmp_information(self):
         if self.active_protocol in ('ssh', 'snmp', 'mops'):
@@ -779,6 +779,70 @@ class HIOSDriver(NetworkDriver):
                 transmit_interval, receive_threshold,
             )
         raise NotImplementedError("set_loop_protection is not implemented for this protocol")
+
+    # ------------------------------------------------------------------
+    # Storm Control
+    # ------------------------------------------------------------------
+
+    def get_storm_control(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().get_storm_control()
+        raise NotImplementedError("get_storm_control is not implemented for this protocol")
+
+    def set_storm_control(self, interface, unit=None,
+                          broadcast_enabled=None, broadcast_threshold=None,
+                          multicast_enabled=None, multicast_threshold=None,
+                          unicast_enabled=None, unicast_threshold=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_storm_control(
+                interface, unit=unit,
+                broadcast_enabled=broadcast_enabled,
+                broadcast_threshold=broadcast_threshold,
+                multicast_enabled=multicast_enabled,
+                multicast_threshold=multicast_threshold,
+                unicast_enabled=unicast_enabled,
+                unicast_threshold=unicast_threshold,
+            )
+        raise NotImplementedError("set_storm_control is not implemented for this protocol")
+
+    def get_qos(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().get_qos()
+        raise NotImplementedError("get_qos is not implemented for this protocol")
+
+    def set_qos(self, interface, trust_mode=None, shaping_rate=None,
+                queue=None, scheduler=None, min_bw=None, max_bw=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_qos(
+                interface, trust_mode=trust_mode, shaping_rate=shaping_rate,
+                queue=queue, scheduler=scheduler,
+                min_bw=min_bw, max_bw=max_bw,
+            )
+        raise NotImplementedError("set_qos is not implemented for this protocol")
+
+    def get_qos_mapping(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().get_qos_mapping()
+        raise NotImplementedError("get_qos_mapping is not implemented for this protocol")
+
+    def set_qos_mapping(self, dot1p=None, dscp=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_qos_mapping(
+                dot1p=dot1p, dscp=dscp,
+            )
+        raise NotImplementedError("set_qos_mapping is not implemented for this protocol")
+
+    def get_management_priority(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().get_management_priority()
+        raise NotImplementedError("get_management_priority is not implemented for this protocol")
+
+    def set_management_priority(self, dot1p=None, ip_dscp=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_management_priority(
+                dot1p=dot1p, ip_dscp=ip_dscp,
+            )
+        raise NotImplementedError("set_management_priority is not implemented for this protocol")
 
     # ------------------------------------------------------------------
     # MOPS staging (atomic multi-setter batching)

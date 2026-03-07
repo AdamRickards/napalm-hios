@@ -3082,6 +3082,156 @@ class MOPSHIOS:
                                 "hm2AgentSwitchKeepaliveGroup", values)
 
     # ------------------------------------------------------------------
+    # Storm Control
+    # ------------------------------------------------------------------
+
+    _STORM_UNIT = {'1': 'percent', '2': 'pps'}
+    _STORM_UNIT_REV = {'percent': '1', 'pps': '2'}
+    _STORM_BUCKET = {'1': 'single-bucket', '2': 'multi-bucket'}
+
+    def get_storm_control(self):
+        """Return per-port storm control configuration.
+
+        Returns:
+            dict with:
+                'bucket_type': str ('single-bucket' or 'multi-bucket')
+                'interfaces': {port_name: {
+                    'unit': str ('percent' or 'pps'),
+                    'broadcast': {'enabled': bool, 'threshold': int},
+                    'multicast': {'enabled': bool, 'threshold': int},
+                    'unicast':   {'enabled': bool, 'threshold': int},
+                }}
+        """
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("HM2-TRAFFICMGMT-MIB", "hm2TrafficMgmtMibObjects", [
+                "hm2TrafficMgmtIngressStormBucketType",
+            ]),
+            ("HM2-TRAFFICMGMT-MIB", "hm2TrafficMgmtIfEntry", [
+                "ifIndex",
+                "hm2TrafficMgmtIfIngressStormCtlThresholdUnit",
+                "hm2TrafficMgmtIfIngressStormCtlBcastMode",
+                "hm2TrafficMgmtIfIngressStormCtlBcastThreshold",
+                "hm2TrafficMgmtIfIngressStormCtlMcastMode",
+                "hm2TrafficMgmtIfIngressStormCtlMcastThreshold",
+                "hm2TrafficMgmtIfIngressStormCtlUcastMode",
+                "hm2TrafficMgmtIfIngressStormCtlUcastThreshold",
+            ]),
+            decode_strings=False,
+        )
+
+        glb = (mibs.get("HM2-TRAFFICMGMT-MIB", {})
+               .get("hm2TrafficMgmtMibObjects", [{}])[0])
+        bucket_code = glb.get("hm2TrafficMgmtIngressStormBucketType", "1")
+
+        port_entries = (mibs.get("HM2-TRAFFICMGMT-MIB", {})
+                        .get("hm2TrafficMgmtIfEntry", []))
+
+        interfaces = {}
+        for entry in port_entries:
+            idx = entry.get("ifIndex", "")
+            name = ifindex_map.get(idx, "")
+            if not name or name.startswith("cpu") or name.startswith("vlan"):
+                continue
+
+            unit_code = entry.get(
+                "hm2TrafficMgmtIfIngressStormCtlThresholdUnit", "1")
+
+            interfaces[name] = {
+                'unit': self._STORM_UNIT.get(unit_code, 'percent'),
+                'broadcast': {
+                    'enabled': entry.get(
+                        "hm2TrafficMgmtIfIngressStormCtlBcastMode",
+                        "2") == "1",
+                    'threshold': _safe_int(entry.get(
+                        "hm2TrafficMgmtIfIngressStormCtlBcastThreshold",
+                        "0")),
+                },
+                'multicast': {
+                    'enabled': entry.get(
+                        "hm2TrafficMgmtIfIngressStormCtlMcastMode",
+                        "2") == "1",
+                    'threshold': _safe_int(entry.get(
+                        "hm2TrafficMgmtIfIngressStormCtlMcastThreshold",
+                        "0")),
+                },
+                'unicast': {
+                    'enabled': entry.get(
+                        "hm2TrafficMgmtIfIngressStormCtlUcastMode",
+                        "2") == "1",
+                    'threshold': _safe_int(entry.get(
+                        "hm2TrafficMgmtIfIngressStormCtlUcastThreshold",
+                        "0")),
+                },
+            }
+
+        return {
+            'bucket_type': self._STORM_BUCKET.get(bucket_code,
+                                                   'single-bucket'),
+            'interfaces': interfaces,
+        }
+
+    def set_storm_control(self, interface, unit=None,
+                          broadcast_enabled=None, broadcast_threshold=None,
+                          multicast_enabled=None, multicast_threshold=None,
+                          unicast_enabled=None, unicast_threshold=None):
+        """Set per-port storm control configuration.
+
+        Args:
+            interface: port name (str) or list of port names
+            unit: 'percent' or 'pps'
+            broadcast_enabled: True/False
+            broadcast_threshold: int (0..14880000)
+            multicast_enabled: True/False
+            multicast_threshold: int (0..14880000)
+            unicast_enabled: True/False
+            unicast_threshold: int (0..14880000)
+        """
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
+        ifindex_map = self._build_ifindex_map()
+        name_to_idx = {name: idx for idx, name in ifindex_map.items()}
+
+        values = {}
+        if unit is not None:
+            val = self._STORM_UNIT_REV.get(unit)
+            if val is None:
+                raise ValueError(
+                    f"Invalid unit '{unit}': use 'percent' or 'pps'")
+            values["hm2TrafficMgmtIfIngressStormCtlThresholdUnit"] = val
+        if broadcast_enabled is not None:
+            values["hm2TrafficMgmtIfIngressStormCtlBcastMode"] = (
+                "1" if broadcast_enabled else "2")
+        if broadcast_threshold is not None:
+            values["hm2TrafficMgmtIfIngressStormCtlBcastThreshold"] = str(
+                int(broadcast_threshold))
+        if multicast_enabled is not None:
+            values["hm2TrafficMgmtIfIngressStormCtlMcastMode"] = (
+                "1" if multicast_enabled else "2")
+        if multicast_threshold is not None:
+            values["hm2TrafficMgmtIfIngressStormCtlMcastThreshold"] = str(
+                int(multicast_threshold))
+        if unicast_enabled is not None:
+            values["hm2TrafficMgmtIfIngressStormCtlUcastMode"] = (
+                "1" if unicast_enabled else "2")
+        if unicast_threshold is not None:
+            values["hm2TrafficMgmtIfIngressStormCtlUcastThreshold"] = str(
+                int(unicast_threshold))
+
+        if not values:
+            return
+
+        mutations = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            mutations.append((
+                "HM2-TRAFFICMGMT-MIB", "hm2TrafficMgmtIfEntry",
+                dict(values), {"ifIndex": ifidx}))
+
+        self._apply_mutations(mutations)
+
+    # ------------------------------------------------------------------
     # sFlow (RFC 3176)
     # ------------------------------------------------------------------
 
@@ -3327,3 +3477,320 @@ class MOPSHIOS:
 
         if mutations:
             self._apply_mutations(mutations)
+
+    # ------------------------------------------------------------------
+    # QoS (Class of Service)
+    # ------------------------------------------------------------------
+    _QOS_TRUST_MODE = {
+        '1': 'untrusted', '2': 'dot1p',
+        '3': 'ip-precedence', '4': 'ip-dscp',
+    }
+    _QOS_TRUST_MODE_REV = {
+        'untrusted': '1', 'dot1p': '2',
+        'ip-precedence': '3', 'ip-dscp': '4',
+    }
+    _QOS_SCHEDULER = {'1': 'strict', '2': 'weighted'}
+    _QOS_SCHEDULER_REV = {'strict': '1', 'weighted': '2'}
+
+    def get_qos(self):
+        """Return per-port QoS trust mode and queue scheduling.
+
+        Returns:
+            dict with:
+                'num_queues': int (device capability, typically 8)
+                'interfaces': {port_name: {
+                    'trust_mode': str,
+                    'shaping_rate': int (0 = no limit),
+                    'queues': {0..7: {
+                        'scheduler': str ('strict' or 'weighted'),
+                        'min_bw': int (percent),
+                        'max_bw': int (percent),
+                    }},
+                }}
+        """
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("HM2-PLATFORM-QOS-COS-MIB", "hm2AgentCosQueueCfgGroup", [
+                "hm2AgentCosQueueNumQueuesPerPort",
+            ]),
+            ("HM2-PLATFORM-QOS-COS-MIB", "hm2AgentCosMapIntfTrustEntry", [
+                "hm2AgentCosMapIntfTrustIntfIndex",
+                "hm2AgentCosMapIntfTrustMode",
+            ]),
+            ("HM2-PLATFORM-QOS-COS-MIB", "hm2AgentCosQueueControlEntry", [
+                "hm2AgentCosQueueIntfIndex",
+                "hm2AgentCosQueueIntfShapingRate",
+            ]),
+            ("HM2-PLATFORM-QOS-COS-MIB", "hm2AgentCosQueueEntry", [
+                "hm2AgentCosQueueIntfIndex",
+                "hm2AgentCosQueueIndex",
+                "hm2AgentCosQueueSchedulerType",
+                "hm2AgentCosQueueMinBandwidth",
+                "hm2AgentCosQueueMaxBandwidth",
+            ]),
+            decode_strings=False,
+        )
+
+        qos_mib = mibs.get("HM2-PLATFORM-QOS-COS-MIB", {})
+
+        # Scalar: number of queues
+        cfg = qos_mib.get("hm2AgentCosQueueCfgGroup", [{}])[0]
+        num_queues = _safe_int(
+            cfg.get("hm2AgentCosQueueNumQueuesPerPort", "8"))
+
+        # Trust mode per port
+        trust_by_idx = {}
+        for entry in qos_mib.get("hm2AgentCosMapIntfTrustEntry", []):
+            idx = entry.get("hm2AgentCosMapIntfTrustIntfIndex", "")
+            if idx == "0":
+                continue  # global default, skip
+            trust_by_idx[idx] = self._QOS_TRUST_MODE.get(
+                entry.get("hm2AgentCosMapIntfTrustMode", "2"), 'dot1p')
+
+        # Shaping rate per port
+        shaping_by_idx = {}
+        for entry in qos_mib.get("hm2AgentCosQueueControlEntry", []):
+            idx = entry.get("hm2AgentCosQueueIntfIndex", "")
+            if idx == "0":
+                continue
+            shaping_by_idx[idx] = _safe_int(
+                entry.get("hm2AgentCosQueueIntfShapingRate", "0"))
+
+        # Queue scheduling per port per queue
+        queues_by_idx = {}
+        for entry in qos_mib.get("hm2AgentCosQueueEntry", []):
+            idx = entry.get("hm2AgentCosQueueIntfIndex", "")
+            if idx == "0":
+                continue
+            qidx = _safe_int(entry.get("hm2AgentCosQueueIndex", "0"))
+            if idx not in queues_by_idx:
+                queues_by_idx[idx] = {}
+            queues_by_idx[idx][qidx] = {
+                'scheduler': self._QOS_SCHEDULER.get(
+                    entry.get("hm2AgentCosQueueSchedulerType", "1"),
+                    'strict'),
+                'min_bw': _safe_int(
+                    entry.get("hm2AgentCosQueueMinBandwidth", "0")),
+                'max_bw': _safe_int(
+                    entry.get("hm2AgentCosQueueMaxBandwidth", "0")),
+            }
+
+        # Build result keyed by port name
+        interfaces = {}
+        for idx, name in ifindex_map.items():
+            if not name or name.startswith("cpu") or name.startswith("vlan"):
+                continue
+            if idx not in trust_by_idx:
+                continue
+            interfaces[name] = {
+                'trust_mode': trust_by_idx.get(idx, 'dot1p'),
+                'shaping_rate': shaping_by_idx.get(idx, 0),
+                'queues': queues_by_idx.get(idx, {}),
+            }
+
+        return {
+            'num_queues': num_queues,
+            'interfaces': interfaces,
+        }
+
+    def set_qos(self, interface, trust_mode=None, shaping_rate=None,
+                queue=None, scheduler=None, min_bw=None, max_bw=None):
+        """Set per-port QoS trust mode, shaping rate, or queue scheduling.
+
+        Args:
+            interface: port name (str) or list of port names
+            trust_mode: 'untrusted', 'dot1p', 'ip-precedence', 'ip-dscp'
+            shaping_rate: int 0-100 (percent, 0 = no limit)
+            queue: int 0-7 (required if setting scheduler/min_bw/max_bw)
+            scheduler: 'strict' or 'weighted'
+            min_bw: int 0-100 (percent, weighted queue minimum)
+            max_bw: int 0-100 (percent, weighted queue maximum)
+        """
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
+        ifindex_map = self._build_ifindex_map()
+        name_to_idx = {name: idx for idx, name in ifindex_map.items()}
+
+        # Validate enums
+        if trust_mode is not None:
+            val = self._QOS_TRUST_MODE_REV.get(trust_mode)
+            if val is None:
+                raise ValueError(
+                    f"Invalid trust_mode '{trust_mode}': use "
+                    "'untrusted', 'dot1p', 'ip-precedence', 'ip-dscp'")
+
+        if scheduler is not None:
+            val = self._QOS_SCHEDULER_REV.get(scheduler)
+            if val is None:
+                raise ValueError(
+                    f"Invalid scheduler '{scheduler}': "
+                    "use 'strict' or 'weighted'")
+
+        queue_needed = (scheduler is not None or min_bw is not None
+                        or max_bw is not None)
+        if queue_needed and queue is None:
+            raise ValueError(
+                "queue index (0-7) required when setting "
+                "scheduler, min_bw, or max_bw")
+
+        mutations = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+
+            if trust_mode is not None:
+                mutations.append((
+                    "HM2-PLATFORM-QOS-COS-MIB",
+                    "hm2AgentCosMapIntfTrustEntry",
+                    {"hm2AgentCosMapIntfTrustMode":
+                     self._QOS_TRUST_MODE_REV[trust_mode]},
+                    {"hm2AgentCosMapIntfTrustIntfIndex": ifidx}))
+
+            if shaping_rate is not None:
+                mutations.append((
+                    "HM2-PLATFORM-QOS-COS-MIB",
+                    "hm2AgentCosQueueControlEntry",
+                    {"hm2AgentCosQueueIntfShapingRate":
+                     str(int(shaping_rate))},
+                    {"hm2AgentCosQueueIntfIndex": ifidx}))
+
+            if queue_needed:
+                q_values = {}
+                if scheduler is not None:
+                    q_values["hm2AgentCosQueueSchedulerType"] = (
+                        self._QOS_SCHEDULER_REV[scheduler])
+                if min_bw is not None:
+                    q_values["hm2AgentCosQueueMinBandwidth"] = str(
+                        int(min_bw))
+                if max_bw is not None:
+                    q_values["hm2AgentCosQueueMaxBandwidth"] = str(
+                        int(max_bw))
+                mutations.append((
+                    "HM2-PLATFORM-QOS-COS-MIB",
+                    "hm2AgentCosQueueEntry",
+                    q_values,
+                    {"hm2AgentCosQueueIntfIndex": ifidx,
+                     "hm2AgentCosQueueIndex": str(int(queue))}))
+
+        if mutations:
+            self._apply_mutations(mutations)
+
+        if self._staging:
+            return None
+        return self.get_qos()
+
+    def get_qos_mapping(self):
+        """Return global dot1p and DSCP to traffic class mapping tables.
+
+        Returns:
+            dict with:
+                'dot1p': {0: tc, 1: tc, ..., 7: tc}
+                'dscp':  {0: tc, 8: tc, 10: tc, ..., 56: tc}
+        """
+        result = self.client.get_multi([
+            ("HM2-L2FORWARDING-MIB", "hm2TrafficClassEntry", [
+                "hm2TrafficClassPriority",
+                "hm2TrafficClass",
+            ]),
+            ("HM2-L2FORWARDING-MIB", "hm2CosMapIpDscpEntry", [
+                "hm2CosMapIpDscpValue",
+                "hm2CosMapIpDscpTrafficClass",
+            ]),
+        ], decode_strings=False)
+
+        l2fwd = result["mibs"].get("HM2-L2FORWARDING-MIB", {})
+
+        # dot1p → TC (8 entries, priority 0-7)
+        dot1p = {}
+        for entry in l2fwd.get("hm2TrafficClassEntry", []):
+            prio = _safe_int(entry.get("hm2TrafficClassPriority", "0"))
+            tc = _safe_int(entry.get("hm2TrafficClass", "0"))
+            dot1p[prio] = tc
+
+        # DSCP → TC (64 entries, dscp 0-63)
+        dscp = {}
+        for entry in l2fwd.get("hm2CosMapIpDscpEntry", []):
+            dval = _safe_int(entry.get("hm2CosMapIpDscpValue", "0"))
+            tc = _safe_int(entry.get("hm2CosMapIpDscpTrafficClass", "0"))
+            dscp[dval] = tc
+
+        return {'dot1p': dot1p, 'dscp': dscp}
+
+    def set_qos_mapping(self, dot1p=None, dscp=None):
+        """Set global dot1p and/or DSCP to traffic class mappings.
+
+        Args:
+            dot1p: dict {priority(0-7): traffic_class(0-7)}
+            dscp:  dict {dscp_value(0-63): traffic_class(0-7)}
+
+        Only the mappings provided are changed; others are left untouched.
+        """
+        mutations = []
+
+        if dot1p is not None:
+            for prio, tc in dot1p.items():
+                mutations.append((
+                    "HM2-L2FORWARDING-MIB",
+                    "hm2TrafficClassEntry",
+                    {"hm2TrafficClass": str(int(tc))},
+                    {"hm2TrafficClassPriority": str(int(prio))}))
+
+        if dscp is not None:
+            for dval, tc in dscp.items():
+                mutations.append((
+                    "HM2-L2FORWARDING-MIB",
+                    "hm2CosMapIpDscpEntry",
+                    {"hm2CosMapIpDscpTrafficClass": str(int(tc))},
+                    {"hm2CosMapIpDscpValue": str(int(dval))}))
+
+        if mutations:
+            self._apply_mutations(mutations)
+
+        if self._staging:
+            return None
+        return self.get_qos_mapping()
+
+    def get_management_priority(self):
+        """Return management frame priority settings.
+
+        Returns:
+            dict with:
+                'dot1p': int (0-7, VLAN priority for management replies)
+                'ip_dscp': int (0-63, IP DSCP for management replies)
+        """
+        result = self.client.get_multi([
+            ("HM2-NETCONFIG-MIB", "hm2NetStaticGroup", [
+                "hm2NetVlanPriority",
+                "hm2NetIpDscpPriority",
+            ]),
+        ], decode_strings=False)
+
+        net = (result["mibs"].get("HM2-NETCONFIG-MIB", {})
+               .get("hm2NetStaticGroup", [{}])[0])
+
+        return {
+            'dot1p': _safe_int(net.get("hm2NetVlanPriority", "0")),
+            'ip_dscp': _safe_int(net.get("hm2NetIpDscpPriority", "0")),
+        }
+
+    def set_management_priority(self, dot1p=None, ip_dscp=None):
+        """Set management frame priority.
+
+        Args:
+            dot1p: int 0-7 (VLAN priority for management replies)
+            ip_dscp: int 0-63 (IP DSCP for management replies)
+        """
+        values = {}
+        if dot1p is not None:
+            values["hm2NetVlanPriority"] = str(int(dot1p))
+        if ip_dscp is not None:
+            values["hm2NetIpDscpPriority"] = str(int(ip_dscp))
+
+        if not values:
+            return
+
+        self._apply_set("HM2-NETCONFIG-MIB", "hm2NetStaticGroup", values)
+
+        if self._staging:
+            return None
+        return self.get_management_priority()

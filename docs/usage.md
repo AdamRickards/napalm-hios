@@ -106,6 +106,12 @@ device.close()
 - `get_rstp_port()` — per-port STP/RSTP state
 - `get_auto_disable()` — per-port auto-disable status and reason configuration
 - `get_loop_protection()` — global and per-port loop detection state
+- `get_sflow()` — sFlow agent and receiver configuration
+- `get_sflow_port()` — per-port sFlow sampler and poller config
+- `get_storm_control()` — per-port broadcast/multicast/unicast ingress rate limiting
+- `get_qos()` — per-port trust mode, queue scheduling, shaping rate
+- `get_qos_mapping()` — global dot1p→TC and DSCP→TC mapping tables
+- `get_management_priority()` — management frame priority (dot1p + ip-dscp)
 - `get_vlan_ingress()` — per-port VLAN ingress settings (PVID, frame types, filtering)
 - `get_vlan_egress()` — per-VLAN-per-port membership (Tagged/Untagged/Forbidden)
 - `get_lldp_neighbors_detail_extended()` — LLDP with 802.1/802.3 extensions
@@ -127,6 +133,12 @@ device.close()
 - `reset_auto_disable()` — re-enable an auto-disabled port
 - `set_auto_disable_reason()` — enable/disable auto-disable per reason
 - `set_loop_protection()` — configure loop protection (global or per-port)
+- `set_sflow()` — configure sFlow receivers
+- `set_sflow_port()` — configure per-port sFlow sampling and polling
+- `set_storm_control()` — set per-port storm control thresholds and enable/disable
+- `set_qos()` — set per-port trust mode, shaping rate, queue scheduling
+- `set_qos_mapping()` — set global dot1p→TC and DSCP→TC mappings
+- `set_management_priority()` — set management frame priority values
 - `set_vlan_ingress()` — set per-port VLAN ingress parameters
 - `set_vlan_egress()` — set per-port VLAN egress membership
 - `create_vlan()` — create VLAN in database

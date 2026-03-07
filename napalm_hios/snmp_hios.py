@@ -229,6 +229,61 @@ OID_hm2KeepalivePortTxFrames       = '1.3.6.1.4.1.248.12.1.2.31.1.249'
 OID_hm2KeepalivePortRxFrames       = '1.3.6.1.4.1.248.12.1.2.31.1.250'
 OID_hm2KeepalivePortDiscardFrames  = '1.3.6.1.4.1.248.12.1.2.31.1.251'
 
+# HM2-TRAFFICMGMT-MIB — Storm Control  1.3.6.1.4.1.248.11.31.1.*
+# hm2TrafficMgmtIfEntry (indexed by ifIndex)  .1.1.1.{col}.{ifIndex}
+OID_hm2StormCtlThresholdUnit  = '1.3.6.1.4.1.248.11.31.1.1.1.4'
+OID_hm2StormCtlBcastMode      = '1.3.6.1.4.1.248.11.31.1.1.1.5'
+OID_hm2StormCtlBcastThreshold = '1.3.6.1.4.1.248.11.31.1.1.1.6'
+OID_hm2StormCtlMcastMode      = '1.3.6.1.4.1.248.11.31.1.1.1.7'
+OID_hm2StormCtlMcastThreshold = '1.3.6.1.4.1.248.11.31.1.1.1.8'
+OID_hm2StormCtlUcastMode      = '1.3.6.1.4.1.248.11.31.1.1.1.9'
+OID_hm2StormCtlUcastThreshold = '1.3.6.1.4.1.248.11.31.1.1.1.10'
+# Global scalar
+OID_hm2StormBucketType         = '1.3.6.1.4.1.248.11.31.1.3'
+
+# SFLOW-MIB (RFC 3176)  1.3.6.1.4.1.14706.1.1.* (sFlowMIB.sFlowAgent)
+# Agent scalars
+OID_sFlowVersion          = '1.3.6.1.4.1.14706.1.1.1'
+OID_sFlowAgentAddressType = '1.3.6.1.4.1.14706.1.1.2'
+OID_sFlowAgentAddress     = '1.3.6.1.4.1.14706.1.1.3'
+# Receiver table  .1.4.1.{col}.{rcvr_index}
+OID_sFlowRcvrOwner        = '1.3.6.1.4.1.14706.1.1.4.1.2'
+OID_sFlowRcvrTimeout      = '1.3.6.1.4.1.14706.1.1.4.1.3'
+OID_sFlowRcvrMaxDgramSize = '1.3.6.1.4.1.14706.1.1.4.1.4'
+OID_sFlowRcvrAddressType  = '1.3.6.1.4.1.14706.1.1.4.1.5'
+OID_sFlowRcvrAddress      = '1.3.6.1.4.1.14706.1.1.4.1.6'
+OID_sFlowRcvrPort         = '1.3.6.1.4.1.14706.1.1.4.1.7'
+OID_sFlowRcvrDgramVersion = '1.3.6.1.4.1.14706.1.1.4.1.8'
+# Flow sampler table  .1.5.1.{col}.{ds_suffix}
+OID_sFlowFsReceiver       = '1.3.6.1.4.1.14706.1.1.5.1.3'
+OID_sFlowFsPacketRate     = '1.3.6.1.4.1.14706.1.1.5.1.4'
+OID_sFlowFsMaxHeaderSize  = '1.3.6.1.4.1.14706.1.1.5.1.5'
+# Counter poller table  .1.6.1.{col}.{ds_suffix}
+OID_sFlowCpReceiver       = '1.3.6.1.4.1.14706.1.1.6.1.3'
+OID_sFlowCpInterval       = '1.3.6.1.4.1.14706.1.1.6.1.4'
+
+# HM2-PLATFORM-QOS-COS-MIB — QoS  1.3.6.1.4.1.248.12.3.3.*
+# Trust mode (indexed by ifIndex)
+OID_hm2CosMapIntfTrustMode  = '1.3.6.1.4.1.248.12.3.3.1.3.1.2'
+# Queue scalars
+OID_hm2CosQueueNumQueuesPerPort = '1.3.6.1.4.1.248.12.3.3.2.1'
+# Queue control (indexed by ifIndex)
+OID_hm2CosQueueIntfShapingRate  = '1.3.6.1.4.1.248.12.3.3.2.3.1.2'
+# Queue table (indexed by ifIndex.queueIndex)
+OID_hm2CosQueueSchedulerType   = '1.3.6.1.4.1.248.12.3.3.2.4.1.2'
+OID_hm2CosQueueMinBandwidth    = '1.3.6.1.4.1.248.12.3.3.2.4.1.3'
+OID_hm2CosQueueMaxBandwidth    = '1.3.6.1.4.1.248.12.3.3.2.4.1.4'
+
+# HM2-L2FORWARDING-MIB — Traffic Class Mapping  1.3.6.1.4.1.248.11.30.1.2.*
+# dot1p → TC (indexed by priority 0-7)
+OID_hm2TrafficClass             = '1.3.6.1.4.1.248.11.30.1.2.1.1.2'
+# DSCP → TC (indexed by dscp value 0-63)
+OID_hm2CosMapIpDscpTrafficClass = '1.3.6.1.4.1.248.11.30.1.2.2.1.2'
+
+# HM2-NETCONFIG-MIB — Management Priority  1.3.6.1.4.1.248.11.20.1.1.*
+OID_hm2NetVlanPriority   = '1.3.6.1.4.1.248.11.20.1.1.8'
+OID_hm2NetIpDscpPriority = '1.3.6.1.4.1.248.11.20.1.1.9'
+
 # HM2-PLATFORM-SWITCHING-MIB — STP/RSTP  1.3.6.1.4.1.248.12.1.2.15.*
 # Global config (hm2AgentStpSwitchConfigGroup)
 OID_hm2AgentStpForceVersion       = '1.3.6.1.4.1.248.12.1.2.15.5'
@@ -3229,6 +3284,596 @@ class SNMPHIOS:
 
             if sets:
                 await self._set_oids(*sets)
+
+    # ── Storm Control ─────────────────────────────────────────────
+
+    _STORM_UNIT = {1: 'percent', 2: 'pps'}
+    _STORM_UNIT_REV = {'percent': 1, 'pps': 2}
+    _STORM_BUCKET = {1: 'single-bucket', 2: 'multi-bucket'}
+
+    def get_storm_control(self):
+        """Return per-port storm control configuration."""
+        return asyncio.run(self._get_storm_control_async())
+
+    async def _get_storm_control_async(self):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+
+        scalars = await self._get_scalar(OID_hm2StormBucketType)
+        bucket_code = _snmp_int(scalars.get(OID_hm2StormBucketType, 1))
+
+        port_rows = await self._walk_columns({
+            'unit': OID_hm2StormCtlThresholdUnit,
+            'bcast_mode': OID_hm2StormCtlBcastMode,
+            'bcast_threshold': OID_hm2StormCtlBcastThreshold,
+            'mcast_mode': OID_hm2StormCtlMcastMode,
+            'mcast_threshold': OID_hm2StormCtlMcastThreshold,
+            'ucast_mode': OID_hm2StormCtlUcastMode,
+            'ucast_threshold': OID_hm2StormCtlUcastThreshold,
+        }, engine)
+
+        interfaces = {}
+        for suffix, cols in port_rows.items():
+            name = ifmap.get(suffix, '')
+            if not name or name.startswith('cpu') or name.startswith('vlan'):
+                continue
+            interfaces[name] = {
+                'unit': self._STORM_UNIT.get(
+                    _snmp_int(cols.get('unit', 1)), 'percent'),
+                'broadcast': {
+                    'enabled': _snmp_int(cols.get('bcast_mode', 2)) == 1,
+                    'threshold': _snmp_int(cols.get('bcast_threshold', 0)),
+                },
+                'multicast': {
+                    'enabled': _snmp_int(cols.get('mcast_mode', 2)) == 1,
+                    'threshold': _snmp_int(cols.get('mcast_threshold', 0)),
+                },
+                'unicast': {
+                    'enabled': _snmp_int(cols.get('ucast_mode', 2)) == 1,
+                    'threshold': _snmp_int(cols.get('ucast_threshold', 0)),
+                },
+            }
+
+        return {
+            'bucket_type': self._STORM_BUCKET.get(bucket_code,
+                                                   'single-bucket'),
+            'interfaces': interfaces,
+        }
+
+    def set_storm_control(self, interface, unit=None,
+                          broadcast_enabled=None, broadcast_threshold=None,
+                          multicast_enabled=None, multicast_threshold=None,
+                          unicast_enabled=None, unicast_threshold=None):
+        """Set per-port storm control configuration."""
+        return asyncio.run(self._set_storm_control_async(
+            interface, unit, broadcast_enabled, broadcast_threshold,
+            multicast_enabled, multicast_threshold,
+            unicast_enabled, unicast_threshold,
+        ))
+
+    async def _set_storm_control_async(self, interface, unit,
+                                        broadcast_enabled, broadcast_threshold,
+                                        multicast_enabled, multicast_threshold,
+                                        unicast_enabled, unicast_threshold):
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        name_to_idx = {name: idx for idx, name in ifmap.items()}
+
+        if unit is not None:
+            unit_val = self._STORM_UNIT_REV.get(unit)
+            if unit_val is None:
+                raise ValueError(
+                    f"Invalid unit '{unit}': use 'percent' or 'pps'")
+
+        sets = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            if unit is not None:
+                sets.append((f"{OID_hm2StormCtlThresholdUnit}.{ifidx}",
+                             Integer32(unit_val)))
+            if broadcast_enabled is not None:
+                sets.append((f"{OID_hm2StormCtlBcastMode}.{ifidx}",
+                             Integer32(1 if broadcast_enabled else 2)))
+            if broadcast_threshold is not None:
+                sets.append((f"{OID_hm2StormCtlBcastThreshold}.{ifidx}",
+                             Unsigned32(int(broadcast_threshold))))
+            if multicast_enabled is not None:
+                sets.append((f"{OID_hm2StormCtlMcastMode}.{ifidx}",
+                             Integer32(1 if multicast_enabled else 2)))
+            if multicast_threshold is not None:
+                sets.append((f"{OID_hm2StormCtlMcastThreshold}.{ifidx}",
+                             Unsigned32(int(multicast_threshold))))
+            if unicast_enabled is not None:
+                sets.append((f"{OID_hm2StormCtlUcastMode}.{ifidx}",
+                             Integer32(1 if unicast_enabled else 2)))
+            if unicast_threshold is not None:
+                sets.append((f"{OID_hm2StormCtlUcastThreshold}.{ifidx}",
+                             Unsigned32(int(unicast_threshold))))
+
+        if sets:
+            await self._set_oids(*sets)
+
+    # ── sFlow ────────────────────────────────────────────────────
+
+    # DataSource OID prefix for ifTable: 1.3.6.1.2.1.2.2.1.1
+    # When used as a table index, encoded with length prefix:
+    #   suffix = {oid_len}.1.3.6.1.2.1.2.2.1.1.{ifIndex}.{instance}
+    _SFLOW_DS_PREFIX = '1.3.6.1.2.1.2.2.1.1'
+    _SFLOW_DS_PARTS = 10  # number of components in the prefix
+
+    @staticmethod
+    def _sflow_suffix_to_ifindex(suffix):
+        """Extract ifIndex from sFlow sampler/poller table suffix.
+
+        Suffix format: {oid_len}.1.3.6.1.2.1.2.2.1.1.{ifIndex}.{instance}
+        The OID length (11 for standard ifTable DataSource) is the first
+        element. ifIndex is the last component of the DataSource OID,
+        at position oid_len in the parts array (1-indexed within OID).
+        """
+        parts = suffix.split('.')
+        if len(parts) < 3:
+            return None
+        try:
+            oid_len = int(parts[0])
+        except ValueError:
+            return None
+        # ifIndex is at parts[oid_len] (last OID component)
+        if len(parts) > oid_len:
+            return parts[oid_len]
+        return None
+
+    @staticmethod
+    def _sflow_ds_suffix(ifidx, instance=1):
+        """Build sFlow DataSource table suffix for SET.
+
+        Returns: '11.1.3.6.1.2.1.2.2.1.1.{ifidx}.{instance}'
+        """
+        ds_oid = f'1.3.6.1.2.1.2.2.1.1.{ifidx}'
+        ds_len = len(ds_oid.split('.'))
+        return f'{ds_len}.{ds_oid}.{instance}'
+
+    def get_sflow(self):
+        """Return sFlow agent info and receiver table."""
+        return asyncio.run(self._get_sflow_async())
+
+    async def _get_sflow_async(self):
+        engine = SnmpEngine()
+
+        scalars = await self._get_scalar(
+            OID_sFlowVersion, OID_sFlowAgentAddress)
+
+        rcvr_rows = await self._walk_columns({
+            'owner': OID_sFlowRcvrOwner,
+            'timeout': OID_sFlowRcvrTimeout,
+            'max_datagram_size': OID_sFlowRcvrMaxDgramSize,
+            'address_type': OID_sFlowRcvrAddressType,
+            'address': OID_sFlowRcvrAddress,
+            'port': OID_sFlowRcvrPort,
+            'datagram_version': OID_sFlowRcvrDgramVersion,
+        }, engine)
+
+        receivers = {}
+        for suffix, cols in rcvr_rows.items():
+            idx = _snmp_int(suffix)
+            if idx < 1:
+                continue
+            receivers[idx] = {
+                'owner': _snmp_str(cols.get('owner', '')),
+                'timeout': _snmp_int(cols.get('timeout', 0)),
+                'max_datagram_size': _snmp_int(
+                    cols.get('max_datagram_size', 1400)),
+                'address_type': _snmp_int(
+                    cols.get('address_type', 1)),
+                'address': _snmp_ip(cols.get('address', '')),
+                'port': _snmp_int(cols.get('port', 6343)),
+                'datagram_version': _snmp_int(
+                    cols.get('datagram_version', 5)),
+            }
+
+        return {
+            'agent_version': _snmp_str(
+                scalars.get(OID_sFlowVersion, '')),
+            'agent_address': _snmp_ip(
+                scalars.get(OID_sFlowAgentAddress, '')),
+            'receivers': receivers,
+        }
+
+    def set_sflow(self, receiver, address=None, port=None, owner=None,
+                  timeout=None, max_datagram_size=None):
+        """Configure an sFlow receiver."""
+        return asyncio.run(self._set_sflow_async(
+            receiver, address, port, owner, timeout, max_datagram_size))
+
+    async def _set_sflow_async(self, receiver, address, port, owner,
+                               timeout, max_datagram_size):
+        if not 1 <= receiver <= 8:
+            raise ValueError(f"receiver must be 1-8, got {receiver}")
+
+        idx = str(receiver)
+
+        # Owner + timeout must be set atomically (RFC 3176).
+        # Send as one PDU when both provided, or owner alone if
+        # timeout is omitted.
+        if owner is not None:
+            owner_sets = [
+                (f"{OID_sFlowRcvrOwner}.{idx}",
+                 OctetString(owner.encode('utf-8')))]
+            if timeout is not None:
+                owner_sets.append(
+                    (f"{OID_sFlowRcvrTimeout}.{idx}",
+                     Integer32(int(timeout))))
+                timeout = None  # already sent
+            await self._set_oids(*owner_sets)
+
+        sets = []
+        if address is not None:
+            raw = bytes(int(o) for o in address.split('.'))
+            sets.append((f"{OID_sFlowRcvrAddress}.{idx}",
+                         OctetString(raw)))
+            sets.append((f"{OID_sFlowRcvrAddressType}.{idx}",
+                         Integer32(1)))  # ipv4
+        if port is not None:
+            sets.append((f"{OID_sFlowRcvrPort}.{idx}",
+                         Integer32(int(port))))
+        if timeout is not None:
+            sets.append((f"{OID_sFlowRcvrTimeout}.{idx}",
+                         Integer32(int(timeout))))
+        if max_datagram_size is not None:
+            sets.append((f"{OID_sFlowRcvrMaxDgramSize}.{idx}",
+                         Integer32(int(max_datagram_size))))
+
+        if sets:
+            await self._set_oids(*sets)
+
+    def get_sflow_port(self, interfaces=None, type=None):
+        """Return sFlow sampler and poller config per port."""
+        return asyncio.run(self._get_sflow_port_async(interfaces, type))
+
+    async def _get_sflow_port_async(self, interfaces, type_filter):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        iface_set = set(interfaces) if interfaces else None
+
+        result = {}
+
+        if type_filter is None or type_filter == 'sampler':
+            fs_rows = await self._walk_columns({
+                'receiver': OID_sFlowFsReceiver,
+                'sample_rate': OID_sFlowFsPacketRate,
+                'max_header_size': OID_sFlowFsMaxHeaderSize,
+            }, engine)
+            for suffix, cols in fs_rows.items():
+                ifidx = self._sflow_suffix_to_ifindex(suffix)
+                if ifidx is None:
+                    continue
+                name = ifmap.get(ifidx, '')
+                if not name or name.startswith('cpu'):
+                    continue
+                if iface_set and name not in iface_set:
+                    continue
+                if name not in result:
+                    result[name] = {}
+                result[name]['sampler'] = {
+                    'receiver': _snmp_int(cols.get('receiver', 0)),
+                    'sample_rate': _snmp_int(
+                        cols.get('sample_rate', 0)),
+                    'max_header_size': _snmp_int(
+                        cols.get('max_header_size', 128)),
+                }
+
+        if type_filter is None or type_filter == 'poller':
+            cp_rows = await self._walk_columns({
+                'receiver': OID_sFlowCpReceiver,
+                'interval': OID_sFlowCpInterval,
+            }, engine)
+            for suffix, cols in cp_rows.items():
+                ifidx = self._sflow_suffix_to_ifindex(suffix)
+                if ifidx is None:
+                    continue
+                name = ifmap.get(ifidx, '')
+                if not name or name.startswith('cpu'):
+                    continue
+                if iface_set and name not in iface_set:
+                    continue
+                if name not in result:
+                    result[name] = {}
+                result[name]['poller'] = {
+                    'receiver': _snmp_int(cols.get('receiver', 0)),
+                    'interval': _snmp_int(cols.get('interval', 0)),
+                }
+
+        return result
+
+    def set_sflow_port(self, interfaces, receiver, sample_rate=None,
+                       interval=None, max_header_size=None):
+        """Configure sFlow sampling/polling on ports."""
+        return asyncio.run(self._set_sflow_port_async(
+            interfaces, receiver, sample_rate, interval,
+            max_header_size))
+
+    async def _set_sflow_port_async(self, interfaces, receiver,
+                                    sample_rate, interval,
+                                    max_header_size):
+        if sample_rate is None and interval is None:
+            raise ValueError(
+                "At least one of sample_rate or interval must be provided")
+
+        interfaces = ([interfaces] if isinstance(interfaces, str)
+                      else list(interfaces))
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        name_to_idx = {name: idx for idx, name in ifmap.items()}
+
+        sets = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+
+            ds_suffix = self._sflow_ds_suffix(ifidx)
+
+            if sample_rate is not None:
+                if receiver == 0:
+                    sets.append((
+                        f"{OID_sFlowFsReceiver}.{ds_suffix}",
+                        Integer32(0)))
+                else:
+                    sets.append((
+                        f"{OID_sFlowFsReceiver}.{ds_suffix}",
+                        Integer32(int(receiver))))
+                    sets.append((
+                        f"{OID_sFlowFsPacketRate}.{ds_suffix}",
+                        Integer32(int(sample_rate))))
+                    if max_header_size is not None:
+                        sets.append((
+                            f"{OID_sFlowFsMaxHeaderSize}.{ds_suffix}",
+                            Integer32(int(max_header_size))))
+
+            if interval is not None:
+                if receiver == 0:
+                    sets.append((
+                        f"{OID_sFlowCpReceiver}.{ds_suffix}",
+                        Integer32(0)))
+                else:
+                    sets.append((
+                        f"{OID_sFlowCpReceiver}.{ds_suffix}",
+                        Integer32(int(receiver))))
+                    sets.append((
+                        f"{OID_sFlowCpInterval}.{ds_suffix}",
+                        Integer32(int(interval))))
+
+        if sets:
+            await self._set_oids(*sets)
+
+    # ── QoS ──────────────────────────────────────────────────────
+    _QOS_TRUST_MODE = {
+        1: 'untrusted', 2: 'dot1p',
+        3: 'ip-precedence', 4: 'ip-dscp',
+    }
+    _QOS_TRUST_MODE_REV = {
+        'untrusted': 1, 'dot1p': 2,
+        'ip-precedence': 3, 'ip-dscp': 4,
+    }
+    _QOS_SCHEDULER = {1: 'strict', 2: 'weighted'}
+    _QOS_SCHEDULER_REV = {'strict': 1, 'weighted': 2}
+
+    def get_qos(self):
+        """Return per-port QoS trust mode and queue scheduling."""
+        return asyncio.run(self._get_qos_async())
+
+    async def _get_qos_async(self):
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+
+        scalars = await self._get_scalar(OID_hm2CosQueueNumQueuesPerPort)
+        num_queues = _snmp_int(
+            scalars.get(OID_hm2CosQueueNumQueuesPerPort, 8))
+
+        trust_rows = await self._walk_columns({
+            'trust': OID_hm2CosMapIntfTrustMode,
+        }, engine)
+
+        shaping_rows = await self._walk_columns({
+            'shaping': OID_hm2CosQueueIntfShapingRate,
+        }, engine)
+
+        queue_rows = await self._walk_columns({
+            'scheduler': OID_hm2CosQueueSchedulerType,
+            'min_bw': OID_hm2CosQueueMinBandwidth,
+            'max_bw': OID_hm2CosQueueMaxBandwidth,
+        }, engine)
+
+        # Build per-port queue dict from compound suffix ifIndex.queueIndex
+        queues_by_idx = {}
+        for suffix, cols in queue_rows.items():
+            parts = suffix.split('.')
+            if len(parts) != 2:
+                continue
+            ifidx, qidx = parts[0], int(parts[1])
+            if ifidx == '0':
+                continue
+            if ifidx not in queues_by_idx:
+                queues_by_idx[ifidx] = {}
+            queues_by_idx[ifidx][qidx] = {
+                'scheduler': self._QOS_SCHEDULER.get(
+                    _snmp_int(cols.get('scheduler', 1)), 'strict'),
+                'min_bw': _snmp_int(cols.get('min_bw', 0)),
+                'max_bw': _snmp_int(cols.get('max_bw', 0)),
+            }
+
+        interfaces = {}
+        for suffix, cols in trust_rows.items():
+            if suffix == '0':
+                continue
+            name = ifmap.get(suffix, '')
+            if not name or name.startswith('cpu') or name.startswith('vlan'):
+                continue
+            shaping_cols = shaping_rows.get(suffix, {})
+            interfaces[name] = {
+                'trust_mode': self._QOS_TRUST_MODE.get(
+                    _snmp_int(cols.get('trust', 2)), 'dot1p'),
+                'shaping_rate': _snmp_int(
+                    shaping_cols.get('shaping', 0)),
+                'queues': queues_by_idx.get(suffix, {}),
+            }
+
+        return {
+            'num_queues': num_queues,
+            'interfaces': interfaces,
+        }
+
+    def set_qos(self, interface, trust_mode=None, shaping_rate=None,
+                queue=None, scheduler=None, min_bw=None, max_bw=None):
+        """Set per-port QoS trust mode, shaping rate, or queue scheduling."""
+        return asyncio.run(self._set_qos_async(
+            interface, trust_mode, shaping_rate,
+            queue, scheduler, min_bw, max_bw,
+        ))
+
+    async def _set_qos_async(self, interface, trust_mode, shaping_rate,
+                              queue, scheduler, min_bw, max_bw):
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        name_to_idx = {name: idx for idx, name in ifmap.items()}
+
+        if trust_mode is not None:
+            val = self._QOS_TRUST_MODE_REV.get(trust_mode)
+            if val is None:
+                raise ValueError(
+                    f"Invalid trust_mode '{trust_mode}': use "
+                    "'untrusted', 'dot1p', 'ip-precedence', 'ip-dscp'")
+
+        if scheduler is not None:
+            val = self._QOS_SCHEDULER_REV.get(scheduler)
+            if val is None:
+                raise ValueError(
+                    f"Invalid scheduler '{scheduler}': "
+                    "use 'strict' or 'weighted'")
+
+        queue_needed = (scheduler is not None or min_bw is not None
+                        or max_bw is not None)
+        if queue_needed and queue is None:
+            raise ValueError(
+                "queue index (0-7) required when setting "
+                "scheduler, min_bw, or max_bw")
+
+        sets = []
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            if trust_mode is not None:
+                sets.append((
+                    f"{OID_hm2CosMapIntfTrustMode}.{ifidx}",
+                    Integer32(self._QOS_TRUST_MODE_REV[trust_mode])))
+            if shaping_rate is not None:
+                sets.append((
+                    f"{OID_hm2CosQueueIntfShapingRate}.{ifidx}",
+                    Unsigned32(int(shaping_rate))))
+            if queue_needed:
+                q_suffix = f"{ifidx}.{int(queue)}"
+                if scheduler is not None:
+                    sets.append((
+                        f"{OID_hm2CosQueueSchedulerType}.{q_suffix}",
+                        Integer32(self._QOS_SCHEDULER_REV[scheduler])))
+                if min_bw is not None:
+                    sets.append((
+                        f"{OID_hm2CosQueueMinBandwidth}.{q_suffix}",
+                        Unsigned32(int(min_bw))))
+                if max_bw is not None:
+                    sets.append((
+                        f"{OID_hm2CosQueueMaxBandwidth}.{q_suffix}",
+                        Unsigned32(int(max_bw))))
+
+        if sets:
+            await self._set_oids(*sets)
+
+    def get_qos_mapping(self):
+        """Return global dot1p and DSCP to traffic class mapping tables."""
+        return asyncio.run(self._get_qos_mapping_async())
+
+    async def _get_qos_mapping_async(self):
+        engine = SnmpEngine()
+
+        dot1p_rows = await self._walk_columns({
+            'tc': OID_hm2TrafficClass,
+        }, engine)
+
+        dscp_rows = await self._walk_columns({
+            'tc': OID_hm2CosMapIpDscpTrafficClass,
+        }, engine)
+
+        dot1p = {}
+        for suffix, cols in dot1p_rows.items():
+            prio = int(suffix)
+            dot1p[prio] = _snmp_int(cols.get('tc', 0))
+
+        dscp = {}
+        for suffix, cols in dscp_rows.items():
+            dval = int(suffix)
+            dscp[dval] = _snmp_int(cols.get('tc', 0))
+
+        return {'dot1p': dot1p, 'dscp': dscp}
+
+    def set_qos_mapping(self, dot1p=None, dscp=None):
+        """Set global dot1p and/or DSCP to traffic class mappings."""
+        return asyncio.run(self._set_qos_mapping_async(dot1p, dscp))
+
+    async def _set_qos_mapping_async(self, dot1p, dscp):
+        sets = []
+
+        if dot1p is not None:
+            for prio, tc in dot1p.items():
+                sets.append((
+                    f"{OID_hm2TrafficClass}.{int(prio)}",
+                    Integer32(int(tc))))
+
+        if dscp is not None:
+            for dval, tc in dscp.items():
+                sets.append((
+                    f"{OID_hm2CosMapIpDscpTrafficClass}.{int(dval)}",
+                    Integer32(int(tc))))
+
+        if sets:
+            await self._set_oids(*sets)
+
+    def get_management_priority(self):
+        """Return management frame priority settings."""
+        return asyncio.run(self._get_management_priority_async())
+
+    async def _get_management_priority_async(self):
+        scalars = await self._get_scalar(
+            OID_hm2NetVlanPriority, OID_hm2NetIpDscpPriority)
+        return {
+            'dot1p': _snmp_int(
+                scalars.get(OID_hm2NetVlanPriority, 0)),
+            'ip_dscp': _snmp_int(
+                scalars.get(OID_hm2NetIpDscpPriority, 0)),
+        }
+
+    def set_management_priority(self, dot1p=None, ip_dscp=None):
+        """Set management frame priority."""
+        return asyncio.run(self._set_management_priority_async(
+            dot1p, ip_dscp))
+
+    async def _set_management_priority_async(self, dot1p, ip_dscp):
+        sets = []
+        if dot1p is not None:
+            sets.append((
+                f"{OID_hm2NetVlanPriority}.0",
+                Integer32(int(dot1p))))
+        if ip_dscp is not None:
+            sets.append((
+                f"{OID_hm2NetIpDscpPriority}.0",
+                Integer32(int(ip_dscp))))
+        if sets:
+            await self._set_oids(*sets)
 
     # ── RSTP ─────────────────────────────────────────────────────
 

@@ -761,7 +761,7 @@ auto-populated by the device based on `vlan_id`: setting `vlan_id=0`
 ## sFlow (RFC 3176)
 
 Programmatic sFlow configuration — receivers, per-port flow sampling and
-counter polling. MOPS-only (SFLOW-MIB).
+counter polling. All 3 protocols (SFLOW-MIB).
 
 ### get_sflow()
 
@@ -857,6 +857,210 @@ device.set_sflow_port('1/1', receiver=0, sample_rate=0, interval=0)
 
 **Note**: When unbinding (`receiver=0`), the device auto-clears rate/interval.
 The driver sends only the receiver field to avoid `commitFailed` errors.
+
+---
+
+## Storm Control
+
+Per-port ingress storm control for broadcast, multicast, and unicast traffic.
+Limits the rate of incoming frames to protect the CPU and fabric from storms.
+
+### get_storm_control()
+
+Returns global bucket type and per-port storm control configuration.
+
+```python
+result = device.get_storm_control()
+```
+
+```python
+{
+    'bucket_type': 'single-bucket',    # 'single-bucket' or 'multi-bucket'
+    'interfaces': {
+        '1/1': {
+            'unit': 'pps',             # 'pps' or 'percent'
+            'broadcast':  {'enabled': True,  'threshold': 100},
+            'multicast':  {'enabled': False, 'threshold': 0},
+            'unicast':    {'enabled': False, 'threshold': 0},
+        },
+        # ... one entry per port
+    },
+}
+```
+
+### set_storm_control(interface, ...)
+
+Set per-port storm control configuration. All parameters except `interface`
+are optional — only provided values are changed. Pass a list of interface
+names to configure multiple ports in one call.
+
+```python
+# Enable broadcast limiting at 100 pps
+device.set_storm_control('1/1', unit='pps',
+                         broadcast_enabled=True, broadcast_threshold=100)
+
+# Enable all three traffic types on multiple ports
+device.set_storm_control(['1/1', '1/2', '1/3'], unit='pps',
+                         broadcast_enabled=True, broadcast_threshold=100,
+                         multicast_enabled=True, multicast_threshold=500,
+                         unicast_enabled=True, unicast_threshold=500)
+
+# Disable broadcast limiting
+device.set_storm_control('1/1', broadcast_enabled=False)
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `interface` | `str` or `list` | required | Port(s) to configure |
+| `unit` | `'pps'`, `'percent'` | `None` | Threshold unit |
+| `broadcast_enabled` | `True`, `False` | `None` | Enable/disable broadcast limiting |
+| `broadcast_threshold` | `0`–`14880000` | `None` | Broadcast rate limit |
+| `multicast_enabled` | `True`, `False` | `None` | Enable/disable multicast limiting |
+| `multicast_threshold` | `0`–`14880000` | `None` | Multicast rate limit |
+| `unicast_enabled` | `True`, `False` | `None` | Enable/disable unknown unicast limiting |
+| `unicast_threshold` | `0`–`14880000` | `None` | Unknown unicast rate limit |
+
+---
+
+## QoS — Quality of Service
+
+Per-port trust mode, queue scheduling, traffic class mapping, and management
+frame priority. Three function groups: port-level QoS, global TC mapping,
+and management priority.
+
+### get_qos()
+
+Returns per-port QoS trust mode, shaping rate, and per-queue scheduling.
+
+```python
+result = device.get_qos()
+```
+
+```python
+{
+    'num_queues': 8,                    # device capability (read-only)
+    'interfaces': {
+        '1/1': {
+            'trust_mode': 'dot1p',      # 'untrusted' | 'dot1p' | 'ip-precedence' | 'ip-dscp'
+            'shaping_rate': 0,          # percent (0 = no limit)
+            'queues': {
+                0: {'scheduler': 'strict', 'min_bw': 0, 'max_bw': 0},
+                1: {'scheduler': 'strict', 'min_bw': 0, 'max_bw': 0},
+                # ... 8 queues total (0-7)
+                7: {'scheduler': 'strict', 'min_bw': 0, 'max_bw': 0},
+            },
+        },
+        # ... one entry per port
+    },
+}
+```
+
+**SSH note**: `shaping_rate` returns 0 (not available via CLI).
+
+### set_qos(interface, ...)
+
+Set per-port QoS trust mode, shaping rate, or queue scheduling. Pass a list
+of interface names to configure multiple ports in one call. The `queue`
+parameter is required when setting `scheduler`, `min_bw`, or `max_bw`.
+
+```python
+# Set trust mode on a port
+device.set_qos('1/1', trust_mode='ip-dscp')
+
+# Set trust mode on multiple ports
+device.set_qos(['1/1', '1/2', '1/3'], trust_mode='dot1p')
+
+# Set queue 7 to weighted scheduling with bandwidth limits
+device.set_qos('1/1', queue=7, scheduler='weighted', min_bw=10, max_bw=50)
+
+# Set shaping rate (MOPS/SNMP only)
+device.set_qos('1/1', shaping_rate=80)
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `interface` | `str` or `list` | required | Port(s) to configure |
+| `trust_mode` | `'untrusted'`, `'dot1p'`, `'ip-precedence'`, `'ip-dscp'` | `None` | Per-port trust mode |
+| `shaping_rate` | `0`–`100` | `None` | Egress shaping rate (percent, 0 = no limit) |
+| `queue` | `0`–`7` | `None` | Queue index (required for scheduler/bandwidth) |
+| `scheduler` | `'strict'`, `'weighted'` | `None` | Queue scheduling type |
+| `min_bw` | `0`–`100` | `None` | Minimum bandwidth (percent, weighted only) |
+| `max_bw` | `0`–`100` | `None` | Maximum bandwidth (percent, weighted only) |
+
+**Raises** `ValueError` if trust_mode or scheduler is invalid, or if
+scheduler/min_bw/max_bw is set without a queue index.
+
+### get_qos_mapping()
+
+Returns global dot1p and DSCP to traffic class mapping tables.
+
+```python
+result = device.get_qos_mapping()
+```
+
+```python
+{
+    'dot1p': {0: 1, 1: 0, 2: 0, 3: 1, 4: 2, 5: 2, 6: 3, 7: 3},
+    'dscp':  {0: 0, 8: 1, 10: 1, 16: 2, ..., 56: 7},  # 64 entries (0-63)
+}
+```
+
+### set_qos_mapping(dot1p=None, dscp=None)
+
+Set individual dot1p and/or DSCP to traffic class mappings. Only the
+mappings provided are changed; others are left untouched.
+
+```python
+# Set dot1p priority 5 → traffic class 3
+device.set_qos_mapping(dot1p={5: 3})
+
+# Set multiple dot1p mappings
+device.set_qos_mapping(dot1p={0: 0, 1: 0, 2: 1, 3: 1, 4: 2, 5: 2, 6: 3, 7: 3})
+
+# Set DSCP 46 (EF) → traffic class 7
+device.set_qos_mapping(dscp={46: 7})
+
+# Set both dot1p and DSCP in one call
+device.set_qos_mapping(dot1p={7: 3}, dscp={46: 7, 34: 5})
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `dot1p` | dict `{priority(0-7): tc(0-7)}` | `None` | dot1p→TC mappings to set |
+| `dscp` | dict `{dscp(0-63): tc(0-7)}` | `None` | DSCP→TC mappings to set |
+
+### get_management_priority()
+
+Returns management frame priority settings — the priority values the switch
+uses for management reply frames (SSH, SNMP, HTTPS responses).
+
+```python
+result = device.get_management_priority()
+```
+
+```python
+{
+    'dot1p': 0,      # 0-7, VLAN PCP priority
+    'ip_dscp': 0,    # 0-63, IP DSCP value
+}
+```
+
+### set_management_priority(dot1p=None, ip_dscp=None)
+
+Set management frame priority. Only provided values are changed.
+
+```python
+# Set management frames to PCP 7 (highest priority)
+device.set_management_priority(dot1p=7)
+
+# Set both dot1p and DSCP
+device.set_management_priority(dot1p=7, ip_dscp=46)
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `dot1p` | `0`–`7` | `None` | VLAN PCP priority for management replies |
+| `ip_dscp` | `0`–`63` | `None` | IP DSCP value for management replies |
 
 ---
 

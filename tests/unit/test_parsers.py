@@ -770,5 +770,336 @@ class TestProfileWriteSSH(unittest.TestCase):
             self.ssh.delete_profile('invalid', 1)
 
 
+class TestStormControlParser(unittest.TestCase):
+    """Test storm control CLI output parsing."""
+
+    def setUp(self):
+        self.ssh = SSHHIOS("192.0.2.1", "admin", "test", 10)
+        self.ssh.connection = True
+
+    def test_get_storm_control_mixed(self):
+        """Parse mix of percent (disabled) and pps (enabled) ports."""
+        output = """\
+        Broadcasts              Known Multicasts        Unknown Frames
+Intf    Mode      Level         Mode      Level         Mode      Level
+------  ----------------------  ----------------------  ---------------------
+1/1     disabled            0%  disabled            0%  disabled            0%
+1/2     disabled            0%  disabled            0%  disabled            0%
+1/11    enabled        100 pps  disabled         0 pps  disabled         0 pps
+1/12    disabled            0%  disabled            0%  disabled            0%"""
+        self.ssh.cli = lambda cmd: {'show storm-control ingress': output}
+        result = self.ssh.get_storm_control()
+
+        self.assertEqual(result['bucket_type'], '')
+        self.assertEqual(len(result['interfaces']), 4)
+
+        # Default port (percent, all disabled)
+        p1 = result['interfaces']['1/1']
+        self.assertEqual(p1['unit'], 'percent')
+        self.assertFalse(p1['broadcast']['enabled'])
+        self.assertEqual(p1['broadcast']['threshold'], 0)
+        self.assertFalse(p1['multicast']['enabled'])
+        self.assertFalse(p1['unicast']['enabled'])
+
+        # Active port (pps, broadcast enabled)
+        p11 = result['interfaces']['1/11']
+        self.assertEqual(p11['unit'], 'pps')
+        self.assertTrue(p11['broadcast']['enabled'])
+        self.assertEqual(p11['broadcast']['threshold'], 100)
+        self.assertFalse(p11['multicast']['enabled'])
+        self.assertEqual(p11['multicast']['threshold'], 0)
+        self.assertFalse(p11['unicast']['enabled'])
+
+    def test_get_storm_control_all_types_enabled(self):
+        """Parse port with all three storm types active."""
+        output = """\
+        Broadcasts              Known Multicasts        Unknown Frames
+Intf    Mode      Level         Mode      Level         Mode      Level
+------  ----------------------  ----------------------  ---------------------
+1/5     enabled         50 pps  enabled        200 pps  enabled        300 pps"""
+        self.ssh.cli = lambda cmd: {'show storm-control ingress': output}
+        result = self.ssh.get_storm_control()
+        p = result['interfaces']['1/5']
+        self.assertEqual(p['unit'], 'pps')
+        self.assertTrue(p['broadcast']['enabled'])
+        self.assertEqual(p['broadcast']['threshold'], 50)
+        self.assertTrue(p['multicast']['enabled'])
+        self.assertEqual(p['multicast']['threshold'], 200)
+        self.assertTrue(p['unicast']['enabled'])
+        self.assertEqual(p['unicast']['threshold'], 300)
+
+    def test_get_storm_control_all_percent(self):
+        """Parse ports with percent thresholds."""
+        output = """\
+        Broadcasts              Known Multicasts        Unknown Frames
+Intf    Mode      Level         Mode      Level         Mode      Level
+------  ----------------------  ----------------------  ---------------------
+1/1     enabled           50%  enabled           25%  disabled            0%"""
+        self.ssh.cli = lambda cmd: {'show storm-control ingress': output}
+        result = self.ssh.get_storm_control()
+        p = result['interfaces']['1/1']
+        self.assertEqual(p['unit'], 'percent')
+        self.assertTrue(p['broadcast']['enabled'])
+        self.assertEqual(p['broadcast']['threshold'], 50)
+        self.assertTrue(p['multicast']['enabled'])
+        self.assertEqual(p['multicast']['threshold'], 25)
+        self.assertFalse(p['unicast']['enabled'])
+        self.assertEqual(p['unicast']['threshold'], 0)
+
+    def test_set_storm_control_bad_unit(self):
+        """Invalid unit raises ValueError before CLI call."""
+        with self.assertRaises(ValueError):
+            self.ssh.set_storm_control('1/1', unit='bps')
+
+
+class TestSFlowParser(unittest.TestCase):
+    """Test sFlow CLI output parsing."""
+
+    def setUp(self):
+        self.ssh = SSHHIOS("192.0.2.1", "admin", "test", 10)
+        self.ssh.connection = True
+
+    def test_get_sflow_agent(self):
+        """Parse agent dot-key output."""
+        output = """\
+sFlow Information
+-----------------
+sFlow version...............................1.3;Hirschmann;10.3.04
+IP address..................................192.168.1.4"""
+        self.ssh.cli = lambda cmd: {'show sflow agent': output,
+                                    'show sflow receivers': self._empty_receivers()}
+        result = self.ssh.get_sflow()
+        self.assertEqual(result['agent_version'], '1.3;Hirschmann;10.3.04')
+        self.assertEqual(result['agent_address'], '192.168.1.4')
+
+    def _empty_receivers(self):
+        return """\
+Recv Owner string                                                                    Timeout    Max dgram Port  IP address
+indx                                                                                            size
+---- ------------------------------------------------------------------------------- ---------- --------- ----- ---------------
+1                                                                                    0          1400      6343  0.0.0.0
+2                                                                                    0          1400      6343  0.0.0.0
+3                                                                                    0          1400      6343  0.0.0.0
+4                                                                                    0          1400      6343  0.0.0.0
+5                                                                                    0          1400      6343  0.0.0.0
+6                                                                                    0          1400      6343  0.0.0.0
+7                                                                                    0          1400      6343  0.0.0.0
+8                                                                                    0          1400      6343  0.0.0.0"""
+
+    def test_get_sflow_receivers_empty(self):
+        """Parse receiver table with all defaults."""
+        def mock_cli(cmd):
+            return {cmd: self._empty_receivers() if 'receivers' in cmd
+                    else "sFlow version...............................1.3\n"
+                         "IP address..................................10.0.0.1"}
+        self.ssh.cli = mock_cli
+        result = self.ssh.get_sflow()
+        self.assertEqual(len(result['receivers']), 8)
+        for idx in range(1, 9):
+            r = result['receivers'][idx]
+            self.assertEqual(r['owner'], '')
+            self.assertEqual(r['timeout'], 0)
+            self.assertEqual(r['address'], '0.0.0.0')
+
+    def test_get_sflow_receivers_configured(self):
+        """Parse receiver with owner and permanent timeout."""
+        rcvr_out = """\
+Recv Owner string                                                                    Timeout    Max dgram Port  IP address
+indx                                                                                            size
+---- ------------------------------------------------------------------------------- ---------- --------- ----- ---------------
+1    snoop                                                                           -          1400      6343  192.168.1.100
+2                                                                                    0          1400      6343  0.0.0.0"""
+
+        def mock_cli(cmd):
+            return {cmd: rcvr_out if 'receivers' in cmd
+                    else "sFlow version...............................1.3\n"
+                         "IP address..................................10.0.0.1"}
+        self.ssh.cli = mock_cli
+        result = self.ssh.get_sflow()
+        r1 = result['receivers'][1]
+        self.assertEqual(r1['owner'], 'snoop')
+        self.assertEqual(r1['timeout'], -1)
+        self.assertEqual(r1['address'], '192.168.1.100')
+        r2 = result['receivers'][2]
+        self.assertEqual(r2['owner'], '')
+        self.assertEqual(r2['timeout'], 0)
+
+    def test_get_sflow_port_samplers_pollers(self):
+        """Parse sampler and poller tables."""
+        sampler_out = """\
+Interface  Rcvr  Rate  Max Hdr
+---------- ----- ----- -------
+1/1        0     0     128
+1/2        1     256   128
+1/11       1     512   256"""
+
+        poller_out = """\
+Interface  Rcvr  Interval
+---------- ----- --------
+1/1        0     0
+1/2        1     20
+1/11       1     30"""
+
+        def mock_cli(cmd):
+            if 'samplers' in cmd:
+                return {cmd: sampler_out}
+            return {cmd: poller_out}
+        self.ssh.cli = mock_cli
+
+        result = self.ssh.get_sflow_port()
+        self.assertEqual(len(result), 3)
+
+        p2 = result['1/2']
+        self.assertEqual(p2['sampler']['receiver'], 1)
+        self.assertEqual(p2['sampler']['sample_rate'], 256)
+        self.assertEqual(p2['poller']['receiver'], 1)
+        self.assertEqual(p2['poller']['interval'], 20)
+
+        p11 = result['1/11']
+        self.assertEqual(p11['sampler']['sample_rate'], 512)
+        self.assertEqual(p11['sampler']['max_header_size'], 256)
+        self.assertEqual(p11['poller']['interval'], 30)
+
+    def test_get_sflow_port_filter(self):
+        """Interface filter returns only requested ports."""
+        sampler_out = """\
+Interface  Rcvr  Rate  Max Hdr
+---------- ----- ----- -------
+1/1        0     0     128
+1/2        1     256   128"""
+
+        poller_out = """\
+Interface  Rcvr  Interval
+---------- ----- --------
+1/1        0     0
+1/2        1     20"""
+
+        def mock_cli(cmd):
+            if 'samplers' in cmd:
+                return {cmd: sampler_out}
+            return {cmd: poller_out}
+        self.ssh.cli = mock_cli
+
+        result = self.ssh.get_sflow_port(interfaces=['1/2'])
+        self.assertEqual(list(result.keys()), ['1/2'])
+
+    def test_set_sflow_bad_receiver(self):
+        """Invalid receiver raises ValueError."""
+        with self.assertRaises(ValueError):
+            self.ssh.set_sflow(0, owner='test')
+        with self.assertRaises(ValueError):
+            self.ssh.set_sflow(9, owner='test')
+
+    def test_set_sflow_port_no_rate_or_interval(self):
+        """Missing both rate and interval raises ValueError."""
+        with self.assertRaises(ValueError):
+            self.ssh.set_sflow_port('1/1', receiver=1)
+
+
+class TestQoSParser(unittest.TestCase):
+    """Test SSH QoS parser methods."""
+
+    def setUp(self):
+        self.ssh = SSHHIOS("192.0.2.1", "admin", "test", 10)
+        self.ssh.connection = True
+        self.ssh._in_config_mode = False
+
+    def test_get_qos_trust(self):
+        """Parse trust mode per port."""
+        trust_output = (
+            'Intf  Trust Mode\n'
+            '----  ----------\n'
+            '1/1   dot1p\n'
+            '1/2   untrusted\n'
+            '1/3   ip-dscp\n'
+        )
+        queue_output = (
+            'Queue Id  Min BW  Max BW  Scheduler\n'
+            '--------  ------  ------  ---------\n'
+            '0         0       0       strict\n'
+            '1         0       0       strict\n'
+            '7         0       0       strict\n'
+        )
+
+        def mock_cli(cmd, **kw):
+            if 'trust' in cmd:
+                return {'show classofservice trust': trust_output}
+            return {'show cos-queue': queue_output}
+
+        self.ssh.cli = mock_cli
+        result = self.ssh.get_qos()
+
+        self.assertEqual(result['interfaces']['1/1']['trust_mode'], 'dot1p')
+        self.assertEqual(result['interfaces']['1/2']['trust_mode'], 'untrusted')
+        self.assertEqual(result['interfaces']['1/3']['trust_mode'], 'ip-dscp')
+        self.assertEqual(result['num_queues'], 3)
+
+    def test_get_qos_mapping_dot1p(self):
+        """Parse dot1p mapping table."""
+        dot1p_output = (
+            'Prio  TC\n'
+            '----  --\n'
+            '0     2\n'
+            '1     0\n'
+            '2     1\n'
+            '3     3\n'
+            '4     4\n'
+            '5     5\n'
+            '6     6\n'
+            '7     7\n'
+        )
+        dscp_output = (
+            'DSCP  TC\n'
+            '----  --\n'
+            '0     0\n'
+            '8     1\n'
+            '46    5\n'
+        )
+
+        def mock_cli(cmd, **kw):
+            if 'dot1p' in cmd:
+                return {'show classofservice dot1p-mapping': dot1p_output}
+            return {'show classofservice ip-dscp-mapping': dscp_output}
+
+        self.ssh.cli = mock_cli
+        result = self.ssh.get_qos_mapping()
+
+        self.assertEqual(result['dot1p'][0], 2)
+        self.assertEqual(result['dot1p'][7], 7)
+        self.assertEqual(result['dscp'][0], 0)
+        self.assertEqual(result['dscp'][46], 5)
+
+    def test_get_management_priority(self):
+        """Parse management priority from show network parms."""
+        output = (
+            'Management VLAN ID......... 1\n'
+            'VLAN Priority.............. 3\n'
+            'IP DSCP Priority........... 46\n'
+            'Management IP.............. 192.168.1.4\n'
+        )
+
+        def mock_cli(cmd, **kw):
+            return {'show network parms': output}
+
+        self.ssh.cli = mock_cli
+        result = self.ssh.get_management_priority()
+
+        self.assertEqual(result['dot1p'], 3)
+        self.assertEqual(result['ip_dscp'], 46)
+
+    def test_set_qos_bad_trust_mode(self):
+        """Invalid trust mode raises ValueError."""
+        with self.assertRaises(ValueError):
+            self.ssh.set_qos('1/1', trust_mode='badval')
+
+    def test_set_qos_bad_scheduler(self):
+        with self.assertRaises(ValueError):
+            self.ssh.set_qos('1/1', scheduler='round-robin')
+
+    def test_set_qos_queue_needed_no_index(self):
+        with self.assertRaises(ValueError):
+            self.ssh.set_qos('1/1', min_bw=50)
+
+
 if __name__ == '__main__':
     unittest.main()

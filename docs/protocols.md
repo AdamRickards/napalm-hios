@@ -83,6 +83,7 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | 13 | **Loop protection on L2S** | `Error: Invalid command` → empty result | Empty tables → empty result | Both return same empty structure, different underlying mechanism |
 | 14 | **Auto-disable reasons on L2S** | 7 reasons (CLI shows what's available) | 7 reasons (SNMP) / 7 reasons (MOPS) | All protocols return only the reasons the firmware supports |
 | 15 | **Auto-disable timer reset** | `auto-disable timer 0` (explicit value) | SET OID to 0 | SSH `no auto-disable timer` is a no-op — always send explicit `0` |
+| 16 | **QoS shaping rate** | Always `0` (not available via CLI) | Actual value from MIB | SSH `get_qos` won't reflect shaping rate; use MOPS/SNMP getter to read |
 
 ---
 
@@ -145,6 +146,18 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `create_vlan` | Yes | Yes | Yes | Vendor write |
 | `update_vlan` | Yes | Yes | Yes | Vendor write |
 | `delete_vlan` | Yes | Yes | Yes | Vendor write |
+| `get_sflow` | Yes | Yes | Yes | Vendor |
+| `set_sflow` | Yes | Yes | Yes | Vendor write |
+| `get_sflow_port` | Yes | Yes | Yes | Vendor |
+| `set_sflow_port` | Yes | Yes | Yes | Vendor write |
+| `get_storm_control` | Yes | Yes | Yes | Vendor |
+| `set_storm_control` | Yes | Yes | Yes | Vendor write |
+| `get_qos` | Yes | Yes | Yes | Vendor |
+| `set_qos` | Yes | Yes | Yes | Vendor write |
+| `get_qos_mapping` | Yes | Yes | Yes | Vendor |
+| `set_qos_mapping` | Yes | Yes | Yes | Vendor write |
+| `get_management_priority` | Yes | Yes | Yes | Vendor |
+| `set_management_priority` | Yes | Yes | Yes | Vendor write |
 | `is_factory_default` | Yes | Yes | No (gated) | Vendor |
 | `onboard` | Yes | Yes | No (gated) | Vendor |
 | `start_staging` | Yes | No | No | MOPS-only; SNMP/SSH raise NotImplementedError |

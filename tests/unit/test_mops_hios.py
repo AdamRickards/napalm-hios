@@ -2547,5 +2547,173 @@ class TestSFlowSetters(unittest.TestCase):
         self.assertEqual(len(self.backend._mutations), 1)
 
 
+    # ------------------------------------------------------------------
+    # Storm Control
+    # ------------------------------------------------------------------
+
+    def _make_storm_global(self, bucket_type="2"):
+        return {"hm2TrafficMgmtIngressStormBucketType": bucket_type}
+
+    def _make_storm_port(self, ifidx, unit="1", bcast_mode="2",
+                         bcast_thresh="0", mcast_mode="2", mcast_thresh="0",
+                         ucast_mode="2", ucast_thresh="0"):
+        return {
+            "ifIndex": str(ifidx),
+            "hm2TrafficMgmtIfIngressStormCtlThresholdUnit": unit,
+            "hm2TrafficMgmtIfIngressStormCtlBcastMode": bcast_mode,
+            "hm2TrafficMgmtIfIngressStormCtlBcastThreshold": bcast_thresh,
+            "hm2TrafficMgmtIfIngressStormCtlMcastMode": mcast_mode,
+            "hm2TrafficMgmtIfIngressStormCtlMcastThreshold": mcast_thresh,
+            "hm2TrafficMgmtIfIngressStormCtlUcastMode": ucast_mode,
+            "hm2TrafficMgmtIfIngressStormCtlUcastThreshold": ucast_thresh,
+        }
+
+    def _storm_response(self, global_entry, port_entries):
+        return {
+            "mibs": {
+                "HM2-TRAFFICMGMT-MIB": {
+                    "hm2TrafficMgmtMibObjects": [global_entry],
+                    "hm2TrafficMgmtIfEntry": port_entries,
+                },
+            },
+            "errors": [],
+        }
+
+    def test_get_storm_control_default(self):
+        """All ports disabled, percent unit, multi-bucket."""
+        self.backend._ifindex_map = {"1": "1/1", "2": "1/2", "25": "cpu/1"}
+        self.backend.client.get_multi.return_value = self._storm_response(
+            self._make_storm_global("2"),
+            [self._make_storm_port(1), self._make_storm_port(2),
+             self._make_storm_port(25)],
+        )
+        result = self.backend.get_storm_control()
+        self.assertEqual(result['bucket_type'], 'multi-bucket')
+        self.assertEqual(sorted(result['interfaces'].keys()), ['1/1', '1/2'])
+        port = result['interfaces']['1/1']
+        self.assertEqual(port['unit'], 'percent')
+        self.assertFalse(port['broadcast']['enabled'])
+        self.assertEqual(port['broadcast']['threshold'], 0)
+        self.assertFalse(port['multicast']['enabled'])
+        self.assertFalse(port['unicast']['enabled'])
+
+    def test_get_storm_control_active_port(self):
+        """Port with broadcast enabled at 100 pps."""
+        self.backend._ifindex_map = {"11": "1/11"}
+        self.backend.client.get_multi.return_value = self._storm_response(
+            self._make_storm_global("2"),
+            [self._make_storm_port(11, unit="2", bcast_mode="1",
+                                   bcast_thresh="100")],
+        )
+        result = self.backend.get_storm_control()
+        port = result['interfaces']['1/11']
+        self.assertEqual(port['unit'], 'pps')
+        self.assertTrue(port['broadcast']['enabled'])
+        self.assertEqual(port['broadcast']['threshold'], 100)
+        self.assertFalse(port['multicast']['enabled'])
+
+    def test_get_storm_control_single_bucket(self):
+        """Device reports single-bucket capability."""
+        self.backend._ifindex_map = {"1": "1/1"}
+        self.backend.client.get_multi.return_value = self._storm_response(
+            self._make_storm_global("1"),
+            [self._make_storm_port(1)],
+        )
+        result = self.backend.get_storm_control()
+        self.assertEqual(result['bucket_type'], 'single-bucket')
+
+    def test_get_storm_control_skips_cpu_vlan(self):
+        """cpu/ and vlan/ pseudo-interfaces are excluded."""
+        self.backend._ifindex_map = {
+            "1": "1/1", "25": "cpu/1", "100": "vlan/1"}
+        self.backend.client.get_multi.return_value = self._storm_response(
+            self._make_storm_global(),
+            [self._make_storm_port(1), self._make_storm_port(25),
+             self._make_storm_port(100)],
+        )
+        result = self.backend.get_storm_control()
+        self.assertEqual(list(result['interfaces'].keys()), ['1/1'])
+
+    def test_set_storm_control_single_port(self):
+        """Set broadcast 100 pps on one port."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1", "2": "1/2"})
+        self.backend.set_storm_control(
+            '1/1', unit='pps', broadcast_enabled=True,
+            broadcast_threshold=100)
+        self.backend.client.set_multi.assert_called_once_with([
+            ("HM2-TRAFFICMGMT-MIB", "hm2TrafficMgmtIfEntry",
+             {
+                 "hm2TrafficMgmtIfIngressStormCtlThresholdUnit": "2",
+                 "hm2TrafficMgmtIfIngressStormCtlBcastMode": "1",
+                 "hm2TrafficMgmtIfIngressStormCtlBcastThreshold": "100",
+             }, {"ifIndex": "1"}),
+        ])
+
+    def test_set_storm_control_multi_port(self):
+        """Set on multiple ports — one set_multi call."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1", "2": "1/2", "3": "1/3"})
+        self.backend.set_storm_control(
+            ['1/1', '1/2'], unit='pps', broadcast_enabled=True,
+            broadcast_threshold=100)
+        call_args = self.backend.client.set_multi.call_args[0][0]
+        self.assertEqual(len(call_args), 2)
+        self.assertEqual(call_args[0][3], {"ifIndex": "1"})
+        self.assertEqual(call_args[1][3], {"ifIndex": "2"})
+
+    def test_set_storm_control_disable(self):
+        """Disable broadcast storm control."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1"})
+        self.backend.set_storm_control('1/1', broadcast_enabled=False)
+        call_args = self.backend.client.set_multi.call_args[0][0]
+        self.assertEqual(call_args[0][2],
+                         {"hm2TrafficMgmtIfIngressStormCtlBcastMode": "2"})
+
+    def test_set_storm_control_all_types(self):
+        """Set all three storm types at once."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1"})
+        self.backend.set_storm_control(
+            '1/1', broadcast_enabled=True, broadcast_threshold=100,
+            multicast_enabled=True, multicast_threshold=200,
+            unicast_enabled=True, unicast_threshold=300)
+        values = self.backend.client.set_multi.call_args[0][0][0][2]
+        self.assertEqual(values["hm2TrafficMgmtIfIngressStormCtlBcastMode"], "1")
+        self.assertEqual(values["hm2TrafficMgmtIfIngressStormCtlBcastThreshold"], "100")
+        self.assertEqual(values["hm2TrafficMgmtIfIngressStormCtlMcastMode"], "1")
+        self.assertEqual(values["hm2TrafficMgmtIfIngressStormCtlMcastThreshold"], "200")
+        self.assertEqual(values["hm2TrafficMgmtIfIngressStormCtlUcastMode"], "1")
+        self.assertEqual(values["hm2TrafficMgmtIfIngressStormCtlUcastThreshold"], "300")
+
+    def test_set_storm_control_bad_unit(self):
+        with self.assertRaises(ValueError):
+            self.backend.set_storm_control('1/1', unit='bps')
+
+    def test_set_storm_control_bad_port(self):
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1"})
+        with self.assertRaises(ValueError):
+            self.backend.set_storm_control('9/9', broadcast_enabled=True)
+
+    def test_set_storm_control_noop(self):
+        """No args = no mutation, no set_multi call."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1"})
+        self.backend.set_storm_control('1/1')
+        self.backend.client.set_multi.assert_not_called()
+
+    def test_set_storm_control_staging(self):
+        """Staging mode queues mutations."""
+        self.backend._staging = True
+        self.backend._mutations = []
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1"})
+        self.backend.set_storm_control('1/1', unit='pps')
+        self.backend.client.set_multi.assert_not_called()
+        self.assertEqual(len(self.backend._mutations), 1)
+
+
 if __name__ == '__main__':
     unittest.main()
