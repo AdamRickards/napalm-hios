@@ -76,10 +76,10 @@ device.close()
 ### Vendor-specific
 
 **Read:**
-`get_mrp` | `get_mrp_sub_ring` | `get_hidiscovery` | `get_rstp` | `get_rstp_port` | `get_auto_disable` | `get_loop_protection` | `get_sflow` | `get_sflow_port` | `get_storm_control` | `get_qos` | `get_qos_mapping` | `get_management_priority` | `get_vlan_ingress` | `get_vlan_egress` | `get_lldp_neighbors_detail_extended` | `get_config_status` | `get_profiles` | `get_config_fingerprint` | `is_factory_default`
+`get_mrp` | `get_mrp_sub_ring` | `get_hidiscovery` | `get_rstp` | `get_rstp_port` | `get_auto_disable` | `get_loop_protection` | `get_sflow` | `get_sflow_port` | `get_storm_control` | `get_qos` | `get_qos_mapping` | `get_management_priority` | `get_management` | `get_vlan_ingress` | `get_vlan_egress` | `get_lldp_neighbors_detail_extended` | `get_config_status` | `get_profiles` | `get_config_fingerprint` | `is_factory_default`
 
 **Write:**
-`set_interface` | `set_mrp` | `delete_mrp` | `set_mrp_sub_ring` | `delete_mrp_sub_ring` | `set_hidiscovery` | `set_rstp` | `set_rstp_port` | `set_auto_disable` | `reset_auto_disable` | `set_auto_disable_reason` | `set_loop_protection` | `set_sflow` | `set_sflow_port` | `set_storm_control` | `set_qos` | `set_qos_mapping` | `set_management_priority` | `set_vlan_ingress` | `set_vlan_egress` | `create_vlan` | `update_vlan` | `delete_vlan` | `save_config` | `clear_config` | `clear_factory` | `activate_profile` | `delete_profile` | `onboard` | `start_staging` | `commit_staging` | `discard_staging` | `get_staged_mutations`
+`set_interface` | `set_mrp` | `delete_mrp` | `set_mrp_sub_ring` | `delete_mrp_sub_ring` | `set_hidiscovery` | `set_rstp` | `set_rstp_port` | `set_auto_disable` | `reset_auto_disable` | `set_auto_disable_reason` | `set_loop_protection` | `set_sflow` | `set_sflow_port` | `set_storm_control` | `set_qos` | `set_qos_mapping` | `set_management_priority` | `set_management` | `set_vlan_ingress` | `set_vlan_egress` | `create_vlan` | `update_vlan` | `delete_vlan` | `save_config` | `clear_config` | `clear_factory` | `activate_profile` | `delete_profile` | `onboard` | `start_staging` | `commit_staging` | `discard_staging` | `get_staged_mutations`
 
 See [docs/vendor_specific.md](docs/vendor_specific.md) for arguments, return values, and protocol behaviour.
 

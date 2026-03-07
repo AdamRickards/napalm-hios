@@ -30,7 +30,8 @@ class TestHIOSDriver(unittest.TestCase):
     @patch('napalm_hios.hios.SSHHIOS')
     def test_open_ssh(self, mock_ssh_cls):
         """Non-localhost should attempt SSH connection."""
-        device = HIOSDriver('192.168.1.1', 'admin', 'private')
+        device = HIOSDriver('192.168.1.1', 'admin', 'private',
+                            optional_args={'protocol_preference': ['ssh']})
         mock_ssh_cls.return_value.open.return_value = None
         device.open()
         mock_ssh_cls.assert_called_once()
@@ -85,6 +86,7 @@ class TestHIOSDriver(unittest.TestCase):
         """CLI should raise NotImplementedError when no protocol is active."""
         self.device.active_protocol = None
         self.device.ssh = None
+        self.device._ensure_ssh = Mock(return_value=False)
         with self.assertRaises(NotImplementedError):
             self.device.cli(["show version"])
 
@@ -398,8 +400,9 @@ class TestHIOSDriver(unittest.TestCase):
 
     @patch('napalm_hios.hios.SNMPHIOS')
     def test_default_protocol_snmp_first(self, mock_snmp_cls):
-        """Default protocol preference is now SNMP-first."""
-        device = HIOSDriver('192.168.1.1', 'admin', 'private')
+        """SNMP-first preference connects via SNMP."""
+        device = HIOSDriver('192.168.1.1', 'admin', 'private',
+                            optional_args={'protocol_preference': ['snmp']})
         mock_snmp_cls.return_value.open.return_value = None
         device.open()
         mock_snmp_cls.assert_called_once()
@@ -476,6 +479,7 @@ class TestHIOSDriver(unittest.TestCase):
         """All data methods should raise when active_protocol is not set."""
         self.device.active_protocol = None
         self.device.ssh = None
+        self.device._ensure_ssh = Mock(return_value=False)
         methods = ['get_facts', 'get_interfaces', 'get_interfaces_ip',
                    'get_lldp_neighbors', 'get_environment', 'get_config',
                    'get_users', 'get_vlans', 'get_snmp_information',

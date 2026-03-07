@@ -33,10 +33,6 @@
 
 See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 
-- [x] MOPS staging on setup workers — `worker_setup_rstp_full`, `worker_setup_loop_protection`, `worker_setup_auto_disable` batch all mutations into one atomic POST per device. Teardown workers intentionally not staged (order > speed)
-- [x] Multi-interface setters — all workers pass lists instead of per-port loops. Combined with staging: 31.3s → 11.1s (65% faster, 4 BRS50 devices)
-- [x] SRM-aware ring port map — phase 0 discovers sub-ring ports via `get_mrp_sub_ring()`, merges into ring_ports_map. Prevents edge protection (BPDU Guard, loop detection) from targeting sub-ring ports
-- [x] `cpu/1` and `vlan/N` filtered from `all_ports` — fixes `noCreation` error on non-switchports via MOPS/SNMP
 - [ ] Phase 0 staged getters — depends on driver multi-get composition. One HTTP POST for entire gather phase instead of 7. Every additional safety check (SRM ports, VLAN state, etc.) becomes free
 - [ ] Zero-config discovery mode — LLDP-driven topology discovery
 - [ ] `--gather` mode — Phase 0 only, read-only audit
@@ -50,7 +46,6 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 
 ## VIKTOR
 
-- [x] v1.0 — `vlan list/create/delete/rename`, `access`, `trunk`, `auto-trunk`, `--audit`, `--names`, `--export`, `--import`, `-m` ring selector
 - [ ] `-fi` support — read device list from [site index](tools/SITE_INDEX.md)
 - [ ] `--entry` topology-safe ordering — cross-tool build
 - [ ] Management VLAN migration — furthest-first ordering, atomic entry switch config. See [VIKTOR TODO](tools/viktor/TODO.md) for full design
@@ -73,17 +68,7 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 
 ## QoS / TSN (future)
 
-- [x] `get_qos()` / `set_qos()` — per-port trust mode, queue scheduling, shaping rate. All 3 protocols
-- [x] `get_qos_mapping()` / `set_qos_mapping()` — global dot1p→TC and DSCP→TC mappings. All 3 protocols
-- [x] `get_management_priority()` / `set_management_priority()` — management frame priority (dot1p + ip-dscp). All 3 protocols
-- [x] `get_storm_control()` / `set_storm_control()` — per-port broadcast/multicast/unicast ingress rate limiting. All 3 protocols
 - [ ] TSN getters/setters — gate control lists, stream filters, PTP config, traffic scheduling. MOPS will have the OIDs (everything in HiOS backend is SNMP). Hard part is designing a sane abstraction over the MIB tables. **Unlocks**: NILS TSN enricher, deterministic scheduling config
-
-## CLI Reference Data
-
-Already parsed in `HiOS-Config-Utility/` — 1,849 commands across 4 HiOS versions (9.0, 9.2, 10.0, 10.3). Parser: `parse_cli_ref.py`, merged: `cli_ref_hios_merged.json`. Per-command: section, chapter, command, mode, privilege, format, no-form, params, `_since` version.
-
-- [x] `local/cli_ref_hios_merged.json` — 1,849 commands, 4 versions (9.0–10.3), version-aware `_since` field. Source: `HiOS-Config-Utility/cli_ref_hios_merged.json`. `local/` is gitignored
 
 ## Future — Config import/export + firmware update
 
