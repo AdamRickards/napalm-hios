@@ -158,6 +158,8 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `set_qos_mapping` | Yes | Yes | Yes | Vendor write |
 | `get_management_priority` | Yes | Yes | Yes | Vendor |
 | `set_management_priority` | Yes | Yes | Yes | Vendor write |
+| `get_management` | Yes | Yes | Yes | Vendor |
+| `set_management` | Yes | Yes | Yes | Vendor write |
 | `is_factory_default` | Yes | Yes | No (gated) | Vendor |
 | `onboard` | Yes | Yes | No (gated) | Vendor |
 | `start_staging` | Yes | No | No | MOPS-only; SNMP/SSH raise NotImplementedError |

@@ -280,9 +280,21 @@ OID_hm2TrafficClass             = '1.3.6.1.4.1.248.11.30.1.2.1.1.2'
 # DSCP → TC (indexed by dscp value 0-63)
 OID_hm2CosMapIpDscpTrafficClass = '1.3.6.1.4.1.248.11.30.1.2.2.1.2'
 
-# HM2-NETCONFIG-MIB — Management Priority  1.3.6.1.4.1.248.11.20.1.1.*
-OID_hm2NetVlanPriority   = '1.3.6.1.4.1.248.11.20.1.1.8'
-OID_hm2NetIpDscpPriority = '1.3.6.1.4.1.248.11.20.1.1.9'
+# HM2-NETCONFIG-MIB — Management Network  1.3.6.1.4.1.248.11.20.1.1.*
+OID_hm2NetConfigProtocol     = '1.3.6.1.4.1.248.11.20.1.1.1'
+OID_hm2NetLocalIPAddr        = '1.3.6.1.4.1.248.11.20.1.1.3'
+OID_hm2NetPrefixLength       = '1.3.6.1.4.1.248.11.20.1.1.4'
+OID_hm2NetGatewayIPAddr      = '1.3.6.1.4.1.248.11.20.1.1.6'
+OID_hm2NetVlanID             = '1.3.6.1.4.1.248.11.20.1.1.7'
+OID_hm2NetVlanPriority       = '1.3.6.1.4.1.248.11.20.1.1.8'
+OID_hm2NetIpDscpPriority     = '1.3.6.1.4.1.248.11.20.1.1.9'
+OID_hm2NetMgmtPort           = '1.3.6.1.4.1.248.11.20.1.1.10'
+OID_hm2NetDHCPClientId       = '1.3.6.1.4.1.248.11.20.1.1.11'
+OID_hm2NetDHCPClientConfigLoad = '1.3.6.1.4.1.248.11.20.1.1.20'
+OID_hm2NetDHCPClientLeaseTime = '1.3.6.1.4.1.248.11.20.1.1.21'
+OID_hm2NetIPv6AdminStatus    = '1.3.6.1.4.1.248.11.20.1.1.30'
+OID_hm2NetIPv6ConfigProtocol = '1.3.6.1.4.1.248.11.20.1.1.31'
+OID_hm2NetAction             = '1.3.6.1.4.1.248.11.20.1.1.50'
 
 # HM2-PLATFORM-SWITCHING-MIB — STP/RSTP  1.3.6.1.4.1.248.12.1.2.15.*
 # Global config (hm2AgentStpSwitchConfigGroup)
@@ -425,6 +437,15 @@ def _mask_to_prefix(mask_str):
         return bits.count('1')
     except (ValueError, AttributeError):
         return 32
+
+
+def _prefix_to_mask(prefix):
+    """Convert prefix length to dotted subnet mask. 24 -> '255.255.255.0'"""
+    prefix = int(prefix)
+    if prefix < 0 or prefix > 32:
+        return '0.0.0.0'
+    bits = ('1' * prefix).ljust(32, '0')
+    return '.'.join(str(int(bits[i:i+8], 2)) for i in range(0, 32, 8))
 
 
 def _parse_sysDescr(text):
@@ -3872,6 +3893,132 @@ class SNMPHIOS:
             sets.append((
                 f"{OID_hm2NetIpDscpPriority}.0",
                 Integer32(int(ip_dscp))))
+        if sets:
+            await self._set_oids(*sets)
+
+    def get_management(self):
+        """Return management network configuration via SNMP."""
+        return asyncio.run(self._get_management_async())
+
+    async def _get_management_async(self):
+        _PROTOCOL_MAP = {1: 'local', 2: 'bootp', 3: 'dhcp'}
+        _IPV6_PROTOCOL_MAP = {1: 'none', 2: 'auto', 3: 'dhcpv6', 4: 'all'}
+
+        scalars = await self._get_scalar(
+            OID_hm2NetConfigProtocol, OID_hm2NetLocalIPAddr,
+            OID_hm2NetPrefixLength, OID_hm2NetGatewayIPAddr,
+            OID_hm2NetVlanID, OID_hm2NetMgmtPort,
+            OID_hm2NetDHCPClientId, OID_hm2NetDHCPClientLeaseTime,
+            OID_hm2NetDHCPClientConfigLoad,
+            OID_hm2NetVlanPriority, OID_hm2NetIpDscpPriority,
+            OID_hm2NetIPv6AdminStatus, OID_hm2NetIPv6ConfigProtocol,
+        )
+
+        proto_val = _snmp_int(scalars.get(OID_hm2NetConfigProtocol, 1))
+        prefix_len = _snmp_int(scalars.get(OID_hm2NetPrefixLength, 0))
+        ipv6_proto = _snmp_int(
+            scalars.get(OID_hm2NetIPv6ConfigProtocol, 2))
+
+        return {
+            'protocol': _PROTOCOL_MAP.get(proto_val, 'local'),
+            'vlan_id': _snmp_int(scalars.get(OID_hm2NetVlanID, 1)),
+            'ip_address': _snmp_ip(scalars.get(OID_hm2NetLocalIPAddr, '')),
+            'netmask': _prefix_to_mask(prefix_len),
+            'gateway': _snmp_ip(scalars.get(OID_hm2NetGatewayIPAddr, '')),
+            'mgmt_port': _snmp_int(scalars.get(OID_hm2NetMgmtPort, 0)),
+            'dhcp_client_id': _snmp_str(
+                scalars.get(OID_hm2NetDHCPClientId, '')),
+            'dhcp_lease_time': _snmp_int(
+                scalars.get(OID_hm2NetDHCPClientLeaseTime, 0)),
+            'dhcp_option_66_67': _snmp_int(
+                scalars.get(OID_hm2NetDHCPClientConfigLoad, 1)) == 1,
+            'dot1p': _snmp_int(scalars.get(OID_hm2NetVlanPriority, 0)),
+            'ip_dscp': _snmp_int(scalars.get(OID_hm2NetIpDscpPriority, 0)),
+            'ipv6_enabled': _snmp_int(
+                scalars.get(OID_hm2NetIPv6AdminStatus, 1)) == 1,
+            'ipv6_protocol': _IPV6_PROTOCOL_MAP.get(ipv6_proto, 'auto'),
+        }
+
+    def set_management(self, protocol=None, vlan_id=None, ip_address=None,
+                       netmask=None, gateway=None, mgmt_port=None,
+                       dhcp_option_66_67=None, ipv6_enabled=None):
+        """Set management network configuration via SNMP."""
+        if vlan_id is not None:
+            vlan_id = int(vlan_id)
+            if vlan_id < 1 or vlan_id > 4042:
+                raise ValueError(f"vlan_id must be 1-4042, got {vlan_id}")
+            vlans = self.get_vlans()
+            if vlan_id not in vlans:
+                raise ValueError(
+                    f"VLAN {vlan_id} does not exist on device — "
+                    f"create it first to avoid management lockout")
+        return asyncio.run(self._set_management_async(
+            protocol, vlan_id, ip_address, netmask, gateway,
+            mgmt_port, dhcp_option_66_67, ipv6_enabled))
+
+    async def _set_management_async(self, protocol, vlan_id, ip_address,
+                                     netmask, gateway, mgmt_port,
+                                     dhcp_option_66_67, ipv6_enabled):
+        _PROTOCOL_REV = {'local': 1, 'bootp': 2, 'dhcp': 3}
+
+        sets = []
+        need_activate = False
+
+        if protocol is not None:
+            proto = protocol.lower().strip()
+            if proto not in _PROTOCOL_REV:
+                raise ValueError(
+                    f"protocol must be 'local', 'bootp', or 'dhcp', "
+                    f"got '{protocol}'")
+            sets.append((
+                f"{OID_hm2NetConfigProtocol}.0",
+                Integer32(_PROTOCOL_REV[proto])))
+
+        if vlan_id is not None:
+            sets.append((
+                f"{OID_hm2NetVlanID}.0",
+                Integer32(int(vlan_id))))
+
+        if ip_address is not None:
+            ip_bytes = bytes(int(o) for o in ip_address.split('.'))
+            sets.append((
+                f"{OID_hm2NetLocalIPAddr}.0",
+                OctetString(ip_bytes)))
+            need_activate = True
+
+        if netmask is not None:
+            sets.append((
+                f"{OID_hm2NetPrefixLength}.0",
+                Integer32(_mask_to_prefix(netmask))))
+            need_activate = True
+
+        if gateway is not None:
+            gw_bytes = bytes(int(o) for o in gateway.split('.'))
+            sets.append((
+                f"{OID_hm2NetGatewayIPAddr}.0",
+                OctetString(gw_bytes)))
+            need_activate = True
+
+        if mgmt_port is not None:
+            sets.append((
+                f"{OID_hm2NetMgmtPort}.0",
+                Integer32(int(mgmt_port))))
+
+        if dhcp_option_66_67 is not None:
+            sets.append((
+                f"{OID_hm2NetDHCPClientConfigLoad}.0",
+                Integer32(1 if dhcp_option_66_67 else 2)))
+
+        if ipv6_enabled is not None:
+            sets.append((
+                f"{OID_hm2NetIPv6AdminStatus}.0",
+                Integer32(1 if ipv6_enabled else 2)))
+
+        if need_activate:
+            sets.append((
+                f"{OID_hm2NetAction}.0",
+                Integer32(2)))  # activate
+
         if sets:
             await self._set_oids(*sets)
 

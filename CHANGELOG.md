@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.12.0
+
+### Management Network Configuration — all 3 protocols
+
+Full management network getter/setter for IP assignment, management VLAN, IPv6, and DHCP settings:
+
+- **`get_management()`** — IP address, netmask, gateway, protocol (local/bootp/dhcp), management VLAN ID, management port, DHCP client ID and lease time, DHCP option 66/67 status, management frame priority (dot1p + ip-dscp), IPv6 admin status and protocol
+- **`set_management(protocol, vlan_id, ip_address, netmask, gateway, mgmt_port, dhcp_option_66_67, ipv6_enabled)`** — all parameters optional, only provided values changed. VLAN safety check validates VLAN exists before changing management VLAN. IP/gateway changes include atomic activation trigger (hm2NetAction)
+
+MIB: HM2-NETCONFIG-MIB (hm2NetStaticGroup). CLI: `show network parms`, `show network ipv6 global`, `network protocol`, `network parms`, `network management vlan`. 20 new unit tests.
+
+## 1.11.1 — 2026-03-07
+
+### Bug fix: MOPS partial GET tolerance
+
+MOPS `client.get()` now tolerates attribute-level errors (e.g. `noSuchName` on one column) instead of failing the entire request. Missing attributes are simply absent from the result — callers already use `.get()` with defaults.
+
+Found via `get_hidiscovery()` on L2 BRS50 where `hm2NetHiDiscoveryRelay` doesn't exist. The single bad attribute caused the switch to return all 4 good attributes plus one error, but `client.get()` raised `MOPSError` on any error and discarded everything.
+
+Introduced in 1.8.1 — the SET error detection fix correctly started catching these errors but applied the same "raise on any error" logic to GETs where partial success is valid.
+
 ## 1.11.0 — 2026-03-07
 
 ### Storm Control — all 3 protocols

@@ -2721,6 +2721,139 @@ class SSHHIOS:
         finally:
             self._disable()
 
+    def get_management(self):
+        """Return management network configuration from CLI.
+
+        Parses ``show network parms`` output.
+        """
+        output = self.cli('show network parms')['show network parms']
+        d = parse_dot_keys(output)
+
+        # Protocol: "none" / "bootp" / "dhcp"
+        proto_raw = d.get('Protocol', 'none').strip().lower()
+        if proto_raw in ('none', 'local'):
+            proto_raw = 'local'
+
+        # DHCP config load: "enabled(options 4, 42, 66, 67)" or "disabled"
+        dhcp_load_raw = d.get('DHCP/BOOTP client config load',
+                             d.get('DHCP client config load', '')).strip()
+        dhcp_option = dhcp_load_raw.lower().startswith('enabled')
+
+        # DHCP client ID
+        dhcp_client_id = d.get('DHCP/BOOTP client ID',
+                              d.get('DHCP client ID', '')).strip()
+
+        # DHCP lease time — may not be present
+        lease_raw = d.get('DHCP/BOOTP lease time',
+                         d.get('DHCP lease time', '0')).strip()
+        try:
+            dhcp_lease = int(lease_raw)
+        except ValueError:
+            dhcp_lease = 0
+
+        # IPv6 — separate CLI command
+        ipv6_enabled = False
+        ipv6_proto = 'none'
+        try:
+            ipv6_output = self.cli(
+                'show network ipv6 global')['show network ipv6 global']
+            ipv6_d = parse_dot_keys(ipv6_output)
+            ipv6_status = ipv6_d.get('IPv6 status', '').strip().lower()
+            ipv6_enabled = ipv6_status in ('enable', 'enabled')
+            ipv6_proto_raw = ipv6_d.get(
+                'Type of protocol', '').strip().lower()
+            if ipv6_proto_raw == 'autoconf':
+                ipv6_proto = 'auto'
+            elif ipv6_proto_raw:
+                ipv6_proto = ipv6_proto_raw
+        except Exception:
+            pass
+
+        return {
+            'protocol': proto_raw,
+            'vlan_id': int(d.get('Management VLAN ID', '1').strip()),
+            'ip_address': d.get('Local IP address', '0.0.0.0').strip(),
+            'netmask': d.get('Subnetmask', '0.0.0.0').strip(),
+            'gateway': d.get('Gateway address', '0.0.0.0').strip(),
+            'mgmt_port': 0,  # not in show output, always 0 on BRS50
+            'dhcp_client_id': dhcp_client_id,
+            'dhcp_lease_time': dhcp_lease,
+            'dhcp_option_66_67': dhcp_option,
+            'dot1p': int(d.get('Management VLAN priority', '0').strip()),
+            'ip_dscp': int(d.get('Management IP-DSCP value', '0').strip()),
+            'ipv6_enabled': ipv6_enabled,
+            'ipv6_protocol': ipv6_proto,
+        }
+
+    def set_management(self, protocol=None, vlan_id=None, ip_address=None,
+                       netmask=None, gateway=None, mgmt_port=None,
+                       dhcp_option_66_67=None, ipv6_enabled=None):
+        """Set management network configuration via CLI.
+
+        Args:
+            protocol: 'local', 'bootp', or 'dhcp'
+            vlan_id: int 1-4042 (validated against VLAN table)
+            ip_address: str dotted quad
+            netmask: str dotted quad (required with ip_address)
+            gateway: str dotted quad
+            mgmt_port: int (0 = all, or slot/port number)
+            dhcp_option_66_67: bool
+            ipv6_enabled: bool
+        """
+        if vlan_id is not None:
+            vlan_id = int(vlan_id)
+            if vlan_id < 1 or vlan_id > 4042:
+                raise ValueError(f"vlan_id must be 1-4042, got {vlan_id}")
+            vlans = self.get_vlans()
+            if vlan_id not in vlans:
+                raise ValueError(
+                    f"VLAN {vlan_id} does not exist on device — "
+                    f"create it first to avoid management lockout")
+
+        self._enable()
+        try:
+            if protocol is not None:
+                proto = protocol.lower().strip()
+                if proto == 'local':
+                    proto = 'none'
+                if proto not in ('none', 'bootp', 'dhcp'):
+                    raise ValueError(
+                        f"protocol must be 'local', 'bootp', or 'dhcp', "
+                        f"got '{protocol}'")
+                self.cli(f'network protocol {proto}')
+
+            if ip_address is not None:
+                mask = netmask or '255.255.255.0'
+                if gateway:
+                    self.cli(f'network parms {ip_address} {mask} {gateway}')
+                else:
+                    self.cli(f'network parms {ip_address} {mask}')
+            elif gateway is not None:
+                # Gateway-only change — need current IP/mask
+                current = self.get_management()
+                self.cli(
+                    f'network parms {current["ip_address"]} '
+                    f'{current["netmask"]} {gateway}')
+
+            if vlan_id is not None:
+                self.cli(f'network management vlan {vlan_id}')
+
+            if mgmt_port is not None:
+                port_val = 'all' if int(mgmt_port) == 0 else str(mgmt_port)
+                self.cli(f'network management port {port_val}')
+
+            if dhcp_option_66_67 is not None:
+                val = 'enable' if dhcp_option_66_67 else 'disable'
+                self.cli(f'network dhcp config-load {val}')
+
+            if ipv6_enabled is not None:
+                if ipv6_enabled:
+                    self.cli('network ipv6 operation')
+                else:
+                    self.cli('no network ipv6 operation')
+        finally:
+            self._disable()
+
     # ── RSTP ──────────────────────────────────────────────────────
 
     def get_rstp(self):

@@ -59,7 +59,7 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 
 ## MOHAWC
 
-- [ ] `set-ip` subcommand — needs driver `set_management_ip()` or similar
+- [ ] `set-ip` subcommand — wraps `set_management(ip_address=, netmask=, gateway=)`
 - [ ] `reboot` subcommand — cold/warm start, needs driver `cold_start()` / `warm_start()`
 - [ ] `--tftp-pull <switch> <tftp-server> <config-file>` — force config pull, wraps `set_tftp()`. Used by [POLO](tools/polo/TODO.md) escalation
 

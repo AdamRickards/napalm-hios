@@ -112,6 +112,7 @@ device.close()
 - `get_qos()` — per-port trust mode, queue scheduling, shaping rate
 - `get_qos_mapping()` — global dot1p→TC and DSCP→TC mapping tables
 - `get_management_priority()` — management frame priority (dot1p + ip-dscp)
+- `get_management()` — management network config (IP, VLAN, protocol, IPv6)
 - `get_vlan_ingress()` — per-port VLAN ingress settings (PVID, frame types, filtering)
 - `get_vlan_egress()` — per-VLAN-per-port membership (Tagged/Untagged/Forbidden)
 - `get_lldp_neighbors_detail_extended()` — LLDP with 802.1/802.3 extensions
@@ -139,6 +140,7 @@ device.close()
 - `set_qos()` — set per-port trust mode, shaping rate, queue scheduling
 - `set_qos_mapping()` — set global dot1p→TC and DSCP→TC mappings
 - `set_management_priority()` — set management frame priority values
+- `set_management()` — set management network config (IP, VLAN, protocol, IPv6)
 - `set_vlan_ingress()` — set per-port VLAN ingress parameters
 - `set_vlan_egress()` — set per-port VLAN egress membership
 - `create_vlan()` — create VLAN in database

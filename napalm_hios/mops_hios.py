@@ -244,6 +244,15 @@ def _mask_to_prefix(mask_str):
         return 32
 
 
+def _prefix_to_mask(prefix):
+    """Convert prefix length to dotted subnet mask. 24 -> '255.255.255.0'"""
+    prefix = int(prefix)
+    if prefix < 0 or prefix > 32:
+        return '0.0.0.0'
+    bits = ('1' * prefix).ljust(32, '0')
+    return '.'.join(str(int(bits[i:i+8], 2)) for i in range(0, 32, 8))
+
+
 def _decode_portlist_hex(hex_str, ifindex_map):
     """Decode PortList hex string to interface names.
 
@@ -3795,3 +3804,149 @@ class MOPSHIOS:
         if self._staging:
             return None
         return self.get_management_priority()
+
+    def get_management(self):
+        """Return management network configuration from HM2-NETCONFIG-MIB.
+
+        Returns:
+            dict with:
+                'protocol': str ('local', 'bootp', 'dhcp')
+                'vlan_id': int (1-4042)
+                'ip_address': str (dotted quad)
+                'netmask': str (dotted quad)
+                'gateway': str (dotted quad)
+                'mgmt_port': int (0 = all ports)
+                'dhcp_client_id': str (read-only)
+                'dhcp_lease_time': int seconds (read-only)
+                'dhcp_option_66_67': bool
+                'dot1p': int (0-7)
+                'ip_dscp': int (0-63)
+                'ipv6_enabled': bool
+                'ipv6_protocol': str ('none', 'auto', 'dhcpv6', 'all')
+        """
+        _PROTOCOL_MAP = {'1': 'local', '2': 'bootp', '3': 'dhcp'}
+        _IPV6_PROTOCOL_MAP = {'1': 'none', '2': 'auto', '3': 'dhcpv6', '4': 'all'}
+
+        entries = self.client.get("HM2-NETCONFIG-MIB", "hm2NetStaticGroup", [
+            "hm2NetConfigProtocol",
+            "hm2NetVlanID",
+            "hm2NetLocalIPAddr",
+            "hm2NetPrefixLength",
+            "hm2NetGatewayIPAddr",
+            "hm2NetMgmtPort",
+            "hm2NetDHCPClientId",
+            "hm2NetDHCPClientLeaseTime",
+            "hm2NetDHCPClientConfigLoad",
+            "hm2NetVlanPriority",
+            "hm2NetIpDscpPriority",
+            "hm2NetIPv6AdminStatus",
+            "hm2NetIPv6ConfigProtocol",
+        ], decode_strings=False)
+
+        if not entries:
+            return {}
+
+        e = entries[0]
+        proto_val = e.get("hm2NetConfigProtocol", "1")
+        prefix_len = _safe_int(e.get("hm2NetPrefixLength", "0"))
+
+        return {
+            'protocol': _PROTOCOL_MAP.get(proto_val, 'local'),
+            'vlan_id': _safe_int(e.get("hm2NetVlanID", "1")),
+            'ip_address': _decode_hex_ip(e.get("hm2NetLocalIPAddr", "")),
+            'netmask': _prefix_to_mask(prefix_len),
+            'gateway': _decode_hex_ip(e.get("hm2NetGatewayIPAddr", "")),
+            'mgmt_port': _safe_int(e.get("hm2NetMgmtPort", "0")),
+            'dhcp_client_id': _decode_hex_string(e.get("hm2NetDHCPClientId", "")),
+            'dhcp_lease_time': _safe_int(e.get("hm2NetDHCPClientLeaseTime", "0")),
+            'dhcp_option_66_67': _safe_int(
+                e.get("hm2NetDHCPClientConfigLoad", "1")) == 1,
+            'dot1p': _safe_int(e.get("hm2NetVlanPriority", "0")),
+            'ip_dscp': _safe_int(e.get("hm2NetIpDscpPriority", "0")),
+            'ipv6_enabled': _safe_int(
+                e.get("hm2NetIPv6AdminStatus", "1")) == 1,
+            'ipv6_protocol': _IPV6_PROTOCOL_MAP.get(
+                e.get("hm2NetIPv6ConfigProtocol", "2"), 'auto'),
+        }
+
+    def set_management(self, protocol=None, vlan_id=None, ip_address=None,
+                       netmask=None, gateway=None, mgmt_port=None,
+                       dhcp_option_66_67=None, ipv6_enabled=None):
+        """Set management network configuration via MOPS.
+
+        All parameters are optional — only provided values are changed.
+        IP changes are activated atomically via hm2NetAction in the same POST.
+
+        Args:
+            protocol: 'local', 'bootp', or 'dhcp'
+            vlan_id: int 1-4042 (management VLAN — validated against VLAN table)
+            ip_address: str dotted quad
+            netmask: str dotted quad
+            gateway: str dotted quad
+            mgmt_port: int (0 = all ports, or specific port number)
+            dhcp_option_66_67: bool (enable/disable DHCP option 66/67/4/42)
+            ipv6_enabled: bool (enable/disable IPv6 — disabling reduces attack surface)
+
+        Returns:
+            dict: current management config (from get_management())
+        """
+        _PROTOCOL_REV = {'local': '1', 'bootp': '2', 'dhcp': '3'}
+
+        # Validate VLAN exists before changing management VLAN
+        if vlan_id is not None:
+            vlan_id = int(vlan_id)
+            if vlan_id < 1 or vlan_id > 4042:
+                raise ValueError(f"vlan_id must be 1-4042, got {vlan_id}")
+            vlans = self.get_vlans()
+            if vlan_id not in vlans:
+                raise ValueError(
+                    f"VLAN {vlan_id} does not exist on device — "
+                    f"create it first to avoid management lockout")
+
+        values = {}
+
+        if protocol is not None:
+            protocol = protocol.lower().strip()
+            if protocol not in _PROTOCOL_REV:
+                raise ValueError(
+                    f"protocol must be 'local', 'bootp', or 'dhcp', "
+                    f"got '{protocol}'")
+            values["hm2NetConfigProtocol"] = _PROTOCOL_REV[protocol]
+
+        if vlan_id is not None:
+            values["hm2NetVlanID"] = str(vlan_id)
+
+        if ip_address is not None:
+            values["hm2NetLocalIPAddr"] = _encode_hex_ip(ip_address)
+
+        if netmask is not None:
+            values["hm2NetPrefixLength"] = str(_mask_to_prefix(netmask))
+
+        if gateway is not None:
+            values["hm2NetGatewayIPAddr"] = _encode_hex_ip(gateway)
+
+        if mgmt_port is not None:
+            values["hm2NetMgmtPort"] = str(int(mgmt_port))
+
+        if dhcp_option_66_67 is not None:
+            values["hm2NetDHCPClientConfigLoad"] = \
+                "1" if dhcp_option_66_67 else "2"
+
+        if ipv6_enabled is not None:
+            values["hm2NetIPv6AdminStatus"] = \
+                "1" if ipv6_enabled else "2"
+
+        if not values:
+            return self.get_management()
+
+        # Include activate trigger for IP/gateway changes
+        if any(k in values for k in (
+                "hm2NetLocalIPAddr", "hm2NetPrefixLength",
+                "hm2NetGatewayIPAddr")):
+            values["hm2NetAction"] = "2"  # activate
+
+        self._apply_set("HM2-NETCONFIG-MIB", "hm2NetStaticGroup", values)
+
+        if self._staging:
+            return None
+        return self.get_management()

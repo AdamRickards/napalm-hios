@@ -844,6 +844,22 @@ class HIOSDriver(NetworkDriver):
             )
         raise NotImplementedError("set_management_priority is not implemented for this protocol")
 
+    def get_management(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().get_management()
+        raise NotImplementedError("get_management is not implemented for this protocol")
+
+    def set_management(self, protocol=None, vlan_id=None, ip_address=None,
+                       netmask=None, gateway=None, mgmt_port=None,
+                       dhcp_option_66_67=None, ipv6_enabled=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_management(
+                protocol=protocol, vlan_id=vlan_id, ip_address=ip_address,
+                netmask=netmask, gateway=gateway, mgmt_port=mgmt_port,
+                dhcp_option_66_67=dhcp_option_66_67, ipv6_enabled=ipv6_enabled,
+            )
+        raise NotImplementedError("set_management is not implemented for this protocol")
+
     # ------------------------------------------------------------------
     # MOPS staging (atomic multi-setter batching)
     # ------------------------------------------------------------------

@@ -1062,6 +1062,97 @@ device.set_management_priority(dot1p=7, ip_dscp=46)
 | `dot1p` | `0`–`7` | `None` | VLAN PCP priority for management replies |
 | `ip_dscp` | `0`–`63` | `None` | IP DSCP value for management replies |
 
+### get_management()
+
+Returns management network configuration — IP assignment, management VLAN,
+IPv6 status, and DHCP settings. Corresponds to the HiOS web UI under
+Network → Global / IPv4 / IPv6.
+
+```python
+result = device.get_management()
+```
+
+```python
+{
+    'protocol': 'local',          # 'local' | 'bootp' | 'dhcp'
+    'vlan_id': 1,                 # 1-4042, management VLAN ID
+    'ip_address': '192.168.1.4',  # dotted quad
+    'netmask': '255.255.255.0',   # dotted quad
+    'gateway': '192.168.1.254',   # dotted quad
+    'mgmt_port': 0,               # 0 = all ports
+    'dhcp_client_id': '',         # read-only, DHCP client ID
+    'dhcp_lease_time': 0,         # read-only, seconds
+    'dhcp_option_66_67': True,    # DHCP config file download enabled
+    'dot1p': 0,                   # 0-7, management VLAN priority
+    'ip_dscp': 0,                 # 0-63, management IP DSCP
+    'ipv6_enabled': True,         # IPv6 admin status
+    'ipv6_protocol': 'auto',      # 'none' | 'auto' | 'dhcpv6' | 'all'
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `protocol` | str | IP assignment method |
+| `vlan_id` | int | Management VLAN ID |
+| `ip_address` | str | Management IP address |
+| `netmask` | str | Subnet mask |
+| `gateway` | str | Default gateway |
+| `mgmt_port` | int | Restricted management port (0 = all) |
+| `dhcp_client_id` | str | DHCP client identifier (read-only) |
+| `dhcp_lease_time` | int | DHCP lease time in seconds (read-only) |
+| `dhcp_option_66_67` | bool | DHCP options 66/67/4/42 enabled |
+| `dot1p` | int | Management frame VLAN PCP priority |
+| `ip_dscp` | int | Management frame IP DSCP value |
+| `ipv6_enabled` | bool | IPv6 administrative status |
+| `ipv6_protocol` | str | IPv6 address assignment method |
+
+**Note:** On L3 devices (e.g. GRS1042) the management IP is on a routed
+VLAN interface, not the management IP stack. `ip_address` will return
+`0.0.0.0` — use `get_interfaces_ip()` to find routed interface IPs.
+
+### set_management(protocol=None, vlan_id=None, ip_address=None, netmask=None, gateway=None, mgmt_port=None, dhcp_option_66_67=None, ipv6_enabled=None)
+
+Set management network configuration. Only provided values are changed.
+IP/gateway changes are activated atomically (MOPS: same POST; SNMP: same
+SET batch; SSH: `network parms` command).
+
+**VLAN safety check:** Changing `vlan_id` first validates the VLAN exists
+in the device's VLAN table. If not, raises `ValueError` to prevent
+management lockout.
+
+```python
+# Switch to DHCP
+device.set_management(protocol='dhcp')
+
+# Change management VLAN (must exist first)
+device.create_vlan(100, 'Management')
+device.set_management(vlan_id=100)
+
+# Change IP address (atomic — includes activation trigger)
+device.set_management(ip_address='10.0.0.1', netmask='255.255.255.0',
+                      gateway='10.0.0.254')
+
+# Disable IPv6 (reduces attack surface)
+device.set_management(ipv6_enabled=False)
+
+# Disable DHCP config file auto-download
+device.set_management(dhcp_option_66_67=False)
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `protocol` | `'local'`, `'bootp'`, `'dhcp'` | `None` | IP assignment method |
+| `vlan_id` | `1`–`4042` | `None` | Management VLAN (validated against VLAN table) |
+| `ip_address` | dotted quad str | `None` | Management IP address |
+| `netmask` | dotted quad str | `None` | Subnet mask |
+| `gateway` | dotted quad str | `None` | Default gateway |
+| `mgmt_port` | int | `None` | Restrict management to specific port (0 = all) |
+| `dhcp_option_66_67` | bool | `None` | Enable/disable DHCP option 66/67/4/42 |
+| `ipv6_enabled` | bool | `None` | Enable/disable IPv6 |
+
+**Warning:** Changing `ip_address`, `vlan_id`, or `gateway` may cause you
+to lose connectivity to the device. Plan accordingly.
+
 ---
 
 ## HiDiscovery Protocol

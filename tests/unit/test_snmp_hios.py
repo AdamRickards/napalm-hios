@@ -78,6 +78,12 @@ from napalm_hios.snmp_hios import (
     OID_hm2CosQueueMinBandwidth, OID_hm2CosQueueMaxBandwidth,
     OID_hm2TrafficClass, OID_hm2CosMapIpDscpTrafficClass,
     OID_hm2NetVlanPriority, OID_hm2NetIpDscpPriority,
+    OID_hm2NetConfigProtocol, OID_hm2NetLocalIPAddr,
+    OID_hm2NetPrefixLength, OID_hm2NetGatewayIPAddr,
+    OID_hm2NetVlanID, OID_hm2NetMgmtPort,
+    OID_hm2NetDHCPClientId, OID_hm2NetDHCPClientLeaseTime,
+    OID_hm2NetDHCPClientConfigLoad,
+    OID_hm2NetIPv6AdminStatus, OID_hm2NetIPv6ConfigProtocol,
 )
 from napalm.base.exceptions import ConnectionException
 
@@ -2737,6 +2743,55 @@ class TestSNMPHIOS(unittest.TestCase):
 
         self.assertEqual(result['dot1p'], 3)
         self.assertEqual(result['ip_dscp'], 46)
+
+
+    def test_get_management(self):
+        def _mock_ip(ip_bytes):
+            """Create a mock that behaves like pysnmp InetAddress."""
+            m = MagicMock()
+            m.prettyPrint.return_value = '0x' + ip_bytes.hex()
+            return m
+
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2NetConfigProtocol: 1,  # local
+                OID_hm2NetLocalIPAddr: _mock_ip(b'\xc0\xa8\x01\x04'),
+                OID_hm2NetPrefixLength: 24,
+                OID_hm2NetGatewayIPAddr: _mock_ip(b'\xc0\xa8\x01\xfe'),
+                OID_hm2NetVlanID: 1,
+                OID_hm2NetMgmtPort: 0,
+                OID_hm2NetDHCPClientId: '',
+                OID_hm2NetDHCPClientLeaseTime: 0,
+                OID_hm2NetDHCPClientConfigLoad: 1,  # enabled
+                OID_hm2NetVlanPriority: 0,
+                OID_hm2NetIpDscpPriority: 0,
+                OID_hm2NetIPv6AdminStatus: 1,  # enabled
+                OID_hm2NetIPv6ConfigProtocol: 2,  # auto
+            }
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_management()
+
+        self.assertEqual(result['protocol'], 'local')
+        self.assertEqual(result['vlan_id'], 1)
+        self.assertEqual(result['ip_address'], '192.168.1.4')
+        self.assertEqual(result['netmask'], '255.255.255.0')
+        self.assertEqual(result['mgmt_port'], 0)
+        self.assertTrue(result['dhcp_option_66_67'])
+        self.assertTrue(result['ipv6_enabled'])
+        self.assertEqual(result['ipv6_protocol'], 'auto')
+
+    def test_set_management_vlan_validation(self):
+        """Rejects VLAN that doesn't exist."""
+        self.snmp.get_vlans = lambda: {
+            1: {'name': 'default', 'interfaces': []}}
+        with self.assertRaises(ValueError):
+            self.snmp.set_management(vlan_id=999)
+
+    def test_set_management_bad_vlan_range(self):
+        """Rejects out-of-range VLAN."""
+        with self.assertRaises(ValueError):
+            self.snmp.set_management(vlan_id=0)
 
 
 class TestEncodePortlist(unittest.TestCase):

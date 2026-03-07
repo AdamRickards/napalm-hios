@@ -2715,5 +2715,138 @@ class TestSFlowSetters(unittest.TestCase):
         self.assertEqual(len(self.backend._mutations), 1)
 
 
+class TestManagementMOPS(unittest.TestCase):
+    """Test MOPS get_management / set_management."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_management(self):
+        """Parse management network config from MOPS."""
+        self.backend.client.get.return_value = [{
+            "hm2NetConfigProtocol": "1",   # none/local
+            "hm2NetVlanID": "1",
+            "hm2NetLocalIPAddr": "c0 a8 01 04",  # 192.168.1.4
+            "hm2NetPrefixLength": "24",
+            "hm2NetGatewayIPAddr": "c0 a8 01 fe",  # 192.168.1.254
+            "hm2NetMgmtPort": "0",
+            "hm2NetDHCPClientId": "",
+            "hm2NetDHCPClientLeaseTime": "0",
+            "hm2NetDHCPClientConfigLoad": "1",  # enabled
+            "hm2NetVlanPriority": "0",
+            "hm2NetIpDscpPriority": "0",
+            "hm2NetIPv6AdminStatus": "1",  # enabled
+            "hm2NetIPv6ConfigProtocol": "2",  # auto
+        }]
+
+        result = self.backend.get_management()
+        self.assertEqual(result['protocol'], 'local')
+        self.assertEqual(result['vlan_id'], 1)
+        self.assertEqual(result['ip_address'], '192.168.1.4')
+        self.assertEqual(result['netmask'], '255.255.255.0')
+        self.assertEqual(result['gateway'], '192.168.1.254')
+        self.assertEqual(result['mgmt_port'], 0)
+        self.assertTrue(result['dhcp_option_66_67'])
+        self.assertEqual(result['dot1p'], 0)
+        self.assertEqual(result['ip_dscp'], 0)
+        self.assertTrue(result['ipv6_enabled'])
+        self.assertEqual(result['ipv6_protocol'], 'auto')
+
+    def test_get_management_dhcp(self):
+        """Parse management config with DHCP."""
+        self.backend.client.get.return_value = [{
+            "hm2NetConfigProtocol": "3",  # dhcp
+            "hm2NetVlanID": "100",
+            "hm2NetLocalIPAddr": "0a 00 00 32",  # 10.0.0.50
+            "hm2NetPrefixLength": "16",
+            "hm2NetGatewayIPAddr": "0a 00 00 01",
+            "hm2NetMgmtPort": "0",
+            "hm2NetDHCPClientId": "42 52 53 35 30",  # BRS50
+            "hm2NetDHCPClientLeaseTime": "86400",
+            "hm2NetDHCPClientConfigLoad": "2",  # disabled
+            "hm2NetVlanPriority": "5",
+            "hm2NetIpDscpPriority": "46",
+            "hm2NetIPv6AdminStatus": "2",  # disabled
+            "hm2NetIPv6ConfigProtocol": "1",  # none
+        }]
+
+        result = self.backend.get_management()
+        self.assertEqual(result['protocol'], 'dhcp')
+        self.assertEqual(result['vlan_id'], 100)
+        self.assertEqual(result['ip_address'], '10.0.0.50')
+        self.assertEqual(result['netmask'], '255.255.0.0')
+        self.assertFalse(result['dhcp_option_66_67'])
+        self.assertEqual(result['dot1p'], 5)
+        self.assertEqual(result['ip_dscp'], 46)
+        self.assertFalse(result['ipv6_enabled'])
+
+    def test_get_management_empty(self):
+        """Empty response returns empty dict."""
+        self.backend.client.get.return_value = []
+        result = self.backend.get_management()
+        self.assertEqual(result, {})
+
+    def test_set_management_vlan_validation(self):
+        """Rejects VLAN that doesn't exist."""
+        self.backend.get_vlans = Mock(
+            return_value={1: {'name': 'default', 'interfaces': []}})
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.set_management(vlan_id=999)
+        self.assertIn('999', str(ctx.exception))
+        self.assertIn('does not exist', str(ctx.exception))
+
+    def test_set_management_vlan_range(self):
+        """Rejects out-of-range VLAN."""
+        with self.assertRaises(ValueError):
+            self.backend.set_management(vlan_id=0)
+        with self.assertRaises(ValueError):
+            self.backend.set_management(vlan_id=5000)
+
+    def test_set_management_bad_protocol(self):
+        """Rejects invalid protocol."""
+        with self.assertRaises(ValueError):
+            self.backend.set_management(protocol='ospf')
+
+    def test_set_management_ip_triggers_activate(self):
+        """IP address change includes hm2NetAction=activate."""
+        self.backend.client.get.return_value = [{
+            "hm2NetConfigProtocol": "1", "hm2NetVlanID": "1",
+            "hm2NetLocalIPAddr": "c0 a8 01 05",
+            "hm2NetPrefixLength": "24",
+            "hm2NetGatewayIPAddr": "c0 a8 01 fe",
+            "hm2NetMgmtPort": "0",
+            "hm2NetDHCPClientId": "",
+            "hm2NetDHCPClientLeaseTime": "0",
+            "hm2NetDHCPClientConfigLoad": "1",
+            "hm2NetVlanPriority": "0", "hm2NetIpDscpPriority": "0",
+            "hm2NetIPv6AdminStatus": "1", "hm2NetIPv6ConfigProtocol": "2",
+        }]
+        self.backend.set_management(ip_address='192.168.1.5')
+        call_args = self.backend.client.set.call_args
+        values = call_args[0][2]
+        self.assertEqual(values['hm2NetLocalIPAddr'], 'c0 a8 01 05')
+        self.assertEqual(values['hm2NetAction'], '2')
+
+    def test_set_management_no_change(self):
+        """No args returns current config without SET."""
+        self.backend.client.get.return_value = [{
+            "hm2NetConfigProtocol": "1", "hm2NetVlanID": "1",
+            "hm2NetLocalIPAddr": "c0 a8 01 04",
+            "hm2NetPrefixLength": "24",
+            "hm2NetGatewayIPAddr": "c0 a8 01 fe",
+            "hm2NetMgmtPort": "0",
+            "hm2NetDHCPClientId": "",
+            "hm2NetDHCPClientLeaseTime": "0",
+            "hm2NetDHCPClientConfigLoad": "1",
+            "hm2NetVlanPriority": "0", "hm2NetIpDscpPriority": "0",
+            "hm2NetIPv6AdminStatus": "1", "hm2NetIPv6ConfigProtocol": "2",
+        }]
+        result = self.backend.set_management()
+        self.backend.client.set.assert_not_called()
+        self.assertEqual(result['ip_address'], '192.168.1.4')
+
+
 if __name__ == '__main__':
     unittest.main()

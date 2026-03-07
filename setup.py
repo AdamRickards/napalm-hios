@@ -7,7 +7,7 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="napalm-hios",
-    version="1.11.1",
+    version="1.12.0",
     packages=find_packages(),
     description="NAPALM driver for HiOS network switches by Belden",
     long_description=long_description,

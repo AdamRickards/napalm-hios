@@ -1101,5 +1101,97 @@ class TestQoSParser(unittest.TestCase):
             self.ssh.set_qos('1/1', min_bw=50)
 
 
+class TestManagementSSH(unittest.TestCase):
+    """Test SSH get_management parser."""
+
+    def setUp(self):
+        self.ssh = SSHHIOS("192.0.2.1", "admin", "test", 10)
+        self.ssh.connection = True
+        self.ssh._in_config_mode = False
+
+    def test_get_management(self):
+        """Parse management network config from show network parms."""
+        net_output = (
+            'IPv4 Network\n'
+            '------------\n'
+            'Local IP address............................192.168.1.4\n'
+            'Subnetmask..................................255.255.255.0\n'
+            'Gateway address.............................192.168.1.254\n'
+            'Burned in MAC address.......................64:60:38:3f:4a:a1\n'
+            'Protocol....................................none\n'
+            'Management VLAN ID..........................1\n'
+            'Management VLAN priority....................0\n'
+            'Management IP-DSCP value....................0\n'
+            'DHCP/BOOTP client ID........................\n'
+            'DHCP/BOOTP client config load...............enabled(options 4, 42, 66, 67)\n'
+        )
+        ipv6_output = (
+            'IPv6 status.................................enable\n'
+            'Type of protocol............................autoconf\n'
+            'Gateway address.............................::\n'
+            'Number of DAD transmits.....................1\n'
+        )
+
+        def mock_cli(cmd, **kw):
+            if 'ipv6' in cmd:
+                return {'show network ipv6 global': ipv6_output}
+            return {'show network parms': net_output}
+
+        self.ssh.cli = mock_cli
+        result = self.ssh.get_management()
+
+        self.assertEqual(result['protocol'], 'local')
+        self.assertEqual(result['vlan_id'], 1)
+        self.assertEqual(result['ip_address'], '192.168.1.4')
+        self.assertEqual(result['netmask'], '255.255.255.0')
+        self.assertEqual(result['gateway'], '192.168.1.254')
+        self.assertTrue(result['dhcp_option_66_67'])
+        self.assertTrue(result['ipv6_enabled'])
+        self.assertEqual(result['ipv6_protocol'], 'auto')
+
+    def test_get_management_dhcp_disabled(self):
+        """Parse management config with DHCP and IPv6 disabled."""
+        net_output = (
+            'Local IP address............................10.0.0.50\n'
+            'Subnetmask..................................255.255.0.0\n'
+            'Gateway address.............................10.0.0.1\n'
+            'Protocol....................................dhcp\n'
+            'Management VLAN ID..........................100\n'
+            'Management VLAN priority....................5\n'
+            'Management IP-DSCP value....................46\n'
+            'DHCP/BOOTP client config load...............disabled\n'
+        )
+        ipv6_output = (
+            'IPv6 status.................................disable\n'
+            'Type of protocol............................none\n'
+        )
+
+        def mock_cli(cmd, **kw):
+            if 'ipv6' in cmd:
+                return {'show network ipv6 global': ipv6_output}
+            return {'show network parms': net_output}
+
+        self.ssh.cli = mock_cli
+        result = self.ssh.get_management()
+
+        self.assertEqual(result['protocol'], 'dhcp')
+        self.assertEqual(result['vlan_id'], 100)
+        self.assertFalse(result['dhcp_option_66_67'])
+        self.assertEqual(result['dot1p'], 5)
+        self.assertEqual(result['ip_dscp'], 46)
+        self.assertFalse(result['ipv6_enabled'])
+
+    def test_set_management_bad_vlan(self):
+        """Rejects out-of-range VLAN."""
+        with self.assertRaises(ValueError):
+            self.ssh.set_management(vlan_id=0)
+
+    def test_set_management_nonexistent_vlan(self):
+        """Rejects VLAN not in VLAN table."""
+        self.ssh.get_vlans = lambda: {1: {'name': 'default', 'interfaces': []}}
+        with self.assertRaises(ValueError):
+            self.ssh.set_management(vlan_id=99)
+
+
 if __name__ == '__main__':
     unittest.main()
