@@ -13,13 +13,14 @@ ring health, and supports live edge strategy migration — all from a single con
 ## Requirements
 
 - Python 3.8+
-- [napalm-hios](https://pypi.org/project/napalm-hios/) >= 1.9.0
-- HTTPS (port 443) reachable to all switches (MOPS protocol, default)
-- All switches running HiOS 10.x with matching credentials
+- [napalm-hios](https://pypi.org/project/napalm-hios/) >= 1.14.0
+- **Live mode:** HTTPS (port 443) reachable to all switches (MOPS protocol, default)
+- **Offline mode:** Config XML files exported from HiOS switches (no network needed)
+- All switches running HiOS 10.x with matching credentials (live mode)
 
 ## Quick Start
 
-Interactive wizard — walks you through credentials, devices, ring settings, and edge protection step by step:
+Interactive wizard — walks you through devices, credentials, ring settings, and edge protection step by step. If any device is a `.xml` path, offline mode is auto-detected and the credentials step is skipped:
 
 ```bash
 python clamp.py -i
@@ -65,6 +66,9 @@ save false                 # true = save to NVM after ring verified healthy
 # Force past L2S safety check (loop mode only)
 force false
 
+# SW level override (offline mode — config XML lacks os_version)
+# sw_level L2A                # global default, per-device on device line
+
 # Device list — one per line
 # <ip> [port1 port2] [RM]
 192.168.1.80 1/5 1/6 RM
@@ -78,6 +82,49 @@ force false
 ```
 
 If no device has `RM`, the first device is automatically assigned as ring manager.
+
+### Offline Mode
+
+Use `.xml` file paths instead of IP addresses to operate on config XML files
+without a live network. Protocol is auto-detected — no `username`, `password`,
+or `protocol` line needed.
+
+```
+# Offline config — no credentials needed
+port1 1/5
+port2 1/6
+vlan 100
+edge_protection rstp-full
+save true
+sw_level L2A                                          # global default
+
+configs/config-80.xml 1/5 1/6 RM
+configs/config-82.xml
+
+configs/config-80.xml SRM 200 1/10
+configs/config-82.xml RSRM 200 1/10
+configs/config-85.xml RC 200 L2S                      # per-device override
+configs/config-81.xml RC 200
+```
+
+**Key differences from live mode:**
+
+- Protocol auto-set to `offline` when `.xml` device lines are detected
+- Relative paths resolved from the config file's directory
+- `sw_level` directive sets the default SW level (config XML lacks `os_version`).
+  Default is `L2S` (safe — blocks loop mode). Override per-device with `L2S`,
+  `L2E`, `L2A`, `L3S`, or `L3A` on the device line
+- Ring verification (Phase 5, 7) skipped — no live ring to verify
+- Ring breaking/closing (Phase 1a, 4) skipped — no live ports
+- Save writes the modified XML back to disk
+- Basenames shown in output for readability (not full paths)
+
+**Workflow:**
+
+1. Export clean configs from factory-cleared switches (or use web UI export)
+2. Run CLAMPS offline against the XMLs
+3. Load the configured XMLs onto switches via TFTP, web UI, or USB
+4. Verify the ring forms and edge protection is active
 
 ### Sub-Ring Syntax
 
@@ -324,6 +371,7 @@ Set `save true` to persist configs after verifying the ring is healthy.
 | `clamp.py` | Main deploy + migrate-edge tool |
 | `unclamp.py` | State-driven reverse deployment |
 | `script.cfg` | Configuration file (devices, credentials, settings) |
+| `configs/` | Config XML files for offline mode |
 | `logs/` | Timestamped log files for each run |
 
 ## See Also

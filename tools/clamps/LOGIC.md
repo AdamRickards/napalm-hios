@@ -605,6 +605,44 @@ Unlike Phase 5 (main ring), sub-ring verification failure is a warning,
 not a fatal error. The main ring is already healthy — a sub-ring issue
 doesn't require rolling back the entire deployment.
 
+## Offline Mode
+
+Offline mode operates on HiOS config XML files instead of live switches.
+The napalm-hios offline backend translates MOPS API calls to XML reads/writes.
+
+```
+Detection:
+  .xml file path in device list → auto-set protocol=offline
+  OR explicit: protocol offline
+
+What works (zero code changes — offline inherits MOPSHIOS):
+  All getters: get_facts, get_mrp, get_rstp, get_auto_disable,
+               get_loop_protection, get_storm_control, get_interfaces,
+               get_mrp_sub_ring
+  All setters: set_mrp, set_interface, set_rstp, set_rstp_port,
+               set_auto_disable, set_auto_disable_reason,
+               set_loop_protection, set_storm_control, set_mrp_sub_ring
+  Staging:     start_staging / commit_staging (batched XML writes)
+  Save:        save_config → writes modified XML to disk
+
+What is skipped:
+  Phase 1a — ring break (ports never up offline → auto-skipped)
+  Phase 4  — ring close (ring was never broken → auto-skipped)
+  Phase 5  — ring verify (no live ring → explicitly skipped)
+  Phase 7  — sub-ring verify (no live sub-rings → explicitly skipped)
+  2s RSTP settle delay — not applicable offline
+
+SW level:
+  Config XML lacks os_version (runtime value). get_sw_level() returns
+  'unknown'. Fallback chain: per-device → global sw_level → L2S (safe).
+
+  sw_level L2A                    # global default in script.cfg
+  configs/switch.xml RC 200 L2S   # per-device override on device line
+
+  L2S is the safe default: blocks loop mode (requires L2A+), but
+  rstp-full works on all levels.
+```
+
 ## Sub-Ring Undeploy Ordering
 
 Reverse of deploy. Delete sub-rings before main ring MRP:

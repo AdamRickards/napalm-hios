@@ -53,6 +53,13 @@ def is_valid_ipv4(s: str) -> bool:
         return False
 
 
+def display_name(ip_or_path):
+    """Short display name for device identifier (basename for XML paths)."""
+    if ip_or_path.endswith('.xml'):
+        return os.path.basename(ip_or_path)
+    return ip_or_path
+
+
 def natural_sort_key(interface: str):
     """Sort key that handles '1/1', '1/10', '2/3' naturally."""
     return [int(x) if x.isdigit() else x for x in re.split(r'(\d+)', interface)]
@@ -87,7 +94,7 @@ def parse_arguments():
     parser.add_argument('-p', metavar='PASS', default=None,
                         help='password override')
     parser.add_argument('--protocol', default=None,
-                        choices=['mops', 'snmp', 'ssh'],
+                        choices=['mops', 'snmp', 'ssh', 'offline'],
                         help='protocol (default: mops)')
     parser.add_argument('-i', '--interactive', action='store_true',
                         help='80s-style guided wizard')
@@ -211,7 +218,15 @@ def parse_config(config_file: str) -> dict:
                 continue
 
             ip = line.split()[0]
-            if is_valid_ipv4(ip):
+            if ip.endswith('.xml'):
+                # Offline config file — resolve relative paths, auto-set protocol
+                if not os.path.isabs(ip):
+                    ip = os.path.join(os.path.dirname(os.path.abspath(config_file)), ip)
+                if not config.get('_offline_detected'):
+                    config['protocol'] = 'offline'
+                    config['_offline_detected'] = True
+                config['devices'].append(ip)
+            elif is_valid_ipv4(ip):
                 config['devices'].append(ip)
             else:
                 logging.warning(f"Line {line_num}: skipping invalid IP '{ip}'")
@@ -318,10 +333,11 @@ def resolve_config(args) -> dict:
     config = None
 
     if args.d:
+        is_xml = args.d.endswith('.xml')
         config = {
             'username': args.u or 'admin',
             'password': args.p or 'private',
-            'protocol': args.protocol or 'mops',
+            'protocol': args.protocol or ('offline' if is_xml else 'mops'),
             'devices': [args.d],
             'ring': None,
             'save': False,
@@ -374,11 +390,12 @@ def resolve_config(args) -> dict:
 
 def worker_connect(driver, config, ip, timeout=30):
     """Thread worker: open connection to one device, return (ip, device, error)."""
+    is_offline = config['protocol'] == 'offline'
     try:
         device = driver(
             hostname=ip,
-            username=config['username'],
-            password=config['password'],
+            username=config['username'] if not is_offline else '',
+            password=config['password'] if not is_offline else '',
             timeout=timeout,
             optional_args={'protocol_preference': [config['protocol']]},
         )
@@ -410,7 +427,7 @@ def connect_all(driver, config):
 
     if failures:
         for ip, err in failures:
-            print(f"  [FAIL] {ip} — {err}")
+            print(f"  [FAIL] {display_name(ip)} — {err}")
     if not connections:
         print("\n  FATAL: No devices reachable.\n", file=sys.stderr)
         return {}
@@ -881,7 +898,8 @@ def format_results(results, config):
         if ip in result_map:
             ok, msg = result_map[ip]
             tag = 'OK  ' if ok else 'FAIL'
-            print(f"  [{tag}] {ip:<17s}{msg}")
+            label = display_name(ip)
+            print(f"  [{tag}] {label:<17s}{msg}")
             if ok:
                 ok_count += 1
     return ok_count
@@ -900,7 +918,8 @@ def cmd_vlan_list(args, config, connections, fleet_data):
         egress = data['egress']
         ingress = data['ingress']
 
-        print(f"\n  {data['hostname']} ({ip})")
+        label = display_name(ip)
+        print(f"\n  {data['hostname']} ({label})")
         print(f"  {'VLAN':<8s}{'Name':<20s}{'Ports'}")
         print(f"  {'-'*6:<8s}{'-'*18:<20s}{'-'*30}")
 
@@ -1020,7 +1039,7 @@ def cmd_access(args, config, connections, fleet_data):
     """Set ports to strict access mode."""
     ports = parse_port_spec(args.ports)
     vlan_id = args.vlan_id
-    use_staging = config['protocol'] == 'mops'
+    use_staging = config['protocol'] in ('mops', 'offline')
 
     print(f"\n  Setting access VLAN {vlan_id} on ports {', '.join(ports)}...")
 
@@ -1055,7 +1074,7 @@ def cmd_trunk(args, config, connections, fleet_data):
     """Tag ports for VLANs (additive)."""
     ports = parse_port_spec(args.ports)
     vlan_ids = parse_vlan_list(args.vlan_ids)
-    use_staging = config['protocol'] == 'mops'
+    use_staging = config['protocol'] in ('mops', 'offline')
 
     vlan_str = ', '.join(str(v) for v in vlan_ids)
     print(f"\n  Tagging VLANs {vlan_str} on ports {', '.join(ports)}...")
@@ -1084,8 +1103,13 @@ def cmd_trunk(args, config, connections, fleet_data):
 
 def cmd_auto_trunk(args, config, connections, fleet_data):
     """Tag inter-switch links for a VLAN using LLDP discovery."""
+    if config['protocol'] == 'offline':
+        print("\n  ERROR: auto-trunk requires LLDP data (not available offline)\n",
+              file=sys.stderr)
+        sys.exit(1)
+
     vlan_id = args.vlan_id
-    use_staging = config['protocol'] == 'mops'
+    use_staging = config['protocol'] in ('mops', 'offline')
 
     if 'lldp' not in next(iter(fleet_data.values())):
         print("\n  ERROR: auto-trunk requires LLDP data (internal error)\n",
@@ -1435,7 +1459,7 @@ def cmd_import(args, config, connections, fleet_data):
         return len(fleet_data)
 
     # Apply changes
-    use_staging = config['protocol'] == 'mops'
+    use_staging = config['protocol'] in ('mops', 'offline')
     ok_count = 0
     fail_count = 0
 
@@ -1491,11 +1515,13 @@ def cmd_import(args, config, connections, fleet_data):
             ok_count += 1
             hostname = fleet_data.get(ip, {}).get('hostname', ip)
             n = len(device_changes)
-            print(f"  [OK  ] {ip:<17s}{hostname} — {n} change(s)")
+            label = display_name(ip)
+            print(f"  [OK  ] {label:<17s}{hostname} — {n} change(s)")
 
         except Exception as e:
             fail_count += 1
-            print(f"  [FAIL] {ip:<17s}{e}")
+            label = display_name(ip)
+            print(f"  [FAIL] {label:<17s}{e}")
             if use_staging:
                 try:
                     device.discard_staging()
@@ -1539,7 +1565,7 @@ def cmd_qos(args, config, connections, fleet_data):
     vlan_ids = parse_vlan_list(args.vlan_ids)
     pcp = args.pcp
     include_trunk = args.include_trunk
-    use_staging = config['protocol'] == 'mops'
+    use_staging = config['protocol'] in ('mops', 'offline')
 
     if pcp < 0 or pcp > 7:
         print(f"  [ERROR] PCP must be 0-7, got {pcp}")
@@ -1576,7 +1602,8 @@ def cmd_qos(args, config, connections, fleet_data):
     for ip in config['devices']:
         if ip in plan:
             hostname = fleet_data[ip].get('hostname', ip)
-            print(f"    {ip:<17s}{hostname:<21s}{', '.join(plan[ip])}")
+            label = display_name(ip)
+            print(f"    {label:<17s}{hostname:<21s}{', '.join(plan[ip])}")
     if not plan:
         print("    (no matching ports found)")
         return 0
@@ -1663,18 +1690,8 @@ def interactive_mode():
 
     connections = {}
     try:
-        # ── 1. Credentials & Protocol ──
-        step('STEP 1 ─── CREDENTIALS')
-        username = ask('Username', 'admin')
-        password = ask('Password', 'private')
-        protocol = pick('Protocol', [
-            ('MOPS — HTTPS, atomic writes (recommended)', 'mops'),
-            ('SNMP — SNMPv3, no session state', 'snmp'),
-            ('SSH — CLI parsing', 'ssh'),
-        ])
-
-        # ── 2. Devices ──
-        step('STEP 2 ─── DEVICES')
+        # ── 1. Devices ──
+        step('STEP 1 ─── DEVICES')
 
         cfg_path = get_resource_path('script.cfg')
         cfg_devices = []
@@ -1701,13 +1718,36 @@ def interactive_mode():
             devices = []
 
         if not devices:
-            raw = ask('Enter IPs (comma, range, or CIDR)')
+            raw = ask('Enter IPs (comma, range, CIDR, or .xml paths)')
             if raw:
-                devices = parse_ips(raw)
+                # Check if any entries are .xml paths
+                if any(p.strip().endswith('.xml') for p in raw.split(',')):
+                    devices = [p.strip() for p in raw.split(',') if p.strip()]
+                else:
+                    devices = parse_ips(raw)
 
         if not devices:
             print(f'\n  {YL}No devices. Exiting.{RS}\n')
             return
+
+        # Auto-detect offline from .xml devices
+        is_offline = any(d.endswith('.xml') for d in devices)
+
+        # ── 2. Credentials & Protocol ──
+        if is_offline:
+            protocol = 'offline'
+            username = ''
+            password = ''
+            print(f'\n  {DM}Offline mode — no credentials needed.{RS}\n')
+        else:
+            step('STEP 2 ─── CREDENTIALS')
+            username = ask('Username', 'admin')
+            password = ask('Password', 'private')
+            protocol = pick('Protocol', [
+                ('MOPS — HTTPS, atomic writes (recommended)', 'mops'),
+                ('SNMP — SNMPv3, no session state', 'snmp'),
+                ('SSH — CLI parsing', 'ssh'),
+            ])
 
         # ── 3. Ring filter ──
         step('STEP 3 ─── RING FILTER')
@@ -1740,9 +1780,10 @@ def interactive_mode():
             print(f'\n  {YL}No devices reachable. Exiting.{RS}\n')
             return
 
-        # Initial gather (always with LLDP for max flexibility)
+        # Initial gather (LLDP for live, skip for offline — runtime state)
         print("  Gathering VLAN data...")
-        fleet_data = gather_fleet(connections, need_lldp=True)
+        fleet_data = gather_fleet(connections,
+                                  need_lldp=(config['protocol'] != 'offline'))
         if not fleet_data:
             print(f'\n  {YL}No data gathered. Exiting.{RS}\n')
             close_all(connections)
@@ -1752,7 +1793,8 @@ def interactive_mode():
             if ip in fleet_data:
                 d = fleet_data[ip]
                 n_vlans = len(d['egress'])
-                print(f"    {ip:<17s}{d['hostname']:<21s}{n_vlans} VLANs")
+                label = display_name(ip)
+                print(f"    {label:<17s}{d['hostname']:<21s}{n_vlans} VLANs")
 
         # Ring filter
         if ring:
@@ -1767,7 +1809,8 @@ def interactive_mode():
             for ip, data in fleet_data.items():
                 rp = ', '.join(sorted(data.get('ring_ports', set()),
                                       key=natural_sort_key))
-                print(f"    {ip:<17s}{data['hostname']:<21s}ring ports: {rp}")
+                label = display_name(ip)
+                print(f"    {label:<17s}{data['hostname']:<21s}ring ports: {rp}")
 
         pause()
 
@@ -1945,7 +1988,7 @@ def interactive_mode():
             pause()
 
         # ── Quit ──
-        if changed:
+        if changed and config['protocol'] != 'offline':
             print()
             if yesno('Save all changes to NVM?'):
                 print()
@@ -1964,8 +2007,9 @@ def interactive_mode():
             if yesno('Save devices to script.cfg for next time?'):
                 with open(cfg_path, 'w') as f:
                     f.write('# VIKTOR — VLAN Intent, Knowledgeable Topology-Optimized Rules\n')
-                    f.write(f'username = {username}\n')
-                    f.write(f'password = {password}\n')
+                    if config['protocol'] != 'offline':
+                        f.write(f'username = {username}\n')
+                        f.write(f'password = {password}\n')
                     f.write(f'protocol = {protocol}\n')
                     if ring:
                         f.write(f'ring = {ring}\n')
@@ -2073,7 +2117,7 @@ def main():
                 and not args.export and not args.import_file:
             print("\n  Devices:")
             for ip in config['devices']:
-                print(f"    {ip}")
+                print(f"    {display_name(ip)}")
             print("\n  [DRY RUN] No connections will be made.\n")
             return
 
@@ -2084,8 +2128,10 @@ def main():
         if not connections:
             sys.exit(1)
 
-        # Determine if we need LLDP data
-        need_lldp = (args.audit or args.command in ('auto-trunk', 'qos'))
+        # Determine if we need LLDP data (offline has no LLDP — runtime state)
+        is_offline = config['protocol'] == 'offline'
+        need_lldp = (not is_offline and
+                     (args.audit or args.command in ('auto-trunk', 'qos')))
 
         # Gather fleet data
         print("  Gathering VLAN data...")
@@ -2100,7 +2146,8 @@ def main():
             if ip in fleet_data:
                 d = fleet_data[ip]
                 n_vlans = len(d['egress'])
-                print(f"    {ip:<17s}{d['hostname']:<21s}{n_vlans} VLANs")
+                label = display_name(ip)
+                print(f"    {label:<17s}{d['hostname']:<21s}{n_vlans} VLANs")
 
         # Ring selector filter
         if config['ring']:
@@ -2117,7 +2164,8 @@ def main():
             for ip, data in fleet_data.items():
                 ring_ports = ', '.join(sorted(data.get('ring_ports', set()),
                                               key=natural_sort_key))
-                print(f"    {ip:<17s}{data['hostname']:<21s}ring ports: {ring_ports}")
+                label = display_name(ip)
+                print(f"    {label:<17s}{data['hostname']:<21s}ring ports: {ring_ports}")
 
         # Dispatch
         if args.audit:

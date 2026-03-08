@@ -19,7 +19,9 @@ Interactive session — connects once, then loops through operations:
 python viktor.py -i
 ```
 
-Walks you through credentials, device selection, and ring filter, then opens a multi-turn REPL: pick an operation, set parameters, dry-run or go live, repeat. Save to NVM once at quit. Also launches automatically if no `script.cfg` exists and no arguments are given.
+Walks you through device selection, credentials, and ring filter, then opens a multi-turn REPL: pick an operation, set parameters, dry-run or go live, repeat. Save to NVM once at quit. Also launches automatically if no `script.cfg` exists and no arguments are given.
+
+If all devices are `.xml` paths, offline mode is auto-detected and the credentials step is skipped entirely (no NVM save prompt at quit either).
 
 Single device:
 

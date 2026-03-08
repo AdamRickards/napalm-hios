@@ -11,11 +11,38 @@ HiDiscovery v2 is SNMPv2c over multicast group `239.255.16.12:51973` with commun
 ## Quick Start
 
 ```bash
-python marco.py              # discover all devices
-python marco.py -v           # verbose output (full device details)
+python marco.py              # interactive mode (default)
+python marco.py -I           # interactive mode (explicit)
+python marco.py -v           # CLI discovery (verbose)
 python marco.py -b -i 2     # toggle blink on device 2
 python marco.py -b           # toggle blink on all devices
 ```
+
+## Interactive Mode
+
+Run `python marco.py` with no arguments (or `-I`) to enter interactive mode — a two-stage REPL:
+
+1. **Discover** — auto-detects interfaces, scans the multicast group, displays a live device table
+2. **Operate** — pick a device by index, pick an action, enter values, see results inline
+
+```
+  ╔╦╗╔═╗╦═╗╔═╗╔═╗
+  ║║║╠═╣╠╦╝║  ║ ║
+  ╩ ╩╩ ╩╩╚═╚═╝╚═╝
+  All your switch are belong to Belden.
+
+  #   IP               Name                  Product              FW        Blink
+  ───                   ────────────────────  ──────────────────   ────────  ─────
+  1   192.168.1.80     BRS-A0B086F4EA1F      BRS50-001220Q2Q...  10.3.04   disable
+  2   192.168.1.82     BRS-EC74BA123456      BRS50-001220Q2Q...  10.3.04   disable
+
+  1) Blink         2) Set IP        3) Set name
+  4) DHCP/Static   5) Re-discover   6) Quit
+
+  ▸ What next? [6]:
+```
+
+The socket stays alive across the session. Device index defaults to the last-picked device. Type `list` at the menu to reprint the device table without re-scanning.
 
 ## Discovery
 
@@ -66,6 +93,7 @@ python marco.py --name "MY-SWITCH" -i 2
 
 | Flag | Description |
 |------|-------------|
+| `-I` | Interactive REPL mode (default when no args given) |
 | `-v` | Verbose discovery output (full device details) |
 | `--raw` | Hex dump of each reply |
 | `-s` | Silent mode (JSON file only) |

@@ -5,6 +5,9 @@ Reads a script.cfg file with global defaults and per-device overrides,
 configures MRP on each device in parallel, verifies ring health on the
 manager, configures edge protection, and optionally saves configs.
 
+Supports live (MOPS/SNMP/SSH) and offline (config XML files) modes.
+Offline mode auto-detected from .xml device paths in script.cfg.
+
 Edge protection strategies:
   loop       — Loop protection (default, recommended). Passive on ring,
                active on edge. Auto-disable timer. Catches cross-ring loops.
@@ -112,18 +115,8 @@ def interactive_mode():
         return val in ('y', 'yes') if val else default
 
     try:
-        # ── 1. Credentials ──
-        step('STEP 1 ─── CREDENTIALS')
-        username = ask('Username', 'admin')
-        password = ask('Password', 'private')
-        protocol = pick('Protocol', [
-            ('MOPS — HTTPS, atomic writes (recommended)', 'mops'),
-            ('SNMP — SNMPv3, no session state', 'snmp'),
-            ('SSH — CLI parsing', 'ssh'),
-        ])
-
-        # ── 2. Main ring devices ──
-        step('STEP 2 ─── MAIN RING DEVICES')
+        # ── 1. Main ring devices ──
+        step('STEP 1 ─── MAIN RING DEVICES')
         print(f'  {DM}Enter devices one at a time. First device = Ring Manager by default.{RS}')
         print(f'  {DM}Default ring ports: 1/5 + 1/6. Override per device if needed.{RS}\n')
 
@@ -139,8 +132,8 @@ def interactive_mode():
                     print(f'  {YL}Need at least 2 devices for a ring.{RS}')
                     continue
                 break
-            if not is_valid_ipv4(ip):
-                print(f'  {YL}Invalid IP.{RS}')
+            if not (is_valid_ipv4(ip) or ip.endswith('.xml')):
+                print(f'  {YL}Invalid IP or XML path.{RS}')
                 continue
 
             p1 = ask(f'  Ports for {ip}', f'{default_p1} {default_p2}')
@@ -152,6 +145,25 @@ def interactive_mode():
             main_devices.append({'ip': ip, 'port1': port1, 'port2': port2, 'role': role})
             tag = f' {YL}[RM]{RS}' if role == 'manager' else ''
             print(f'  {GR}+{RS} {ip} {port1} ↔ {port2}{tag}\n')
+
+        # Auto-detect offline from .xml devices
+        is_offline = any(d['ip'].endswith('.xml') for d in main_devices)
+
+        # ── 2. Credentials ──
+        if is_offline:
+            protocol = 'offline'
+            username = ''
+            password = ''
+            print(f'\n  {DM}Offline mode — no credentials needed.{RS}\n')
+        else:
+            step('STEP 2 ─── CREDENTIALS')
+            username = ask('Username', 'admin')
+            password = ask('Password', 'private')
+            protocol = pick('Protocol', [
+                ('MOPS — HTTPS, atomic writes (recommended)', 'mops'),
+                ('SNMP — SNMPv3, no session state', 'snmp'),
+                ('SSH — CLI parsing', 'ssh'),
+            ])
 
         # ── 3. Sub-rings ──
         step('STEP 3 ─── SUB-RINGS')
@@ -178,8 +190,8 @@ def interactive_mode():
                 rc_ip = ask('  RC IP (enter to finish)')
                 if not rc_ip:
                     break
-                if not is_valid_ipv4(rc_ip):
-                    print(f'  {YL}Invalid IP.{RS}')
+                if not (is_valid_ipv4(rc_ip) or rc_ip.endswith('.xml')):
+                    print(f'  {YL}Invalid IP or XML path.{RS}')
                     continue
                 rc_ports = ask(f'    Ports for {rc_ip}', f'{default_p1} {default_p2}')
                 parts = rc_ports.split()
@@ -271,8 +283,9 @@ def interactive_mode():
 
         # Build script.cfg content
         cfg_lines = []
-        cfg_lines.append(f'username {username}')
-        cfg_lines.append(f'password {password}')
+        if not is_offline:
+            cfg_lines.append(f'username {username}')
+            cfg_lines.append(f'password {password}')
         cfg_lines.append(f'protocol {protocol}')
         cfg_lines.append(f'port1 {default_p1}')
         cfg_lines.append(f'port2 {default_p2}')
@@ -425,6 +438,7 @@ def parse_config(config_file: str) -> dict:
         'storm_control_threshold': 100,
         'storm_control_unit': 'pps',
         'force': False,
+        'sw_level': 'L2S',   # safe default for offline (no loop prot, no auto-disable)
         'devices': [],       # flat list (backward compat for connect/gather)
         'rings': {},         # keyed by VLAN — built after parsing
     }
@@ -476,13 +490,22 @@ def parse_config(config_file: str) -> dict:
                 config['force'] = line.split(None, 1)[1].lower() in ('true', 'yes', '1')
             elif line.startswith('debug '):
                 config['debug'] = line.split(None, 1)[1].lower() in ('true', 'yes', '1')
+            elif line.startswith('sw_level '):
+                config['sw_level'] = line.split(None, 1)[1].upper().strip()
             else:
                 tokens = line.split()
                 if not tokens:
                     continue
 
                 ip = tokens[0]
-                if not is_valid_ipv4(ip):
+                if ip.endswith('.xml'):
+                    # Offline config file — auto-set protocol
+                    if not os.path.isabs(ip):
+                        ip = os.path.join(os.path.dirname(os.path.abspath(config_file)), ip)
+                    if not config.get('_offline_detected'):
+                        config['protocol'] = 'offline'
+                        config['_offline_detected'] = True
+                elif not is_valid_ipv4(ip):
                     logging.warning(f"Line {line_num}: skipping invalid IP '{ip}'")
                     continue
 
@@ -490,13 +513,17 @@ def parse_config(config_file: str) -> dict:
                 role = None
                 entry_vlan = None
                 ports = []
+                dev_sw_level = None
 
                 # Detect role keyword
                 i = 0
                 while i < len(rest):
                     tok = rest[i]
                     tok_upper = tok.upper()
-                    if tok_upper == 'RM':
+                    if tok_upper in ('L2S', 'L2E', 'L2A', 'L3S', 'L3A'):
+                        dev_sw_level = tok_upper
+                        i += 1
+                    elif tok_upper == 'RM':
                         role = 'manager'
                         i += 1
                     elif tok_upper in ('SRM', 'RSRM'):
@@ -537,11 +564,13 @@ def parse_config(config_file: str) -> dict:
                     'role': role,
                     'vlan': entry_vlan,
                     'ports': ports,
+                    'sw_level': dev_sw_level,
                     'line_num': line_num,
                 })
 
-    if not config['username'] or not config['password']:
-        raise ValueError("Configuration must contain both username and password")
+    if config['protocol'] != 'offline':
+        if not config['username'] or not config['password']:
+            raise ValueError("Configuration must contain both username and password")
     if not raw_entries:
         raise ValueError("No valid device IPs found in configuration")
 
@@ -590,7 +619,8 @@ def parse_config(config_file: str) -> dict:
             if not p1 or not p2:
                 raise ValueError(f"Device {ip} (sub-ring VLAN {vlan}): no ring ports specified")
             rings[vlan]['devices'].append({
-                'ip': ip, 'port1': p1, 'port2': p2, 'role': 'client'})
+                'ip': ip, 'port1': p1, 'port2': p2, 'role': 'client',
+                'sw_level': entry.get('sw_level')})
 
         else:
             # Main ring device (RM or RC)
@@ -601,7 +631,8 @@ def parse_config(config_file: str) -> dict:
             if main_vlan not in rings:
                 rings[main_vlan] = {'vlan': main_vlan, 'is_main': True, 'devices': []}
             rings[main_vlan]['devices'].append({
-                'ip': ip, 'port1': p1, 'port2': p2, 'role': role})
+                'ip': ip, 'port1': p1, 'port2': p2, 'role': role,
+                'sw_level': entry.get('sw_level')})
 
     # Validate main ring
     if main_vlan not in rings:
@@ -660,6 +691,13 @@ def parse_config(config_file: str) -> dict:
     return config
 
 
+def display_name(ip_or_path):
+    """Short display name for device identifier."""
+    if ip_or_path.endswith('.xml'):
+        return os.path.basename(ip_or_path)
+    return ip_or_path
+
+
 def edge_str(config: dict) -> str:
     """Human-readable edge protection description for banners."""
     mode = config['edge_protection']
@@ -714,18 +752,22 @@ def print_plan(config: dict):
     print(f"  Main Ring (VLAN {main_vlan}):")
     for dev in main_ring.get('devices', []):
         role_tag = f"  [RM]" if dev['role'] == 'manager' else ""
-        print(f"    {dev['ip']:20s} {dev['port1']} \u2194 {dev['port2']}{role_tag}")
+        name = display_name(dev['ip'])
+        print(f"    {name:20s} {dev['port1']} \u2194 {dev['port2']}{role_tag}")
 
     # Sub-rings
     for sv in sub_ring_vlans:
         ring = rings[sv]
         print(f"  Sub-Ring (VLAN {sv}):")
         if ring.get('srm'):
-            print(f"    {ring['srm']['ip']:20s} {ring['srm']['port']:14s}  [SRM]")
+            name = display_name(ring['srm']['ip'])
+            print(f"    {name:20s} {ring['srm']['port']:14s}  [SRM]")
         if ring.get('rsrm'):
-            print(f"    {ring['rsrm']['ip']:20s} {ring['rsrm']['port']:14s}  [RSRM]")
+            name = display_name(ring['rsrm']['ip'])
+            print(f"    {name:20s} {ring['rsrm']['port']:14s}  [RSRM]")
         for dev in ring.get('devices', []):
-            print(f"    {dev['ip']:20s} {dev['port1']} \u2194 {dev['port2']}")
+            name = display_name(dev['ip'])
+            print(f"    {name:20s} {dev['port1']} \u2194 {dev['port2']}")
 
     print("-" * 60)
     print()
@@ -755,11 +797,12 @@ def get_sw_level(facts: dict) -> str:
 def worker_connect(driver, config, dev, timeout):
     """Thread worker: open connection to one device."""
     ip = dev['ip']
+    is_offline = config['protocol'] == 'offline'
     try:
         device = driver(
             hostname=ip,
-            username=config['username'],
-            password=config['password'],
+            username=config['username'] if not is_offline else '',
+            password=config['password'] if not is_offline else '',
             timeout=timeout,
             optional_args={'protocol_preference': [config['protocol']]},
         )
@@ -769,7 +812,7 @@ def worker_connect(driver, config, dev, timeout):
         return ip, None, str(e)
 
 
-def worker_gather_facts(device, dev, is_l2s_possible=True):
+def worker_gather_facts(device, dev, config=None, is_l2s_possible=True):
     """Thread worker: gather current state from one device.
 
     Returns: (ip, facts_dict, error_str)
@@ -790,7 +833,10 @@ def worker_gather_facts(device, dev, is_l2s_possible=True):
     }
     try:
         facts = device.get_facts()
-        result['sw_level'] = get_sw_level(facts)
+        sw = get_sw_level(facts)
+        if sw == 'unknown':
+            sw = dev.get('sw_level') or (config or {}).get('sw_level', 'L2S')
+        result['sw_level'] = sw
         is_l2s = result['sw_level'] == 'L2S'
 
         result['mrp'] = device.get_mrp()
@@ -1244,8 +1290,11 @@ def worker_save(device, dev):
     ip = dev['ip']
     try:
         status = device.save_config()
-        if status.get('saved'):
-            return ip, True, f"nvm={status.get('nvm')}"
+        # Live backends return {'saved': True, 'nvm': ...}
+        # Offline backend returns {'status': 'saved', 'filename': ...}
+        if status.get('saved') or status.get('status') == 'saved':
+            detail = status.get('filename') or f"nvm={status.get('nvm')}"
+            return ip, True, detail
         return ip, False, f"saved=False, nvm={status.get('nvm')}"
     except Exception as e:
         return ip, False, str(e)
@@ -1272,7 +1321,8 @@ def print_results(phase_name: str, results: list):
     log_print("  " + "-" * 55)
     for ip, success, msg in results:
         tag = "OK" if success else "FAIL"
-        log_print(f"  [{tag:4s}] {ip:20s} {msg}")
+        name = display_name(ip)
+        log_print(f"  [{tag:4s}] {name:20s} {msg}")
 
 
 # ---------------------------------------------------------------------------
@@ -1394,7 +1444,7 @@ def gather_device_state(config, connections):
         for dev in config['devices']:
             device = connections.get(dev['ip'])
             if device:
-                futures[pool.submit(worker_gather_facts, device, dev)] = dev
+                futures[pool.submit(worker_gather_facts, device, dev, config)] = dev
 
         for future in as_completed(futures):
             ip, facts, err = future.result()
@@ -1416,8 +1466,9 @@ def display_device_state(label, config, device_facts):
     log_print("  " + "-" * 55)
     for dev in config['devices']:
         ip = dev['ip']
+        name = display_name(ip)
         if ip not in device_facts:
-            log_print(f"  {ip:22s} [no connection]")
+            log_print(f"  {name:22s} [no connection]")
             continue
         facts = device_facts[ip]
         sw = facts['sw_level']
@@ -1439,7 +1490,7 @@ def display_device_state(label, config, device_facts):
             sc_on = sum(1 for p in sc_ifaces.values() if p.get('broadcast', {}).get('enabled'))
             sc_state = str(sc_on) if sc_on else 'off'
         role_tag = 'RM' if dev['role'] == 'manager' else 'RC'
-        log_print(f"  {ip:22s} [{sw}] MRP={mrp_state}, RSTP={rstp_state}, LP={lp_state}, BG={bg_state}, SC={sc_state}  ({role_tag})")
+        log_print(f"  {name:22s} [{sw}] MRP={mrp_state}, RSTP={rstp_state}, LP={lp_state}, BG={bg_state}, SC={sc_state}  ({role_tag})")
 
 
 def run_phase0(config, connections):
@@ -1679,7 +1730,7 @@ def main():
 
         if connect_failures:
             for ip, err in connect_failures:
-                log_print(f"  FAIL: {ip} — {err}")
+                log_print(f"  FAIL: {display_name(ip)} — {err}")
         if not connections:
             log_print("\n  FATAL: No devices reachable.\n")
             sys.exit(1)
@@ -1691,7 +1742,7 @@ def main():
             rm_dev = managers[0]
 
             if not rm_device:
-                log_print(f"\n  FATAL: No connection to ring manager {rm_ip}\n")
+                log_print(f"\n  FATAL: No connection to ring manager {display_name(rm_ip)}\n")
                 sys.exit(1)
 
             # --- Phase 0: Gather facts ---
@@ -1791,15 +1842,19 @@ def main():
                 log_print("\n  Phase 4: Skipped (ring was not broken in Phase 1)")
 
             # --- Phase 5: Verify ring on manager (3x retry) ---
-            log_print("\n  Phase 5: Verifying ring...")
-            healthy, ring_state, redundancy = verify_ring(rm_device, max_attempts=3, delay=1)
+            is_offline = config['protocol'] == 'offline'
+            if is_offline:
+                log_print("\n  Phase 5: Skipped (offline — no live ring to verify)")
+            else:
+                log_print("\n  Phase 5: Verifying ring...")
+                healthy, ring_state, redundancy = verify_ring(rm_device, max_attempts=3, delay=1)
 
-            status_tag = "HEALTHY" if healthy else "UNHEALTHY"
-            log_print(f"  Ring: [{status_tag}] state={ring_state}, redundancy={redundancy}")
+                status_tag = "HEALTHY" if healthy else "UNHEALTHY"
+                log_print(f"  Ring: [{status_tag}] state={ring_state}, redundancy={redundancy}")
 
-            if not healthy:
-                log_print("\n  Ring NOT healthy. Configs NOT saved — power cycle to rollback.\n")
-                sys.exit(1)
+                if not healthy:
+                    log_print("\n  Ring NOT healthy. Configs NOT saved — power cycle to rollback.\n")
+                    sys.exit(1)
 
             # --- Phase 6+7: Sub-ring configuration and verification ---
             if sub_ring_vlans:
@@ -1869,28 +1924,31 @@ def main():
                                 log_print(f"  WARNING: Cannot re-enable RSRM port {rsrm_port} on {rsrm_ip}: {e}")
 
                 # Phase 7: Verify sub-rings
-                log_print("\n  Phase 7: Verifying sub-rings...")
-                all_sub_healthy = True
-                for ring_id, sv in enumerate(sub_ring_vlans, 1):
-                    ring = config['rings'][sv]
-                    srm = ring.get('srm')
-                    if not srm:
-                        continue
-                    srm_device = connections.get(srm['ip'])
-                    if not srm_device:
-                        log_print(f"  Sub-ring VLAN {sv}: no connection to SRM {srm['ip']}")
-                        all_sub_healthy = False
-                        continue
+                if is_offline:
+                    log_print("\n  Phase 7: Skipped (offline — no live sub-rings to verify)")
+                else:
+                    log_print("\n  Phase 7: Verifying sub-rings...")
+                    all_sub_healthy = True
+                    for ring_id, sv in enumerate(sub_ring_vlans, 1):
+                        ring = config['rings'][sv]
+                        srm = ring.get('srm')
+                        if not srm:
+                            continue
+                        srm_device = connections.get(srm['ip'])
+                        if not srm_device:
+                            log_print(f"  Sub-ring VLAN {sv}: no connection to SRM {srm['ip']}")
+                            all_sub_healthy = False
+                            continue
 
-                    healthy, ring_state, redundancy = verify_sub_ring(
-                        srm_device, ring_id, sv, max_attempts=3, delay=1)
-                    status_tag = "HEALTHY" if healthy else "UNHEALTHY"
-                    log_print(f"  Sub-ring VLAN {sv}: [{status_tag}] state={ring_state}, redundancy={redundancy}")
-                    if not healthy:
-                        all_sub_healthy = False
+                        healthy, ring_state, redundancy = verify_sub_ring(
+                            srm_device, ring_id, sv, max_attempts=3, delay=1)
+                        status_tag = "HEALTHY" if healthy else "UNHEALTHY"
+                        log_print(f"  Sub-ring VLAN {sv}: [{status_tag}] state={ring_state}, redundancy={redundancy}")
+                        if not healthy:
+                            all_sub_healthy = False
 
-                if not all_sub_healthy:
-                    log_print("\n  WARNING: One or more sub-rings not healthy.")
+                    if not all_sub_healthy:
+                        log_print("\n  WARNING: One or more sub-rings not healthy.")
 
             # --- Verify: Re-gather state after deploy ---
             if config['verify']:
@@ -1972,7 +2030,8 @@ def run_migrate_edge(args, config, log_filename):
     print("-" * 60)
     for i, dev in enumerate(config['devices'], 1):
         role_str = "MANAGER" if dev['role'] == 'manager' else "client"
-        print(f"  {i}. {dev['ip']:20s}  {dev['port1']} + {dev['port2']}  [{role_str}]")
+        name = display_name(dev['ip'])
+        print(f"  {i}. {name:20s}  {dev['port1']} + {dev['port2']}  [{role_str}]")
     print("=" * 60)
     print()
 
@@ -1998,7 +2057,7 @@ def run_migrate_edge(args, config, log_filename):
             if device:
                 connections[ip] = device
             else:
-                log_print(f"  FAIL: {ip} — {err}")
+                log_print(f"  FAIL: {display_name(ip)} — {err}")
 
     if not connections:
         log_print("\n  FATAL: No devices reachable.\n")
@@ -2010,7 +2069,7 @@ def run_migrate_edge(args, config, log_filename):
         rm_device = connections.get(rm_ip)
 
         if not rm_device:
-            log_print(f"\n  FATAL: No connection to ring manager {rm_ip}\n")
+            log_print(f"\n  FATAL: No connection to ring manager {display_name(rm_ip)}\n")
             sys.exit(1)
 
         # Phase 0: Gather facts

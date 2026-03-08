@@ -5,8 +5,9 @@ Zero-dependency HiDiscovery v2 client for Hirschmann HiOS devices.
 Discover, blink, set IP, change protocol, rename — all via multicast SNMP.
 
 Usage:
-    python marco.py                    # discover all devices
-    python marco.py -v                 # verbose discovery output
+    python marco.py                    # interactive mode (default)
+    python marco.py -I                 # interactive mode (explicit)
+    python marco.py -v                 # CLI discovery (verbose)
     python marco.py -b -i 2           # toggle blink on device 2
     python marco.py -b                 # toggle blink on ALL devices
     python marco.py --set-ip 192.168.1.50 --prefix 24 -i 2
@@ -521,9 +522,20 @@ def main():
                              help='set config protocol to static (requires -i)')
     parser.add_argument('--name', metavar='NAME',
                         help='set sysName on device (requires -i)')
+    parser.add_argument('-I', '--interactive', action='store_true',
+                        help='interactive REPL mode')
     args = parser.parse_args()
 
+    if args.interactive:
+        return interactive_mode()
+
     has_action = args.blink or args.set_ip or args.dhcp or args.static or args.name
+    has_flags = (args.verbose or args.raw or args.silent
+                 or args.index is not None or args.timeout != 5
+                 or args.interface is not None)
+    if not has_action and not has_flags:
+        return interactive_mode()
+
     if args.index is not None and not has_action:
         parser.error('-i/--index requires an action (-b, --set-ip, --dhcp, --static, --name)')
     if args.set_ip:
@@ -553,23 +565,17 @@ def main():
         discover(args, json_path)
 
 
-def discover(args, json_path):
-    """Send multicast GetRequest, collect and display replies, write JSON."""
-    sock, mreq = make_multicast_socket(args.interface)
+def run_discovery(sock, timeout=5, verbose=False, raw=False):
+    """Send discovery request, print devices live, return device list."""
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
-    sock.settimeout(args.timeout)
-
-    iface_label = args.interface or 'default'
-    print(f"\n  MARCO — HiDiscovery v2")
-    print(f"  Group: {MCAST_GROUP}:{MCAST_PORT}  Community: @discover@")
-    print(f"  Interface: {iface_label}  Timeout: {args.timeout}s\n")
+    sock.settimeout(timeout)
 
     try:
         sock.sendto(DISCOVERY_PAYLOAD, (MCAST_GROUP, MCAST_PORT))
         print(f"  [MARCO] Discovery request sent ({len(DISCOVERY_PAYLOAD)} bytes)\n")
     except Exception as e:
         print(f"  [MARCO] FAILED to send: {e}", file=sys.stderr)
-        sys.exit(1)
+        return []
 
     devices = []
     start = time.time()
@@ -609,11 +615,11 @@ def discover(args, json_path):
         fw = device.get('firmware', '').split(' ')[0] if device.get('firmware') else ''
         mac = device.get('mac', '')
 
-        if args.verbose or args.raw:
+        if verbose or raw:
             print(f"  [POLO] [{idx}] {mgmt_ip}  {sysname}  ({len(data)} bytes, {elapsed:.2f}s)")
             print(f"  {'=' * 56}")
 
-            if args.raw:
+            if raw:
                 for i in range(0, len(data), 16):
                     hex_part = ' '.join(f'{b:02x}' for b in data[i:i+16])
                     ascii_part = ''.join(chr(b) if 32 <= b < 127 else '.' for b in data[i:i+16])
@@ -630,10 +636,25 @@ def discover(args, json_path):
         else:
             print(f"  [POLO] [{idx}] {mgmt_ip:<16s} {sysname:<24s} {product}  {fw}  {mac}")
 
+    total = time.time() - start
+    print(f"\n  {len(devices)} device(s) found in {total:.1f}s")
+    return devices
+
+
+def discover(args, json_path):
+    """Send multicast GetRequest, collect and display replies, write JSON."""
+    sock, mreq = make_multicast_socket(args.interface)
+
+    iface_label = args.interface or 'default'
+    print(f"\n  MARCO — HiDiscovery v2")
+    print(f"  Group: {MCAST_GROUP}:{MCAST_PORT}  Community: @discover@")
+    print(f"  Interface: {iface_label}  Timeout: {args.timeout}s\n")
+
+    devices = run_discovery(sock, timeout=args.timeout,
+                            verbose=args.verbose, raw=args.raw)
+
     sock.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP, mreq)
     sock.close()
-
-    total = time.time() - start
 
     output = {
         'timestamp': datetime.now().isoformat(),
@@ -642,7 +663,6 @@ def discover(args, json_path):
     with open(json_path, 'w') as f:
         json.dump(output, f, indent=2)
 
-    print(f"\n  {len(devices)} device(s) found in {total:.1f}s")
     print(f"  Results: {json_path}\n")
 
 
@@ -760,6 +780,263 @@ def do_set_proto(args, json_path):
         with open(json_path, 'w') as f:
             json.dump(data, f, indent=2)
     print()
+
+
+# ---------------------------------------------------------------------------
+# Interactive mode
+# ---------------------------------------------------------------------------
+
+def interactive_mode():
+    """Interactive REPL: discover devices, then operate on them."""
+    CY = '\033[36m'; MG = '\033[35m'; YL = '\033[33m'
+    GR = '\033[32m'; BD = '\033[1m'; DM = '\033[2m'; RS = '\033[0m'
+
+    def cls():
+        os.system('cls' if os.name == 'nt' else 'clear')
+
+    def banner():
+        print(f"""
+  {MG}{BD}╔╦╗╔═╗╦═╗╔═╗╔═╗{RS}
+  {MG}{BD}║║║╠═╣╠╦╝║  ║ ║{RS}
+  {MG}{BD}╩ ╩╩ ╩╩╚═╚═╝╚═╝{RS}
+  {DM}Multicast Address Resolution and Configuration Operator{RS}
+  {CY}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RS}
+  {DM}All your switch are belong to Belden.{RS}
+""")
+
+    def ask(text, default=''):
+        suffix = f' [{default}]' if default else ''
+        try:
+            raw = input(f'  \u25b8 {text}{suffix}: ').strip()
+        except (KeyboardInterrupt, EOFError):
+            raise
+        return raw or default
+
+    last_pick = [None]  # mutable so nested functions can update it
+
+    def pick_device(text, devices, allow_all=False):
+        hint = f'1-{len(devices)}'
+        if allow_all:
+            hint += ", or 'all'"
+        default = str(last_pick[0]) if last_pick[0] is not None else ''
+        while True:
+            raw = ask(f'{text} [{hint}]', default)
+            if allow_all and raw.lower() == 'all':
+                return list(devices)
+            try:
+                idx = int(raw)
+                if 1 <= idx <= len(devices):
+                    last_pick[0] = idx
+                    return [devices[idx - 1]]
+            except ValueError:
+                pass
+            print(f'  {YL}Invalid device{RS}')
+
+    def print_device_table(devices):
+        print(f"\n  {'#':<4s}{'IP':<17s}{'Name':<22s}{'Product':<20s}{'FW':<10s}{'Blink'}")
+        print(f"  {'─'*3:<4s}{'─'*15:<17s}{'─'*20:<22s}{'─'*18:<20s}{'─'*8:<10s}{'─'*5}")
+        for dev in devices:
+            idx = dev.get('_index', '?')
+            ip = dev.get('ip', dev.get('_source_ip', '?'))
+            name = dev.get('sysname', '?')
+            product = dev.get('product', '?')
+            fw = (dev.get('firmware', '') or '').split(' ')[0].split('-')[-1] if dev.get('firmware') else '?'
+            blink = dev.get('blinking', '?')
+            product = product[:18] if len(str(product)) > 18 else product
+            name = name[:20] if len(str(name)) > 20 else name
+            print(f"  {idx:<4}{ip:<17s}{name:<22s}{product:<20s}{fw:<10s}{blink}")
+        print()
+
+    def save_json(devices, json_path):
+        output = {'timestamp': datetime.now().isoformat(), 'devices': devices}
+        with open(json_path, 'w') as f:
+            json.dump(output, f, indent=2)
+
+    def repl_blink(sock, targets, devices):
+        for dev in targets:
+            uuid_hex = dev.get('uuid')
+            if not uuid_hex:
+                continue
+            current = dev.get('blinking', 'disable')
+            new_val = 2 if current == 'enable' else 1
+            new_label = 'enable' if new_val == 1 else 'disable'
+            payload = build_blink_set(uuid_hex, new_val)
+            sock.sendto(payload, (MCAST_GROUP, MCAST_PORT))
+            idx = dev.get('_index', '?')
+            mgmt_ip = dev.get('ip', '?')
+            sysname = dev.get('sysname', '?')
+            print(f"\n  [MARCO] [{idx}] {mgmt_ip}  {sysname}  blink: {current} -> {new_label}")
+            dev['blinking'] = new_label
+        print()
+
+    def repl_set_ip(sock, dev):
+        idx = dev.get('_index', '?')
+        old_ip = dev.get('ip', '?')
+        old_prefix = dev.get('prefix_len', 24)
+        old_gw = dev.get('gateway', '')
+        new_ip = ask('IP address')
+        if not new_ip:
+            print(f'  {YL}Cancelled{RS}')
+            return
+        prefix = int(ask('Prefix length', str(old_prefix)))
+        gw = ask('Gateway', str(old_gw) if old_gw else '')
+        print(f"\n  [{idx}] {dev.get('sysname', '?')}  {old_ip}/{old_prefix} -> {new_ip}/{prefix}")
+        payload = build_ip_set(dev['uuid'], new_ip, prefix, gw or None)
+        result = send_and_wait(sock, payload, dev.get('_source_ip'))
+        if result == 0:
+            dev['ip'] = new_ip
+            dev['prefix_len'] = prefix
+            dev['config_proto'] = 'static'
+            if gw:
+                dev['gateway'] = gw
+        print()
+
+    def repl_set_name(sock, dev):
+        idx = dev.get('_index', '?')
+        old_name = dev.get('sysname', '?')
+        new_name = ask('sysName', old_name)
+        if new_name == old_name:
+            print(f'  {YL}No change{RS}')
+            return
+        print(f"\n  [{idx}] sysName: {old_name} -> {new_name}")
+        payload = build_name_set(dev['uuid'], new_name)
+        result = send_and_wait(sock, payload, dev.get('_source_ip'))
+        if result == 0:
+            dev['sysname'] = new_name
+        print()
+
+    def repl_set_proto(sock, dev):
+        idx = dev.get('_index', '?')
+        old_proto = dev.get('config_proto', '?')
+        print(f"  1) DHCP    2) Static")
+        raw = ask('Protocol', '1' if old_proto == 'dhcp' else '2')
+        if raw == '1':
+            proto_val, proto_label = 3, 'dhcp'
+        elif raw == '2':
+            proto_val, proto_label = 1, 'static'
+        else:
+            print(f'  {YL}Invalid{RS}')
+            return
+        if proto_label == old_proto:
+            print(f'  {YL}No change{RS}')
+            return
+        print(f"\n  [{idx}] config proto: {old_proto} -> {proto_label}")
+        payload = build_proto_set(dev['uuid'], proto_val)
+        result = send_and_wait(sock, payload, dev.get('_source_ip'))
+        if result == 0:
+            dev['config_proto'] = proto_label
+        print()
+
+    def get_local_ips():
+        try:
+            import subprocess
+            result = subprocess.run(['hostname', '-I'], capture_output=True,
+                                    text=True, timeout=2)
+            return [ip for ip in result.stdout.strip().split()
+                    if '.' in ip and ':' not in ip and not ip.startswith('127.')]
+        except Exception:
+            return []
+
+    def pick_interface():
+        ips = get_local_ips()
+        if len(ips) == 0:
+            print(f"  {DM}Interface: all (auto){RS}\n")
+            return None
+        if len(ips) == 1:
+            print(f"  {DM}Interface: {ips[0]}{RS}\n")
+            return ips[0]
+        # Multiple interfaces — show list
+        print(f"  Interfaces:")
+        for i, ip in enumerate(ips, 1):
+            print(f"    {i}) {ip}")
+        print(f"    *) All")
+        raw = ask('Interface', '*')
+        if raw == '*':
+            print()
+            return None
+        try:
+            idx = int(raw)
+            if 1 <= idx <= len(ips):
+                print()
+                return ips[idx - 1]
+        except ValueError:
+            pass
+        print(f'  {YL}Invalid — using all{RS}\n')
+        return None
+
+    json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), JSON_FILE)
+
+    try:
+        # Banner + interface
+        cls()
+        banner()
+        interface = pick_interface()
+
+        # Discovery
+        print(f"\n  Scanning...\n")
+        sock, mreq = make_multicast_socket(interface)
+        devices = run_discovery(sock, timeout=5)
+        print_device_table(devices)
+        save_json(devices, json_path)
+
+        if not devices:
+            print('  No devices found.')
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP, mreq)
+            sock.close()
+            return
+
+        # REPL
+        while True:
+            print(f"  1) Blink         2) Set IP        3) Set name")
+            print(f"  4) DHCP/Static   5) Re-discover   6) Quit")
+            print()
+            raw = ask('What next?', '6')
+
+            if raw == '6':
+                break
+            elif raw == 'list':
+                print_device_table(devices)
+            elif raw == '5':
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP, mreq)
+                sock.close()
+                print(f"\n  Scanning...\n")
+                sock, mreq = make_multicast_socket(interface)
+                devices = run_discovery(sock, timeout=5)
+                print_device_table(devices)
+                save_json(devices, json_path)
+                if not devices:
+                    print('  No devices found.')
+                    break
+            elif raw == '1':
+                targets = pick_device('Device', devices, allow_all=True)
+                repl_blink(sock, targets, devices)
+                save_json(devices, json_path)
+            elif raw == '2':
+                targets = pick_device('Device', devices)
+                repl_set_ip(sock, targets[0])
+                save_json(devices, json_path)
+            elif raw == '3':
+                targets = pick_device('Device', devices)
+                repl_set_name(sock, targets[0])
+                save_json(devices, json_path)
+            elif raw == '4':
+                targets = pick_device('Device', devices)
+                repl_set_proto(sock, targets[0])
+                save_json(devices, json_path)
+            else:
+                print(f'  {YL}Invalid option{RS}\n')
+
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP, mreq)
+        sock.close()
+        print(f'\n  {DM}Later.{RS}\n')
+
+    except (KeyboardInterrupt, EOFError):
+        print(f'\n\n  {DM}Bye.{RS}\n')
+        try:
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP, mreq)
+            sock.close()
+        except Exception:
+            pass
 
 
 def do_set_name(args, json_path):
