@@ -19,6 +19,7 @@ Usage:
     python mohawc.py activate --name rollback
     python mohawc.py delete --index 3
     python mohawc.py download --profile CLAMPS -o config.xml
+    python mohawc.py upload config.xml --name pre-upgrade
 """
 
 import sys
@@ -55,6 +56,12 @@ def display_name(ip_or_path):
     if ip_or_path.endswith('.xml'):
         return os.path.basename(ip_or_path)
     return ip_or_path
+
+
+def is_valid_profile_name(name):
+    """Profile names: alphanumeric, hyphens, underscores only."""
+    import re
+    return bool(name and re.match(r'^[A-Za-z0-9_-]+$', name))
 
 
 def format_uptime(seconds):
@@ -178,6 +185,15 @@ def parse_arguments():
                        help='profile name (default: active profile)')
     p_dl.add_argument('-o', '--output', default=None,
                        help='output file (default: stdout)')
+
+    # upload
+    p_ul = subparsers.add_parser('upload',
+                                  help='upload config XML to device as new profile')
+    p_ul.add_argument('file', help='config XML file to upload')
+    p_ul.add_argument('--name', default=None,
+                       help='profile name (default: filename without extension)')
+    p_ul.add_argument('--yes', action='store_true',
+                       help='skip confirmation prompt')
 
     # interactive (subcommand alias for -i)
     subparsers.add_parser('interactive', help='interactive guided mode')
@@ -1476,6 +1492,11 @@ def cmd_save_rollback(args, config, driver):
 
     rollback_name = args.name
 
+    if not is_valid_profile_name(rollback_name):
+        print(f"\n  ERROR: invalid profile name '{rollback_name}' — "
+              f"use letters, numbers, hyphens, underscores only\n", file=sys.stderr)
+        sys.exit(1)
+
     if not args.yes:
         print(f"\n  Action: Save running config to NVM")
         print(f"  Backup: Current NVM saved as '{rollback_name}' profile")
@@ -1710,6 +1731,59 @@ def cmd_download(args, config, driver):
     return reached
 
 
+def cmd_upload(args, config, driver):
+    """Upload config XML to device as a new profile."""
+    if config['protocol'] != 'mops':
+        print("\n  ERROR: upload requires MOPS protocol "
+              "(HTTPS config upload)\n", file=sys.stderr)
+        sys.exit(1)
+
+    xml_path = args.file
+    if not os.path.exists(xml_path):
+        print(f"\n  ERROR: file not found: {xml_path}\n", file=sys.stderr)
+        sys.exit(1)
+
+    with open(xml_path, 'r') as f:
+        xml_data = f.read()
+
+    profile_name = args.name
+    if not profile_name:
+        profile_name = os.path.splitext(os.path.basename(xml_path))[0]
+
+    if not is_valid_profile_name(profile_name):
+        print(f"\n  ERROR: invalid profile name '{profile_name}' — "
+              f"use letters, numbers, hyphens, underscores only\n", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.yes:
+        print(f"\n  Action: Upload '{os.path.basename(xml_path)}' as profile '{profile_name}'")
+        print(f"  Devices: {', '.join(config['devices'])}")
+        print(f"\n  Type 'yes' to continue: ", end='', flush=True)
+        confirm = input().strip()
+        if confirm != 'yes':
+            print("  Aborted.\n")
+            return 0
+
+    connections = connect_all(driver, config)
+    if not connections:
+        return 0
+
+    reached = 0
+    for ip in config['devices']:
+        device = connections.get(ip)
+        if not device:
+            continue
+        try:
+            device.load_config(xml_data, profile=profile_name, destination='nvm')
+            reached += 1
+            print(f"\n  [OK  ] {display_name(ip):<17s}uploaded as '{profile_name}'")
+        except Exception as e:
+            print(f"\n  [FAIL] {display_name(ip):<17s}{e}")
+
+    close_all(connections)
+    return reached
+
+
 # ---------------------------------------------------------------------------
 # Connection helpers
 # ---------------------------------------------------------------------------
@@ -1786,21 +1860,25 @@ def interactive_mode(args, config, driver):
         print(f'  {BD}{title}{RS}\n')
 
     def pick(text, options, default=1):
+        last = len(options)
         for i, (label, _) in enumerate(options, 1):
             mark = f'{YL}▸{RS}' if i == default else ' '
-            print(f'  {mark} {CY}{i}{RS}) {label}')
+            key = 'q' if i == last else str(i)
+            print(f'  {mark} {CY}{key}{RS}) {label}')
         print()
         while True:
             raw = input(f'  {GR}▸{RS} {text} [{default}]: ').strip()
             if not raw:
                 return options[default - 1][1]
+            if raw.lower() == 'q':
+                return options[-1][1]
             try:
                 idx = int(raw)
-                if 1 <= idx <= len(options):
+                if 1 <= idx <= last:
                     return options[idx - 1][1]
             except ValueError:
                 pass
-            print(f'  {YL}Pick 1–{len(options)}{RS}')
+            print(f'  {YL}Pick 1–{last - 1} or q{RS}')
 
     def ask(text, default=''):
         hint = f' {DM}[{default}]{RS}' if default else ''
@@ -1933,10 +2011,17 @@ def interactive_mode(args, config, driver):
         pause()
 
         # ── MAIN MENU LOOP ──
+        first = True
         while True:
-            cls()
-            banner()
+            # First iteration: output from setup still visible
+            # Subsequent: output from last command still visible
+            if first:
+                first = False
+            else:
+                print()
+
             n_dev = len(connections)
+            print(f'  {CY}{"━" * 58}{RS}')
             print(f'  {BD}SESSION{RS}  {CY}{n_dev}{RS} device(s) via {protocol.upper()}\n')
 
             ops = [
@@ -1950,6 +2035,9 @@ def interactive_mode(args, config, driver):
                 ops.append(('Save with rollback',   'save-rollback'))
             ops.append(('Activate profile',     'activate'))
             ops.append(('Delete profile',       'delete'))
+            ops.append(('Download config',      'download'))
+            if is_mops:
+                ops.append(('Upload config',    'upload'))
             ops.append(('HiDiscovery',          'hidiscovery'))
             if not is_offline:
                 ops.append(('Reset',            'reset'))
@@ -1962,6 +2050,9 @@ def interactive_mode(args, config, driver):
             if op == 'quit':
                 break
 
+            # Clear before command execution — output replaces screen
+            cls()
+            banner()
             print()
 
             # ── STATUS ──
@@ -1982,7 +2073,6 @@ def interactive_mode(args, config, driver):
                 for ip in config['devices']:
                     if ip in results:
                         print_status_device(ip, results[ip])
-                pause()
 
             # ── LIST PROFILES ──
             elif op == 'profiles':
@@ -1993,7 +2083,6 @@ def interactive_mode(args, config, driver):
                             show_profiles(device, ip)
                         except Exception as e:
                             print(f"  {display_name(ip):<17s}{YL}{e}{RS}")
-                pause()
 
             # ── DIFF ──
             elif op == 'diff':
@@ -2019,7 +2108,6 @@ def interactive_mode(args, config, driver):
                             if c['indices']:
                                 idx_str = ': ' + ', '.join(c['indices'])
                             print(f"    {c['label']}{idx_str}")
-                pause()
 
             # ── SAVE ──
             elif op == 'save':
@@ -2034,11 +2122,13 @@ def interactive_mode(args, config, driver):
                     print(f"  [{tag:4s}] {display_name(ip):<17s}{msg}")
                 print(f'\n  {DM}Refreshing...{RS}')
                 state = refresh_state(connections)
-                pause()
 
             # ── SAVE WITH ROLLBACK ──
             elif op == 'save-rollback':
                 name = ask('Rollback profile name', 'rollback')
+                if not is_valid_profile_name(name):
+                    print(f"  {YL}Invalid name — use letters, numbers, hyphens, underscores only.{RS}")
+                    continue
                 if not yesno(f"Save with rollback profile '{name}'?"):
                     continue
                 print()
@@ -2054,7 +2144,6 @@ def interactive_mode(args, config, driver):
                         print(f"  [OK  ] {label:<17s}rollback: '{data['rollback']}'")
                 print(f'\n  {DM}Refreshing...{RS}')
                 state = refresh_state(connections)
-                pause()
 
             # ── ACTIVATE PROFILE ──
             elif op == 'activate':
@@ -2135,7 +2224,6 @@ def interactive_mode(args, config, driver):
                 else:
                     print(f"\n  {YL}Devices are rebooting. Exiting interactive mode.{RS}")
                     return
-                pause()
 
             # ── DELETE PROFILE ──
             elif op == 'delete':
@@ -2189,7 +2277,6 @@ def interactive_mode(args, config, driver):
 
                 print(f'\n  {DM}Refreshing...{RS}')
                 state = refresh_state(connections)
-                pause()
 
             # ── HIDISCOVERY ──
             elif op == 'hidiscovery':
@@ -2209,14 +2296,22 @@ def interactive_mode(args, config, driver):
                     ('On (read-write)',  'on'),
                     ('Read-only',        'read-only'),
                     ('Off',              'off'),
-                    ('Skip (no change)', None),
+                    ('No change',        None),
+                    ('Back',             'back'),
                 ])
+
+                if mode == 'back':
+                    continue
 
                 blink = pick('Blinking', [
                     ('On',               True),
                     ('Off',              False),
-                    ('Skip (no change)', None),
+                    ('No change',        None),
+                    ('Back',             'back'),
                 ])
+
+                if blink == 'back':
+                    continue
 
                 if mode is None and blink is None:
                     continue
@@ -2235,7 +2330,6 @@ def interactive_mode(args, config, driver):
                         print(f"  {GR}[OK  ]{RS} {display_name(ip):<17s}{before}  ->  {after}")
                     else:
                         print(f"  {YL}[FAIL]{RS} {display_name(ip):<17s}{detail}")
-                pause()
 
             # ── RESET ──
             elif op == 'reset':
@@ -2244,7 +2338,11 @@ def interactive_mode(args, config, driver):
                     ('Soft reset (keep management IP)',     'soft-keep'),
                     ('Factory reset',                      'factory'),
                     ('Factory reset + erase all NVM',      'factory-erase'),
+                    ('Back',                               'back'),
                 ])
+
+                if mode == 'back':
+                    continue
 
                 factory = mode in ('factory', 'factory-erase')
                 keep_ip = mode == 'soft-keep'
@@ -2270,7 +2368,6 @@ def interactive_mode(args, config, driver):
                 new_pw = ask('New password for onboarded device')
                 if not new_pw:
                     print(f"  {YL}Password required.{RS}")
-                    pause()
                     continue
                 save_nvm = yesno('Save after onboarding?', default=True)
 
@@ -2284,7 +2381,105 @@ def interactive_mode(args, config, driver):
 
                 print(f'\n  {DM}Refreshing...{RS}')
                 state = refresh_state(connections)
-                pause()
+
+            # ── DOWNLOAD CONFIG ──
+            elif op == 'download':
+                for ip in config['devices']:
+                    device = connections.get(ip)
+                    if not device:
+                        continue
+                    try:
+                        # Show profiles from cache or fetch fresh
+                        profiles = (state.get(ip, {}).get('profiles')
+                                    or device.get_profiles())
+                        if profiles:
+                            print(f"  {BD}{display_name(ip)}{RS} profiles:")
+                            for p in profiles:
+                                active = f'{GR}*{RS}' if p.get('active') else ' '
+                                print(f"    {active} {p.get('index', '?'):>2}  {p.get('name', '?')}")
+                            print()
+
+                        active = [p for p in profiles if p.get('active')]
+                        default_profile = active[0]['name'] if active else 'config'
+                        raw = ask('Profile index or name', default_profile)
+
+                        # Resolve index to name
+                        try:
+                            idx = int(raw)
+                            match = [p for p in profiles if p.get('index') == idx]
+                            profile = match[0]['name'] if match else raw
+                        except ValueError:
+                            profile = raw
+
+                        cfg = device.get_config(profile=profile, source='nvm')
+                        xml = cfg.get('running', '')
+
+                        default_file = f'{display_name(ip).replace(".", "_")}_{profile}.xml'
+                        out = ask('Save to file (empty for stdout)', default_file)
+
+                        if out:
+                            with open(out, 'w') as f:
+                                f.write(xml)
+                            print(f"  {GR}[OK  ]{RS} {display_name(ip):<17s}saved to {out}")
+                        else:
+                            print(xml)
+                    except Exception as e:
+                        print(f"  {YL}[FAIL]{RS} {display_name(ip):<17s}{e}")
+
+            # ── UPLOAD CONFIG ──
+            elif op == 'upload':
+                # List XML files in current directory
+                xml_files = sorted(f for f in os.listdir('.')
+                                   if f.endswith('.xml') and os.path.isfile(f))
+                if xml_files:
+                    print(f"  {DM}XML files in current directory:{RS}")
+                    for i, f in enumerate(xml_files, 1):
+                        print(f"    {CY}{i}{RS}) {f}")
+                    print()
+
+                raw = ask('File number or path')
+                if not raw:
+                    continue
+
+                # Resolve number to filename
+                try:
+                    idx = int(raw)
+                    if 1 <= idx <= len(xml_files):
+                        xml_path = xml_files[idx - 1]
+                    else:
+                        xml_path = raw
+                except ValueError:
+                    xml_path = raw
+
+                if not os.path.exists(xml_path):
+                    print(f"  {YL}File not found: {xml_path}{RS}")
+                    continue
+
+                with open(xml_path, 'r') as f:
+                    xml_data = f.read()
+
+                default_name = os.path.splitext(os.path.basename(xml_path))[0]
+                profile_name = ask('Profile name', default_name)
+                if not is_valid_profile_name(profile_name):
+                    print(f"  {YL}Invalid name — use letters, numbers, hyphens, underscores only.{RS}")
+                    continue
+
+                if not yesno(f"Upload '{os.path.basename(xml_path)}' as '{profile_name}'?"):
+                    continue
+
+                print()
+                for ip in config['devices']:
+                    device = connections.get(ip)
+                    if not device:
+                        continue
+                    try:
+                        device.load_config(xml_data, profile=profile_name, destination='nvm')
+                        print(f"  {GR}[OK  ]{RS} {display_name(ip):<17s}uploaded as '{profile_name}'")
+                    except Exception as e:
+                        print(f"  {YL}[FAIL]{RS} {display_name(ip):<17s}{e}")
+
+                print(f'\n  {DM}Refreshing...{RS}')
+                state = refresh_state(connections)
 
         # ── QUIT ──
         close_all(connections)
@@ -2421,6 +2616,7 @@ def main():
             'activate': cmd_activate,
             'delete': cmd_delete,
             'download': cmd_download,
+            'upload': cmd_upload,
         }
 
         handler = dispatch[args.command]
