@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.15.1
+
+### Bugfix — upload_config Content-Type conflict
+
+- **Fixed `upload_config()` silently failing** — the MOPS session's default `Content-Type: application/xml` header was overriding the `multipart/form-data` boundary that `requests` auto-generates for file uploads. The switch received malformed multipart data and returned `config.wrongFile` inside an HTTP 200 response, which `upload_config()` treated as success. Config uploads via `load_config()` and MOHAWC `save-rollback` were silently broken for all profile names
+- **Fixed `upload_config()` not parsing response body** — the switch returns HTTP 200 for both success and application-level errors (e.g. `config.invalidProfile`, `config.wrongFile`). Now parses the `<errortoken>` in the response and raises `ConnectionException` on anything other than `config.OK`
+
 ## 1.15.0
 
 ### Config Management — HTTPS Download/Upload

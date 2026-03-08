@@ -974,10 +974,18 @@ class MOPSClient:
 
         Returns:
             True on success.
+
+        Raises:
+            ConnectionException: on HTTP error or device-reported error.
         """
         url = (f"https://{self.host}:{self.port}/upload.html"
                f"?filetype=config&destination={destination}&profile={profile}")
         headers = self._config_auth_headers()
+        # The session has Content-Type: application/xml for MOPS XML-RPC.
+        # Multipart file uploads need requests to auto-generate the
+        # multipart/form-data Content-Type with boundary.  Temporarily
+        # remove the session default so it doesn't override.
+        saved_ct = self.session.headers.pop('Content-Type', None)
         try:
             auth = () if 'Authorization' in headers else None
             r = self.session.post(
@@ -990,7 +998,18 @@ class MOPSClient:
         except requests.exceptions.RequestException as e:
             raise ConnectionException(
                 f"Config upload failed on {self.host}: {e}")
+        finally:
+            if saved_ct is not None:
+                self.session.headers['Content-Type'] = saved_ct
         if r.status_code != 200:
             raise ConnectionException(
                 f"Config upload HTTP {r.status_code} from {self.host}")
+        # The switch returns HTTP 200 for both success and application-level
+        # errors.  Parse the response body to detect failures.
+        if 'config.OK' not in r.text:
+            import re
+            m = re.search(r"<errortext value='([^']+)'", r.text)
+            msg = m.group(1) if m else r.text.strip()
+            raise ConnectionException(
+                f"Config upload rejected on {self.host}: {msg}")
         return True

@@ -799,7 +799,11 @@ class TestConfigTransfer(unittest.TestCase):
             'Authorization': 'Mops testkey'})
         mock_resp = Mock()
         mock_resp.status_code = 200
-        mock_resp.text = 'OK'
+        mock_resp.text = ("<html><body><upload-result>"
+                          "<errortoken value='config.OK'/>"
+                          "<errortext value='Configuration successfully "
+                          "uploaded on {0}' /><param><para value='brs'/>"
+                          "</param></upload-result></body></html>")
         self.client.session.post = Mock(return_value=mock_resp)
 
         result = self.client.upload_config('<Config/>', 'CLAMPS')
@@ -807,6 +811,23 @@ class TestConfigTransfer(unittest.TestCase):
         call_args = self.client.session.post.call_args
         self.assertIn('upload.html', call_args[0][0])
         self.assertIn('profile=CLAMPS', call_args[0][0])
+
+    def test_upload_config_error_raises(self):
+        """Upload that returns error token raises ConnectionException."""
+        self.client._config_auth_headers = Mock(return_value={
+            'Authorization': 'Mops testkey'})
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.text = ("<html><body><upload-result>"
+                          "<errortoken value='config.invalidProfile'/>"
+                          "<errortext value='Invalid profile name on "
+                          "device {0}' /><param><para value='brs'/>"
+                          "</param></upload-result></body></html>")
+        self.client.session.post = Mock(return_value=mock_resp)
+
+        with self.assertRaises(ConnectionException) as ctx:
+            self.client.upload_config('<Config/>', 'bad name')
+        self.assertIn('Invalid profile name', str(ctx.exception))
 
     def test_config_transfer_push(self):
         """Push triggers action table with correct params."""
