@@ -1,1 +1,1 @@
-napalm-hios>=1.5.0
+napalm-hios>=1.15.1

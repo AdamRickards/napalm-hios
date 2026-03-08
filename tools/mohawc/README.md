@@ -1,6 +1,12 @@
 # MOHAWC — Management, Onboarding, HiDiscovery, And Wipe Configuration
 
-CLI tool for HiOS switch commissioning. Wraps napalm-hios vendor-specific methods for onboarding factory-fresh devices, controlling HiDiscovery, saving configs, and resetting to defaults.
+CLI tool for HiOS switch commissioning. Wraps napalm-hios vendor-specific methods for onboarding factory-fresh devices, controlling HiDiscovery, saving configs, managing profiles, and resetting to defaults.
+
+Three access patterns:
+
+1. **CLI args** — `mohawc -d IP <command> [--flags]` — power users, scripting, CI
+2. **script.cfg** — `mohawc -c site.cfg save` — fleet-scale batch ops
+3. **Interactive** — `mohawc -d IP -i` — guided mode, no need to memorise args
 
 ## Requirements
 
@@ -17,6 +23,7 @@ Single device with factory defaults (`admin`/`private`, MOPS):
 
 ```bash
 python mohawc.py -d 192.168.1.4 status
+python mohawc.py -d 192.168.1.4 -i       # interactive mode
 ```
 
 Multiple devices via config file:
@@ -25,6 +32,34 @@ Multiple devices via config file:
 python mohawc.py status
 python mohawc.py --dry-run reset --factory --yes
 ```
+
+## Interactive Mode (`-i`)
+
+Guided REPL — connect once, run multiple operations in a menu loop:
+
+```bash
+python mohawc.py -d 192.168.1.4 -i
+python mohawc.py -d 192.168.1.4 interactive    # subcommand alias
+python mohawc.py                                # auto-enters if no subcommand + no script.cfg
+```
+
+Menu adapts to protocol — MOPS-only items (diff, save-rollback) are hidden when connected via SSH/SNMP. Offline-incompatible items (reset, onboard) are hidden in offline mode.
+
+| # | Menu Item | Type |
+|---|-----------|------|
+| 1 | Status | Read-only |
+| 2 | List profiles | Read-only |
+| 3 | Diff (unsaved changes) | Read-only (MOPS) |
+| 4 | Save | Mutation |
+| 5 | Save with rollback | Mutation (MOPS) |
+| 6 | Activate profile | Mutation (warm restart) |
+| 7 | Delete profile | Mutation |
+| 8 | HiDiscovery | Mutation |
+| 9 | Reset | Mutation (destructive) |
+| 10 | Onboard | Mutation |
+| 11 | Quit | — |
+
+Profile/config state is refreshed after every mutation. Activate handles the connection drop and reconnects on single-device sessions.
 
 ## Blink Toggle (`-b`)
 
@@ -46,6 +81,68 @@ python mohawc.py status
 python mohawc.py -d 192.168.1.4 status
 ```
 
+### `profiles`
+
+List config profiles on all devices (index, name, active flag, fingerprint).
+
+```bash
+python mohawc.py -d 192.168.1.4 profiles
+```
+
+### `diff`
+
+Show unsaved config changes — compares running-config to the active NVM profile. MOPS-only (requires HTTPS config download).
+
+```bash
+python mohawc.py -d 192.168.1.4 diff
+```
+
+### `save`
+
+Save running config to NVM on all devices.
+
+```bash
+python mohawc.py save
+```
+
+### `save-rollback`
+
+Backup the current NVM profile under a new name, then save running config. MOPS-only. Avoids name collisions automatically (appends `-1`, `-2`, etc.).
+
+```bash
+python mohawc.py -d 192.168.1.4 save-rollback
+python mohawc.py save-rollback --name pre-upgrade --yes
+```
+
+### `activate`
+
+Activate a config profile by index or name. Triggers a warm restart — the device reboots. Requires confirmation unless `--yes`.
+
+```bash
+python mohawc.py -d 192.168.1.4 activate --index 2
+python mohawc.py -d 192.168.1.4 activate --name rollback --yes
+```
+
+### `delete`
+
+Delete a config profile by index or name. Refuses to delete the active profile. Requires confirmation unless `--yes`.
+
+```bash
+python mohawc.py -d 192.168.1.4 delete --index 3
+python mohawc.py -d 192.168.1.4 delete --name old-backup --yes
+```
+
+### `download`
+
+Download config XML from a device. Defaults to the active profile. Outputs to stdout or a file.
+
+```bash
+python mohawc.py -d 192.168.1.4 download                          # stdout
+python mohawc.py -d 192.168.1.4 download --profile CLAMPS -o config.xml
+```
+
+Multi-device downloads append `_IP` to the filename (e.g. `config_192_168_1_4.xml`).
+
 ### `onboard`
 
 Onboard factory-default devices (change default password). Skips devices that aren't factory-default (`[SKIP]`, not `[FAIL]`). Refuses SNMP protocol — SNMP is gated on factory-default devices.
@@ -63,14 +160,6 @@ Control HiDiscovery protocol. Mode (`--on`/`--off`/`--ro`) and blink (`--blink`/
 python mohawc.py hidiscovery --off
 python mohawc.py hidiscovery --ro --no-blink --save
 python mohawc.py hidiscovery --blink
-```
-
-### `save`
-
-Save running config to NVM on all devices.
-
-```bash
-python mohawc.py save
 ```
 
 ### `reset`
@@ -101,9 +190,10 @@ Without `--entry`, all devices reset in parallel.
 | `-b` | Toggle HiDiscovery blink (read current, invert) |
 | `-c <path>` | Config file (default: `script.cfg`) |
 | `-d <ip>` | Single device — no config file needed |
+| `-i`, `--interactive` | Interactive guided mode |
 | `-u <user>` | Username override (default: `admin`) |
 | `-p <pass>` | Password override (default: `private`) |
-| `--protocol` | `mops` / `snmp` / `ssh` (default: `mops`) |
+| `--protocol` | `mops` / `snmp` / `ssh` / `offline` (default: `mops`) |
 | `-s`, `--silent` | Suppress console output (errors still print to stderr) |
 | `--debug` | Verbose protocol logging |
 | `--dry-run` | Show plan without connecting |
@@ -122,6 +212,16 @@ password = private
 192.168.1.4
 192.168.1.117
 192.168.1.127
+```
+
+Offline mode — point at config XML files instead of IPs:
+
+```ini
+protocol = offline
+
+# Config files
+configs/switch1.xml
+configs/switch2.xml
 ```
 
 CLI args (`-u`, `-p`, `--protocol`) override config file values. With `-d`, no config file is needed at all.
