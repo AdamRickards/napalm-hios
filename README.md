@@ -1,6 +1,6 @@
 # NAPALM HiOS Driver
 
-NAPALM driver for Hirschmann HiOS industrial switches by Belden. Three protocols — MOPS, SNMP, and SSH — with full getter parity and vendor-specific methods for MRP, RSTP, factory lifecycle, and config profiles.
+NAPALM driver for Hirschmann HiOS industrial switches by Belden. Four protocols — MOPS, SNMP, SSH, and Offline — with full getter parity and vendor-specific methods for MRP, RSTP, factory lifecycle, and config profiles.
 
 ## Features
 
@@ -20,10 +20,11 @@ NAPALM driver for Hirschmann HiOS industrial switches by Belden. Three protocols
 - **sFlow** — receiver configuration + per-port flow sampling and counter polling (RFC 3176)
 - **Storm Control** — per-port broadcast/multicast/unicast ingress rate limiting with pps/percent thresholds
 - **QoS** — per-port trust mode, queue scheduling (strict/weighted), shaping, global dot1p/DSCP→TC mapping, management priority
+- **Offline protocol** — read/write HiOS config export XML files through the same driver API. A config XML file IS a device: `driver(hostname='config.xml', optional_args={'protocol_preference': ['offline']})`. All config getters/setters work, `save_config()` writes back to disk
 - **Multi-interface setters** — pass a list of ports to `set_interface`, `set_rstp_port`, `set_auto_disable`, `reset_auto_disable`, `set_loop_protection`, `set_vlan_ingress`, `set_vlan_egress` for batched operations
 - **MOPS atomic staging** — `start_staging()` → multiple setter calls → `commit_staging()` batches all mutations into one atomic POST (e.g. change PVID + egress together so a port never loses comms)
 - **Extended LLDP** — 802.1/802.3 org-specific TLVs, multiple management addresses, autoneg, VLAN membership
-- 493 unit tests and live device validation on BRS50 and GRS1042
+- 510 unit tests and live device validation on BRS50 and GRS1042
 
 ## Installation
 
@@ -92,8 +93,9 @@ Default order: MOPS → SNMP → SSH. Override with `protocol_preference` in `op
 | **MOPS** | HTTPS 443 | HTTP Basic | Yes (single POST) | `requests` |
 | **SNMP** | UDP 161 | SNMPv3 authPriv (MD5/DES) | No | `pysnmp` |
 | **SSH** | TCP 22 | Password | No | `netmiko` |
+| **Offline** | XML file | None | N/A (file) | None |
 
-MOPS is the default and preferred protocol. SSH lazy-connects on demand for SSH-only methods. See [docs/protocols.md](docs/protocols.md) for configuration, known cross-protocol differences, and the full method availability matrix.
+MOPS is the default and preferred protocol. SSH lazy-connects on demand for SSH-only methods. Offline reads/writes HiOS config export XML files — all config getters/setters work, online-only methods return empty. See [docs/protocols.md](docs/protocols.md) for configuration, known cross-protocol differences, and the full method availability matrix.
 
 ## Testing
 

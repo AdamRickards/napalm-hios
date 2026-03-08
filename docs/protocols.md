@@ -1,12 +1,13 @@
 # Protocol Support
 
-The driver supports three protocols, selected via `protocol_preference` in `optional_args`. Default order: MOPS → SNMP → SSH.
+The driver supports four protocols, selected via `protocol_preference` in `optional_args`. Default order: MOPS → SNMP → SSH.
 
 | Protocol | Transport | Auth | Bulk Read | Atomic Write | Dependencies |
 |----------|-----------|------|-----------|--------------|-------------|
 | **MOPS** | HTTPS POST | HTTP Basic | One request = entire table | Yes (one POST) | `requests` |
 | **SNMP** | UDP 161 | SNMPv3 authPriv (MD5/DES) | GETBULK walk | No (one SET per OID) | `pysnmp` |
 | **SSH** | TCP 22 | Password | CLI parsing | No (one command at a time) | `netmiko` |
+| **Offline** | XML file | None | In-memory | N/A (file) | None |
 
 MOPS is the default and preferred protocol — it uses the same internal mechanism as the HiOS web UI, supports atomic multi-table writes in a single POST, and requires only HTTP Basic auth (no USM key derivation). SSH is lazy-connected on demand when SSH-only methods are called (`get_config`, `ping`, `cli`, `commit_config` in SSH mode).
 
@@ -46,6 +47,32 @@ device = driver(hostname='192.168.1.4', username='admin', password='private',
 device = driver(hostname='192.168.1.4', username='admin', password='private',
                 optional_args={'protocol_preference': ['ssh']})
 ```
+
+## Offline Configuration
+
+Offline mode reads and writes HiOS config export XML files. The hostname is a file path. No network connection required.
+
+```python
+# Load a config export
+device = driver(hostname='config.xml', username='', password='',
+                optional_args={'protocol_preference': ['offline']})
+device.open()                              # parse XML into memory
+device.get_vlans()                         # read from parsed data
+device.set_qos('1/1', default_priority=5)  # modify in-memory
+device.save_config()                       # write XML back to disk
+device.close()
+
+# Build mode: file doesn't exist → starts with empty config
+device = driver(hostname='new-config.xml', username='', password='',
+                optional_args={'protocol_preference': ['offline']})
+device.open()
+device.create_vlan(100, name='PRODUCTION')
+device.save_config()
+```
+
+Config XML → MOPS format translation is handled automatically at parse time (4 `convert=` types: ascii, portlist, ifname, scrambled). All inherited MOPSHIOS getters/setters work unchanged.
+
+Online-only methods return empty results: LLDP → `{}`, MAC table → `[]`, ARP → `[]`, optics → `{}`, counters → `{}`, NTP stats → `[]`. Methods requiring network access (`onboard`, `clear_config`, `clear_factory`) raise `NotImplementedError`.
 
 ---
 
@@ -89,83 +116,83 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 
 ## Getter Availability by Protocol
 
-| Method | MOPS | SSH | SNMP | Notes |
-|--------|------|-----|------|-------|
-| `get_facts` | Yes | Yes | Yes | |
-| `get_interfaces` | Yes | Yes | Yes | |
-| `get_interfaces_ip` | Yes | Yes | Yes | |
-| `get_interfaces_counters` | Yes | Yes | Yes | |
-| `get_lldp_neighbors` | Yes | Yes | Yes | |
-| `get_lldp_neighbors_detail` | Yes | Yes | Yes | |
-| `get_lldp_neighbors_detail_extended` | Yes | Yes | Yes | Vendor; SNMP adds 802.1/802.3 |
-| `get_mac_address_table` | Yes | Yes | Yes | |
-| `get_arp_table` | Yes | Yes | Yes | |
-| `get_vlans` | Yes | Yes | Yes | |
-| `get_snmp_information` | Yes | Yes | Yes | |
-| `get_environment` | Yes | Yes | Yes | |
-| `get_optics` | Yes | Yes | Yes | |
-| `get_users` | Yes | Yes | Yes | |
-| `get_ntp_servers` | Yes | Yes | Yes | |
-| `get_ntp_stats` | Yes | Yes | Yes | |
-| `get_mrp` | Yes | Yes | Yes | Vendor |
-| `get_hidiscovery` | Yes | Yes | Yes | Vendor |
-| `get_config_status` | Yes | Yes | Yes | Vendor |
-| `save_config` | Yes | Yes | Yes | Vendor |
-| `clear_config` | Yes | Yes | Yes | Vendor write (warm restart) |
-| `clear_factory` | Yes | Yes | Yes | Vendor write (full reboot) |
-| `get_config` | No | Yes | No | SSH-only (lazy-connects) |
-| `ping` | No | Yes | No | SSH-only (lazy-connects) |
-| `cli` | No | Yes | No | SSH-only (lazy-connects) |
-| `load_merge_candidate` | Yes | Yes | Yes | MOPS: staging; SSH: in-memory |
-| `compare_config` | Yes | Yes | Yes | |
-| `commit_config` | Yes | Yes | Yes | MOPS: atomic POST; SSH: CLI |
-| `discard_config` | Yes | Yes | Yes | |
-| `get_profiles` | Yes | Yes | Yes | Vendor |
-| `get_config_fingerprint` | Yes | Yes | Yes | Vendor |
-| `activate_profile` | Yes | Yes | Yes | Vendor write (warm restart) |
-| `delete_profile` | Yes | Yes | Yes | Vendor write |
-| `set_interface` | Yes | Yes | Yes | Vendor write |
-| `set_mrp` / `delete_mrp` | Yes | Yes | Yes | Vendor write |
-| `get_mrp_sub_ring` | Yes | Yes | Yes | Vendor |
-| `set_mrp_sub_ring` / `delete_mrp_sub_ring` | Yes | Yes | Yes | Vendor write |
-| `set_hidiscovery` | Yes | Yes | Yes | Vendor write |
-| `get_rstp` | Yes | Yes | Yes | Vendor |
-| `get_rstp_port` | Yes | Yes | Yes | Vendor |
-| `set_rstp` | Yes | Yes | Yes | Vendor write |
-| `set_rstp_port` | Yes | Yes | Yes | Vendor write |
-| `get_auto_disable` | Yes | Yes | Yes | Vendor |
-| `set_auto_disable` | Yes | Yes | Yes | Vendor write |
-| `reset_auto_disable` | Yes | Yes | Yes | Vendor write |
-| `set_auto_disable_reason` | Yes | Yes | Yes | Vendor write |
-| `get_loop_protection` | Yes | Yes | Yes | Vendor |
-| `set_loop_protection` | Yes | Yes | Yes | Vendor write |
-| `get_vlan_ingress` | Yes | Yes | Yes | Vendor |
-| `get_vlan_egress` | Yes | Yes | Yes | Vendor |
-| `set_vlan_ingress` | Yes | Yes | Yes | Vendor write |
-| `set_vlan_egress` | Yes | Yes | Yes | Vendor write |
-| `create_vlan` | Yes | Yes | Yes | Vendor write |
-| `update_vlan` | Yes | Yes | Yes | Vendor write |
-| `delete_vlan` | Yes | Yes | Yes | Vendor write |
-| `get_sflow` | Yes | Yes | Yes | Vendor |
-| `set_sflow` | Yes | Yes | Yes | Vendor write |
-| `get_sflow_port` | Yes | Yes | Yes | Vendor |
-| `set_sflow_port` | Yes | Yes | Yes | Vendor write |
-| `get_storm_control` | Yes | Yes | Yes | Vendor |
-| `set_storm_control` | Yes | Yes | Yes | Vendor write |
-| `get_qos` | Yes | Yes | Yes | Vendor |
-| `set_qos` | Yes | Yes | Yes | Vendor write |
-| `get_qos_mapping` | Yes | Yes | Yes | Vendor |
-| `set_qos_mapping` | Yes | Yes | Yes | Vendor write |
-| `get_management_priority` | Yes | Yes | Yes | Vendor |
-| `set_management_priority` | Yes | Yes | Yes | Vendor write |
-| `get_management` | Yes | Yes | Yes | Vendor |
-| `set_management` | Yes | Yes | Yes | Vendor write |
-| `is_factory_default` | Yes | Yes | No (gated) | Vendor |
-| `onboard` | Yes | Yes | No (gated) | Vendor |
-| `start_staging` | Yes | No | No | MOPS-only; SNMP/SSH raise NotImplementedError |
-| `commit_staging` | Yes | No | No | MOPS-only |
-| `discard_staging` | Yes | No | No | MOPS-only |
-| `get_staged_mutations` | Yes | No | No | MOPS-only |
+| Method | MOPS | SSH | SNMP | Offline | Notes |
+|--------|------|-----|------|---------|-------|
+| `get_facts` | Yes | Yes | Yes | Yes | Offline: model/os_version unknown (runtime) |
+| `get_interfaces` | Yes | Yes | Yes | Yes | Offline: is_up/mac_address/speed unknown (runtime) |
+| `get_interfaces_ip` | Yes | Yes | Yes | Yes | |
+| `get_interfaces_counters` | Yes | Yes | Yes | Empty | Runtime state |
+| `get_lldp_neighbors` | Yes | Yes | Yes | Empty | Runtime state |
+| `get_lldp_neighbors_detail` | Yes | Yes | Yes | Empty | Runtime state |
+| `get_lldp_neighbors_detail_extended` | Yes | Yes | Yes | Empty | Vendor; SNMP adds 802.1/802.3 |
+| `get_mac_address_table` | Yes | Yes | Yes | Empty | Runtime state |
+| `get_arp_table` | Yes | Yes | Yes | Empty | Runtime state |
+| `get_vlans` | Yes | Yes | Yes | Yes | |
+| `get_snmp_information` | Yes | Yes | Yes | Yes | |
+| `get_environment` | Yes | Yes | Yes | Yes | Offline: temperature=0 (runtime) |
+| `get_optics` | Yes | Yes | Yes | Empty | Runtime state |
+| `get_users` | Yes | Yes | Yes | Yes | |
+| `get_ntp_servers` | Yes | Yes | Yes | Yes | |
+| `get_ntp_stats` | Yes | Yes | Yes | Empty | Runtime state |
+| `get_mrp` | Yes | Yes | Yes | Yes | Offline: ring state/port state unknown (runtime) |
+| `get_hidiscovery` | Yes | Yes | Yes | Yes | |
+| `get_config_status` | Yes | Yes | Yes | Yes | Vendor |
+| `save_config` | Yes | Yes | Yes | Yes | Offline: writes XML to disk |
+| `clear_config` | Yes | Yes | Yes | No | Raises NotImplementedError |
+| `clear_factory` | Yes | Yes | Yes | No | Raises NotImplementedError |
+| `get_config` | No | Yes | No | No | SSH-only (lazy-connects) |
+| `ping` | No | Yes | No | No | SSH-only (lazy-connects) |
+| `cli` | No | Yes | No | No | SSH-only (lazy-connects) |
+| `load_merge_candidate` | Yes | Yes | Yes | Yes | MOPS: staging; SSH: in-memory |
+| `compare_config` | Yes | Yes | Yes | Yes | |
+| `commit_config` | Yes | Yes | Yes | Yes | MOPS: atomic POST; SSH: CLI |
+| `discard_config` | Yes | Yes | Yes | Yes | |
+| `get_profiles` | Yes | Yes | Yes | Yes | Vendor |
+| `get_config_fingerprint` | Yes | Yes | Yes | Yes | Vendor |
+| `activate_profile` | Yes | Yes | Yes | No | Vendor write (warm restart) |
+| `delete_profile` | Yes | Yes | Yes | No | Vendor write |
+| `set_interface` | Yes | Yes | Yes | Yes | Vendor write |
+| `set_mrp` / `delete_mrp` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_mrp_sub_ring` | Yes | Yes | Yes | Yes | Vendor |
+| `set_mrp_sub_ring` / `delete_mrp_sub_ring` | Yes | Yes | Yes | Yes | Vendor write |
+| `set_hidiscovery` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_rstp` | Yes | Yes | Yes | Yes | Vendor |
+| `get_rstp_port` | Yes | Yes | Yes | Yes | Vendor |
+| `set_rstp` | Yes | Yes | Yes | Yes | Vendor write |
+| `set_rstp_port` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_auto_disable` | Yes | Yes | Yes | Yes | Vendor |
+| `set_auto_disable` | Yes | Yes | Yes | Yes | Vendor write |
+| `reset_auto_disable` | Yes | Yes | Yes | Yes | Vendor write |
+| `set_auto_disable_reason` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_loop_protection` | Yes | Yes | Yes | Yes | Vendor |
+| `set_loop_protection` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_vlan_ingress` | Yes | Yes | Yes | Yes | Vendor |
+| `get_vlan_egress` | Yes | Yes | Yes | Yes | Vendor |
+| `set_vlan_ingress` | Yes | Yes | Yes | Yes | Vendor write |
+| `set_vlan_egress` | Yes | Yes | Yes | Yes | Vendor write |
+| `create_vlan` | Yes | Yes | Yes | Yes | Vendor write |
+| `update_vlan` | Yes | Yes | Yes | Yes | Vendor write |
+| `delete_vlan` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_sflow` | Yes | Yes | Yes | Yes | Vendor |
+| `set_sflow` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_sflow_port` | Yes | Yes | Yes | Yes | Vendor |
+| `set_sflow_port` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_storm_control` | Yes | Yes | Yes | Yes | Vendor |
+| `set_storm_control` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_qos` | Yes | Yes | Yes | Yes | Vendor |
+| `set_qos` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_qos_mapping` | Yes | Yes | Yes | Yes | Vendor |
+| `set_qos_mapping` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_management_priority` | Yes | Yes | Yes | Yes | Vendor |
+| `set_management_priority` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_management` | Yes | Yes | Yes | Yes | Vendor |
+| `set_management` | Yes | Yes | Yes | Yes | Vendor write |
+| `is_factory_default` | Yes | Yes | No (gated) | No | Vendor |
+| `onboard` | Yes | Yes | No (gated) | No | Vendor |
+| `start_staging` | Yes | No | No | Yes | MOPS + Offline only |
+| `commit_staging` | Yes | No | No | Yes | MOPS + Offline only |
+| `discard_staging` | Yes | No | No | Yes | MOPS + Offline only |
+| `get_staged_mutations` | Yes | No | No | Yes | MOPS + Offline only |
 
 ---
 

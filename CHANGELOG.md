@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.14.0
+
+### Offline Protocol Backend
+
+Fourth protocol backend — `offline` — reads and writes HiOS config export XML files through the same driver interface as MOPS/SNMP/SSH. A config XML file IS a device.
+
+```python
+device = driver(hostname='config.xml', optional_args={'protocol_preference': ['offline']})
+device.open()                              # parse XML into memory
+device.get_vlan_egress()                   # reads from parsed XML
+device.set_qos('1/1', default_priority=5)  # modifies in-memory XML
+device.save_config()                       # writes XML back to disk
+```
+
+- **`OfflineClient`** (`offline_client.py`) — config XML parser with MOPS-format translation layer. Same interface as `MOPSClient` (`get`, `get_multi`, `set`, `set_multi`, `set_indexed`, `save_config`). Four `convert=` types translated at parse time:
+  - `convert="ascii"` (296 occurrences) — plaintext ↔ hex-encoded bytes
+  - `convert="portlist"` (30 occurrences) — comma-separated port names ↔ hex bitmap
+  - `convert="ifname"` (981 occurrences) — human-readable port name ↔ integer ifIndex
+  - `convert="scrambled"` (15 occurrences) — base64 passwords, pass-through
+- **`OfflineHIOS`** (`offline_hios.py`) — subclasses MOPSHIOS, inherits all 86+ getters/setters. Overrides only `open`/`close`/`is_alive`/`save_config` and online-only methods
+- **All config getters work** — VLANs, QoS, MRP, RSTP, storm control, sFlow, management, HiDiscovery, NTP, SNMP, auto-disable, loop protection, interfaces, facts
+- **All config setters work** — create/update/delete VLANs, set QoS/MRP/RSTP/sFlow/storm control, staging (`start_staging` → `commit_staging`)
+- **Online-only getters return empty** — LLDP → `{}`, MAC table → `[]`, ARP → `[]`, optics → `{}`, counters → `{}`, NTP stats → `[]`
+- **`save_config()`** — reverse-translates MOPS format back to config XML encoding, writes with valid footer checksum
+- **Save/reload roundtrip verified** — load config, modify, save, reload → identical getter output
+- **Same-state offline vs live MOPS verified** — exact match on VLANs, egress, ingress, QoS, management, NTP, SNMP info, loop protection
+- Tested against 7 config XML exports (BRS50 × 6, GRS1042 × 1), 18 getters per config, zero failures
+
 ## 1.13.1
 
 ### Fix SNMP `set_qos(default_priority=)` and dispatcher passthrough

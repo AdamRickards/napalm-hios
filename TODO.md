@@ -71,10 +71,8 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 
 - [ ] TSN getters/setters — gate control lists, stream filters, PTP config, traffic scheduling. MOPS will have the OIDs (everything in HiOS backend is SNMP). Hard part is designing a sane abstraction over the MIB tables. **Unlocks**: NILS TSN enricher, deterministic scheduling config
 
-## Future — Config import/export + firmware update
+## Future — firmware update
 
-- [ ] Config export: download running config as XML/profile via MOPS HTTPS endpoints
-- [ ] Config import: upload profile/XML to device, activate as running config
 - [ ] Firmware update: upload firmware image, trigger install + reboot
 
 ## SSH CLI State Machine

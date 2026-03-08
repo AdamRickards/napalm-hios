@@ -260,13 +260,15 @@ Note: This method is only available when using the SSH protocol. When the primar
 
 ## Protocol Information
 
-The NAPALM HiOS driver supports three protocols for device communication:
+The NAPALM HiOS driver supports four protocols for device communication:
 
 1. **MOPS (MIB Operations over HTTPS)**: Default and preferred protocol. Uses the same internal mechanism as the HiOS web UI. Supports atomic multi-table writes in a single POST, HTTP Basic auth, and returns entire tables in one request. Port 443.
 
 2. **SNMPv3**: authPriv (MD5/DES) matching HiOS factory defaults. Lower overhead than SSH, no session state, doesn't consume SSH session slots. Short passwords (< 8 chars, including the default `private`) are supported via pre-computed master keys. Port 161.
 
 3. **SSH**: CLI parsing via Netmiko. Required for `get_config`, `ping`, and `cli` methods. Lazy-connects on demand when the primary protocol is MOPS or SNMP. Port 22.
+
+4. **Offline**: Reads and writes HiOS config export XML files. No network connection required. All config getters/setters work against in-memory parsed XML. Online-only methods (LLDP, MAC table, ARP, optics, counters) return empty. `save_config()` writes the modified XML back to disk.
 
 You can specify the protocol preference in the `optional_args` when initializing the driver. The driver tries each protocol in order and uses the first one that connects successfully.
 
@@ -279,6 +281,10 @@ device = driver(hostname, user, pw, optional_args={'protocol_preference': ['snmp
 
 # SSH-only (needed for get_config, ping, cli)
 device = driver(hostname, user, pw, optional_args={'protocol_preference': ['ssh']})
+
+# Offline (config XML file as device)
+device = driver(hostname='config.xml', username='', password='',
+                optional_args={'protocol_preference': ['offline']})
 ```
 
 For detailed protocol configuration, known cross-protocol differences, and the full method availability matrix, see [protocols.md](protocols.md).
