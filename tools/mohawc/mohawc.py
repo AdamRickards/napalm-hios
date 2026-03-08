@@ -1844,9 +1844,64 @@ def interactive_mode(args, config, driver):
                 state[ip] = {'error': str(e)}
         return state
 
+    # Suppress noisy console logging — interactive has its own output
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, logging.StreamHandler) and not isinstance(handler, logging.FileHandler):
+            handler.setLevel(logging.CRITICAL)
+
     connections = {}
 
     try:
+        # ── STEP 1: DEVICE SETUP ──
+        step('STEP 1 ─── DEVICES')
+
+        devices = config['devices']
+        have_devices = bool(devices)
+
+        if have_devices:
+            src = 'CLI (-d)' if args.d else f'script.cfg'
+            print(f'  Found {CY}{len(devices)}{RS} device(s) from {src}:')
+            for ip in devices:
+                print(f'    {CY}{display_name(ip)}{RS}')
+            print()
+            if not yesno('Use these?', default=True):
+                have_devices = False
+
+        if not have_devices:
+            raw = ask('Enter IPs (comma-separated, range, or .xml paths)')
+            if not raw:
+                print(f'\n  {YL}No devices. Exiting.{RS}\n')
+                return
+            if any(p.strip().endswith('.xml') for p in raw.split(',')):
+                devices = [p.strip() for p in raw.split(',') if p.strip()]
+            else:
+                parsed = []
+                for part in raw.split(','):
+                    part = part.strip()
+                    if is_valid_ipv4(part):
+                        parsed.append(part)
+                devices = parsed
+            if not devices:
+                print(f'\n  {YL}No valid devices. Exiting.{RS}\n')
+                return
+            config['devices'] = devices
+
+        is_offline = any(d.endswith('.xml') for d in devices)
+
+        # ── STEP 2: CREDENTIALS & PROTOCOL ──
+        if is_offline:
+            config['protocol'] = 'offline'
+            print(f'\n  {DM}Offline mode — no credentials needed.{RS}')
+        else:
+            step('STEP 2 ─── CREDENTIALS')
+            config['username'] = ask('Username', config.get('username', 'admin'))
+            config['password'] = ask('Password', config.get('password', 'private'))
+            config['protocol'] = pick('Protocol', [
+                ('MOPS — HTTPS, atomic writes (recommended)', 'mops'),
+                ('SSH — CLI parsing',                         'ssh'),
+                ('SNMP — SNMPv3, no session state',           'snmp'),
+            ])
+
         # ── CONNECT ──
         cls()
         banner()
