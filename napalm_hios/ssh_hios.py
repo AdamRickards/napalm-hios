@@ -635,6 +635,77 @@ class SSHHIOS:
 
         return self.get_config_status()
 
+    def get_config_remote(self):
+        """Return remote config backup settings via SSH CLI.
+
+        Parses ``show config remote-backup`` output. Server username
+        is not available via CLI — returned as empty string.
+        """
+        output = self.cli('show config remote-backup')
+        data = parse_dot_keys(output.get('show config remote-backup', ''))
+
+        enabled_str = data.get('Remote backup', '').lower()
+        destination = data.get('Destination URL', '')
+        username = data.get('User name', '')
+
+        return {
+            'server_username': '',  # not available via CLI
+            'auto_backup': {
+                'enabled': enabled_str in ('enabled', 'enable', 'on'),
+                'destination': destination,
+                'username': username,
+            },
+        }
+
+    def set_config_remote(self, action=None, server=None, profile=None,
+                          source='nvm', destination='nvm',
+                          auto_backup=None, auto_backup_url=None,
+                          auto_backup_username=None, auto_backup_password=None,
+                          username=None, password=None):
+        """Configure remote config transfer and/or auto-backup via SSH CLI.
+
+        Server credentials (username/password) are not settable via CLI
+        for file transfers — use MOPS or SNMP for those.
+        """
+        # Auto-backup config
+        if (auto_backup is not None or auto_backup_url is not None
+                or auto_backup_username is not None
+                or auto_backup_password is not None):
+            self._config_mode()
+            try:
+                if auto_backup_url is not None:
+                    self.cli(f'config remote-backup destination {auto_backup_url}')
+                if auto_backup_username is not None:
+                    self.cli(f'config remote-backup username {auto_backup_username}')
+                if auto_backup_password is not None:
+                    self.cli(f'config remote-backup password {auto_backup_password}')
+                if auto_backup is True:
+                    self.cli('config remote-backup operation')
+                elif auto_backup is False:
+                    self.cli('no config remote-backup operation')
+            finally:
+                self._exit_config_mode()
+
+        # One-shot transfer
+        if action and server:
+            self._enable()
+            try:
+                if action == 'pull':
+                    cmd = f'copy config remote {server} {destination}'
+                    if profile:
+                        cmd += f' profile {profile}'
+                    self.cli(cmd)
+                elif action == 'push':
+                    cmd = f'copy config running-config remote {server}'
+                    self.cli(cmd)
+                else:
+                    raise ValueError(
+                        f"Invalid action '{action}': use 'pull' or 'push'")
+            finally:
+                self._disable()
+
+        return self.get_config_remote()
+
     def get_interfaces_ip(self):
         """Get IP addresses configured on interfaces.
 
@@ -1310,6 +1381,28 @@ class SSHHIOS:
 
         return snmp_info
 
+    def set_snmp_information(self, hostname=None, contact=None, location=None):
+        """Set sysName, sysContact, and/or sysLocation via SSH CLI.
+
+        Args:
+            hostname: system name, None to skip
+            contact: system contact, None to skip
+            location: system location, None to skip
+        """
+        if hostname is None and contact is None and location is None:
+            return None
+        self._config_mode()
+        try:
+            if hostname is not None:
+                self.cli(f'system name {hostname}')
+            if contact is not None:
+                self.cli(f'system contact {contact}')
+            if location is not None:
+                self.cli(f'system location {location}')
+        finally:
+            self._exit_config_mode()
+        return self.get_snmp_information()
+
     def get_hidiscovery(self):
         """Get HiDiscovery protocol status.
 
@@ -1373,6 +1466,18 @@ class SSHHIOS:
         self.cli('exit')
         self._disable()
         self._in_config_mode = False
+
+    def _enter_interface(self, iface):
+        """Enter interface config context with validation.
+
+        Raises ValueError if the interface doesn't exist.
+        Must be in config mode already.  Call self.cli('exit')
+        when done with the interface.
+        """
+        output = self.cli(f'interface {iface}')
+        resp = output.get(f'interface {iface}', '')
+        if 'Error' in resp or 'Invalid' in resp:
+            raise ValueError(f"Unknown interface '{iface}'")
 
     def get_mrp(self):
         """Get MRP (Media Redundancy Protocol) ring status.
@@ -1461,7 +1566,8 @@ class SSHHIOS:
         return result
 
     def set_mrp(self, operation='enable', mode='client', port_primary=None,
-                port_secondary=None, vlan=None, recovery_delay=None):
+                port_secondary=None, vlan=None, recovery_delay=None,
+                advanced_mode=None):
         """Configure MRP ring on the default domain.
 
         Args:
@@ -1471,6 +1577,7 @@ class SSHHIOS:
             port_secondary: secondary ring port (e.g. '1/4')
             vlan: VLAN ID for MRP domain (0-4042)
             recovery_delay: '200ms', '500ms', '30ms', or '10ms'
+            advanced_mode: True/False — react on link change (faster failover)
 
         Creates the default domain if none exists.
         """
@@ -1499,6 +1606,9 @@ class SSHHIOS:
                     self.cli(f'mrp domain modify vlan {vlan}')
                 if recovery_delay:
                     self.cli(f'mrp domain modify recovery-delay {recovery_delay}')
+                if advanced_mode is not None:
+                    val = 'enable' if advanced_mode else 'disable'
+                    self.cli(f'mrp domain modify advanced-mode {val}')
                 self.cli('mrp domain modify operation enable')
                 self.cli('mrp operation')
         finally:
@@ -1734,10 +1844,7 @@ class SSHHIOS:
         self._config_mode()
         try:
             for iface in interfaces:
-                output = self.cli(f'interface {iface}')
-                resp = output.get(f'interface {iface}', '')
-                if 'Error' in resp or 'Invalid' in resp:
-                    raise ValueError(f"Unknown interface '{iface}'")
+                self._enter_interface(iface)
                 if enabled is not None:
                     self.cli('no shutdown' if enabled else 'shutdown')
                 if description is not None:
@@ -2103,10 +2210,7 @@ class SSHHIOS:
         self._config_mode()
         try:
             for iface in interfaces:
-                output = self.cli(f'interface {iface}')
-                resp = output.get(f'interface {iface}', '')
-                if 'Error' in resp or 'Invalid' in resp:
-                    raise ValueError(f"Unknown interface '{iface}'")
+                self._enter_interface(iface)
                 self.cli(f'auto-disable timer {timer}')
                 self.cli('exit')
         finally:
@@ -2118,10 +2222,7 @@ class SSHHIOS:
         self._config_mode()
         try:
             for iface in interfaces:
-                output = self.cli(f'interface {iface}')
-                resp = output.get(f'interface {iface}', '')
-                if 'Error' in resp or 'Invalid' in resp:
-                    raise ValueError(f"Unknown interface '{iface}'")
+                self._enter_interface(iface)
                 self.cli('auto-disable reset')
                 self.cli('exit')
         finally:
@@ -2228,10 +2329,7 @@ class SSHHIOS:
                 if action is not None and action not in ('trap', 'auto-disable', 'all'):
                     raise ValueError(f"action must be 'trap', 'auto-disable', or 'all', got '{action}'")
                 for iface in interfaces:
-                    output = self.cli(f'interface {iface}')
-                    resp = output.get(f'interface {iface}', '')
-                    if 'Error' in resp or 'Invalid' in resp:
-                        raise ValueError(f"Unknown interface '{iface}'")
+                    self._enter_interface(iface)
                     if enabled is not None:
                         if enabled:
                             self.cli('loop-protection operation')
@@ -2330,10 +2428,7 @@ class SSHHIOS:
         self._config_mode()
         try:
             for iface in interfaces:
-                output = self.cli(f'interface {iface}')
-                resp = output.get(f'interface {iface}', '')
-                if 'Error' in resp or 'Invalid' in resp:
-                    raise ValueError(f"Unknown interface '{iface}'")
+                self._enter_interface(iface)
                 if unit is not None:
                     self.cli(f'storm-control ingress unit {unit}')
                 if broadcast_enabled is not None:
@@ -2493,7 +2588,7 @@ class SSHHIOS:
         self._config_mode()
         try:
             for iface in interfaces:
-                self.cli(f'interface {iface}')
+                self._enter_interface(iface)
                 if sample_rate is not None:
                     if receiver == 0:
                         self.cli('sflow sampler receiver 0')
@@ -2634,20 +2729,14 @@ class SSHHIOS:
             # Trust mode is per-interface
             if trust_mode is not None:
                 for iface in interfaces:
-                    output = self.cli(f'interface {iface}')
-                    resp = output.get(f'interface {iface}', '')
-                    if 'Error' in resp or 'Invalid' in resp:
-                        raise ValueError(f"Unknown interface '{iface}'")
+                    self._enter_interface(iface)
                     self.cli(f'classofservice trust {trust_mode}')
                     self.cli('exit')
 
             # Default priority is per-interface
             if default_priority is not None:
                 for iface in interfaces:
-                    output = self.cli(f'interface {iface}')
-                    resp = output.get(f'interface {iface}', '')
-                    if 'Error' in resp or 'Invalid' in resp:
-                        raise ValueError(f"Unknown interface '{iface}'")
+                    self._enter_interface(iface)
                     self.cli(f'vlan priority {int(default_priority)}')
                     self.cli('exit')
 
@@ -3036,10 +3125,7 @@ class SSHHIOS:
         self._config_mode()
         try:
             for iface in interfaces:
-                output = self.cli(f'interface {iface}')
-                resp = output.get(f'interface {iface}', '')
-                if 'Error' in resp or 'Invalid' in resp:
-                    raise ValueError(f"Unknown interface '{iface}'")
+                self._enter_interface(iface)
                 if enabled is not None:
                     if enabled:
                         self.cli('spanning-tree mode')
@@ -3175,10 +3261,7 @@ class SSHHIOS:
         self._config_mode()
         try:
             for p in ports:
-                output = self.cli(f'interface {p}')
-                resp = output.get(f'interface {p}', '')
-                if 'Error' in resp or 'Invalid' in resp:
-                    raise ValueError(f"Unknown interface '{p}'")
+                self._enter_interface(p)
                 if pvid is not None:
                     self.cli(f'vlan pvid {pvid}')
                 if frame_types is not None:
@@ -3207,10 +3290,7 @@ class SSHHIOS:
         self._config_mode()
         try:
             for p in ports:
-                output = self.cli(f'interface {p}')
-                resp = output.get(f'interface {p}', '')
-                if 'Error' in resp or 'Invalid' in resp:
-                    raise ValueError(f"Unknown interface '{p}'")
+                self._enter_interface(p)
                 if mode == 'tagged':
                     self.cli(f'vlan participation include {vlan_id}')
                     self.cli(f'vlan tagging {vlan_id}')

@@ -84,9 +84,13 @@ device.close()
 - `get_snmp_information()`
 - `get_vlans()`
 
+### Config download/upload (MOPS + SSH)
+
+- `get_config()` — MOPS: HTTPS config XML download; SSH: CLI scraping
+- `load_config()` — MOPS: HTTPS config XML upload to a profile
+
 ### SSH-only standard methods
 
-- `get_config()` — CLI scraping
 - `ping()` — device-originated ping
 - `cli()` — raw command execution
 
@@ -119,6 +123,7 @@ device.close()
 - `get_config_status()` — check if running config is saved to NVM
 - `get_profiles()` — list NVM/ENVM config profiles
 - `get_config_fingerprint()` — SHA1 fingerprint of active config
+- `get_config_remote()` — remote config backup settings and auto-backup state
 - `is_factory_default()` — detect factory-fresh HiOS 10.3+ devices
 
 ### Vendor-specific write methods
@@ -146,6 +151,8 @@ device.close()
 - `create_vlan()` — create VLAN in database
 - `update_vlan()` — rename a VLAN
 - `delete_vlan()` — delete VLAN from database
+- `set_snmp_information()` — set sysName, sysContact, sysLocation
+- `set_config_remote()` — TFTP push/pull and auto-backup configuration
 - `save_config()` — save running config to NVM
 - `clear_config()` — clear running config (warm restart)
 - `clear_factory()` — full factory reset (reboot)

@@ -2863,5 +2863,265 @@ class TestManagementMOPS(unittest.TestCase):
         self.assertEqual(result['ip_address'], '192.168.1.4')
 
 
+class TestConfigMOPS(unittest.TestCase):
+    """Test MOPS get_config, load_config, get_config_remote, set_config_remote."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    # --- set_snmp_information ---
+
+    def test_set_snmp_information_hostname(self):
+        """Set only hostname."""
+        self.backend.client.get.return_value = [
+            {"sysContact": "admin", "sysLocation": "Lab",
+             "sysName": "TEST-HOST"}]
+        self.backend.set_snmp_information(hostname='TEST-HOST')
+        call_args = self.backend.client.set.call_args
+        self.assertEqual(call_args[0][0], "SNMPv2-MIB")
+        self.assertEqual(call_args[0][1], "system")
+        values = call_args[0][2]
+        self.assertIn("sysName", values)
+        self.assertNotIn("sysContact", values)
+        self.assertNotIn("sysLocation", values)
+
+    def test_set_snmp_information_all(self):
+        """Set hostname, contact, and location."""
+        self.backend.client.get.return_value = [
+            {"sysContact": "test", "sysLocation": "loc",
+             "sysName": "host"}]
+        self.backend.set_snmp_information(
+            hostname='H', contact='C', location='L')
+        values = self.backend.client.set.call_args[0][2]
+        self.assertIn("sysName", values)
+        self.assertIn("sysContact", values)
+        self.assertIn("sysLocation", values)
+
+    def test_set_snmp_information_no_args(self):
+        """No args returns None without calling set."""
+        result = self.backend.set_snmp_information()
+        self.assertIsNone(result)
+        self.backend.client.set.assert_not_called()
+
+    def test_set_snmp_information_hex_encodes(self):
+        """Values should be hex-encoded for MOPS."""
+        self.backend.client.get.return_value = [
+            {"sysContact": "", "sysLocation": "", "sysName": ""}]
+        self.backend.set_snmp_information(hostname='Lab')
+        values = self.backend.client.set.call_args[0][2]
+        self.assertEqual(values["sysName"], "4c 61 62")
+
+    # --- get_config (HTTPS download) ---
+
+    def test_get_config_default(self):
+        """Downloads active profile config via HTTPS."""
+        self.backend.get_profiles = Mock(return_value=[
+            {'name': 'CLAMPS', 'active': True, 'index': 1}])
+        self.backend.client.download_config.return_value = '<?xml version="1.0"?><Config/>'
+        result = self.backend.get_config()
+        self.assertEqual(result['running'], '<?xml version="1.0"?><Config/>')
+        self.assertEqual(result['startup'], '')
+        self.assertEqual(result['candidate'], '')
+        self.backend.client.download_config.assert_called_once_with(
+            'CLAMPS', source='nvm')
+
+    def test_get_config_explicit_profile(self):
+        """Explicit profile bypasses active profile lookup."""
+        self.backend.client.download_config.return_value = '<Config/>'
+        result = self.backend.get_config(profile='Test123')
+        self.backend.client.download_config.assert_called_once_with(
+            'Test123', source='nvm')
+        self.backend.get_profiles = Mock()
+        self.backend.get_profiles.assert_not_called()
+
+    def test_get_config_no_active_profile(self):
+        """Raises ValueError if no active profile found."""
+        self.backend.get_profiles = Mock(return_value=[
+            {'name': 'old', 'active': False}])
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.get_config()
+        self.assertIn("No active profile", str(ctx.exception))
+
+    def test_get_config_envm(self):
+        """Source=envm passed through to download."""
+        self.backend.get_profiles = Mock(return_value=[
+            {'name': 'ACA', 'active': True}])
+        self.backend.client.download_config.return_value = '<Config/>'
+        self.backend.get_config(source='envm')
+        self.backend.client.download_config.assert_called_once_with(
+            'ACA', source='envm')
+
+    # --- load_config (HTTPS upload) ---
+
+    def test_load_config_default(self):
+        """Uploads to active profile by default."""
+        self.backend.get_profiles = Mock(return_value=[
+            {'name': 'CLAMPS', 'active': True}])
+        self.backend.client.upload_config.return_value = True
+        result = self.backend.load_config('<Config/>')
+        self.assertTrue(result)
+        self.backend.client.upload_config.assert_called_once_with(
+            '<Config/>', 'CLAMPS', destination='nvm')
+
+    def test_load_config_explicit_profile(self):
+        """Explicit profile bypasses lookup."""
+        self.backend.client.upload_config.return_value = True
+        self.backend.load_config('<Config/>', profile='Test123')
+        self.backend.client.upload_config.assert_called_once_with(
+            '<Config/>', 'Test123', destination='nvm')
+
+    def test_load_config_no_active_profile(self):
+        """Raises ValueError if no active profile."""
+        self.backend.get_profiles = Mock(return_value=[])
+        with self.assertRaises(ValueError):
+            self.backend.load_config('<Config/>')
+
+    # --- get_config_remote ---
+
+    def test_get_config_remote(self):
+        """Parse remote backup settings from MOPS."""
+        self.backend.client.get.side_effect = [
+            # First call: server access group
+            [{"hm2FMServerUserName": "61 64 6d 69 6e"}],  # "admin"
+            # Second call: remote save group
+            [{"hm2FMConfigRemoteSaveAdminStatus": "1",
+              "hm2FMConfigRemoteSaveDestination":
+                  "74 66 74 70 3a 2f 2f 31 30 2e 32 2e 31 2e 34 2f"
+                  " 74 65 73 74 2e 78 6d 6c",  # "tftp://10.2.1.4/test.xml"
+              "hm2FMConfigRemoteSaveUsername": "62 61 63 6b 75 70"}],  # "backup"
+        ]
+        result = self.backend.get_config_remote()
+        self.assertEqual(result['server_username'], 'admin')
+        self.assertTrue(result['auto_backup']['enabled'])
+        self.assertEqual(result['auto_backup']['destination'],
+                         'tftp://10.2.1.4/test.xml')
+        self.assertEqual(result['auto_backup']['username'], 'backup')
+
+    def test_get_config_remote_disabled(self):
+        """Auto-backup disabled, empty fields."""
+        self.backend.client.get.side_effect = [
+            [{"hm2FMServerUserName": ""}],
+            [{"hm2FMConfigRemoteSaveAdminStatus": "2",
+              "hm2FMConfigRemoteSaveDestination": "",
+              "hm2FMConfigRemoteSaveUsername": ""}],
+        ]
+        result = self.backend.get_config_remote()
+        self.assertEqual(result['server_username'], '')
+        self.assertFalse(result['auto_backup']['enabled'])
+        self.assertEqual(result['auto_backup']['destination'], '')
+
+    # --- set_config_remote ---
+
+    def test_set_config_remote_auto_backup_url(self):
+        """Set auto-backup destination URL."""
+        # After set, returns get_config_remote
+        self.backend.client.get.side_effect = [
+            [{"hm2FMServerUserName": ""}],
+            [{"hm2FMConfigRemoteSaveAdminStatus": "2",
+              "hm2FMConfigRemoteSaveDestination": "",
+              "hm2FMConfigRemoteSaveUsername": ""}],
+        ]
+        self.backend.set_config_remote(
+            auto_backup_url='tftp://10.2.1.4/test/%p-%d.xml')
+        # Verify the SET call
+        call_args = self.backend.client.set.call_args
+        self.assertEqual(call_args[0][0], "HM2-FILEMGMT-MIB")
+        self.assertEqual(call_args[0][1], "hm2FileMgmtConfigRemoteSaveGroup")
+        values = call_args[0][2]
+        self.assertIn("hm2FMConfigRemoteSaveDestination", values)
+
+    def test_set_config_remote_enable_backup(self):
+        """Enable auto-backup."""
+        self.backend.client.get.side_effect = [
+            [{"hm2FMServerUserName": ""}],
+            [{"hm2FMConfigRemoteSaveAdminStatus": "1",
+              "hm2FMConfigRemoteSaveDestination": "",
+              "hm2FMConfigRemoteSaveUsername": ""}],
+        ]
+        self.backend.set_config_remote(auto_backup=True)
+        call_args = self.backend.client.set.call_args
+        values = call_args[0][2]
+        self.assertEqual(values["hm2FMConfigRemoteSaveAdminStatus"], "1")
+
+    def test_set_config_remote_server_creds(self):
+        """Set server username/password."""
+        self.backend.client.get.side_effect = [
+            [{"hm2FMServerUserName": ""}],
+            [{"hm2FMConfigRemoteSaveAdminStatus": "2",
+              "hm2FMConfigRemoteSaveDestination": "",
+              "hm2FMConfigRemoteSaveUsername": ""}],
+        ]
+        self.backend.set_config_remote(username='admin', password='secret')
+        # First set call is for server credentials
+        first_call = self.backend.client.set.call_args_list[0]
+        self.assertEqual(first_call[0][0], "HM2-FILEMGMT-MIB")
+        self.assertEqual(first_call[0][1], "hm2FileMgmtServerAccessGroup")
+        values = first_call[0][2]
+        self.assertIn("hm2FMServerUserName", values)
+        self.assertIn("hm2FMServerPassword", values)
+
+    def test_set_config_remote_push(self):
+        """One-shot push triggers config_transfer."""
+        self.backend.get_profiles = Mock(return_value=[
+            {'name': 'CLAMPS', 'active': True}])
+        self.backend.client.config_transfer.return_value = {
+            'hm2FMActionStatus': '1', 'hm2FMActionResult': '1'}
+        result = self.backend.set_config_remote(
+            action='push', server='tftp://10.2.1.4/test.xml')
+        self.backend.client.config_transfer.assert_called_once_with(
+            action='push', server_url='tftp://10.2.1.4/test.xml',
+            source_type='2', dest_type='20',
+            source_data='CLAMPS', dest_data='tftp://10.2.1.4/test.xml')
+
+    def test_set_config_remote_pull(self):
+        """One-shot pull triggers config_transfer."""
+        self.backend.get_profiles = Mock(return_value=[
+            {'name': 'CLAMPS', 'active': True}])
+        self.backend.client.config_transfer.return_value = {
+            'hm2FMActionStatus': '1', 'hm2FMActionResult': '1'}
+        result = self.backend.set_config_remote(
+            action='pull', server='tftp://10.2.1.4/test.xml')
+        self.backend.client.config_transfer.assert_called_once_with(
+            action='pull', server_url='tftp://10.2.1.4/test.xml',
+            source_type='20', dest_type='2',
+            source_data='tftp://10.2.1.4/test.xml', dest_data='CLAMPS')
+
+    def test_set_config_remote_invalid_action(self):
+        """Invalid action raises ValueError."""
+        self.backend.get_profiles = Mock(return_value=[
+            {'name': 'X', 'active': True}])
+        with self.assertRaises(ValueError):
+            self.backend.set_config_remote(action='delete', server='x')
+
+    # --- set_mrp advanced_mode ---
+
+    def test_set_mrp_advanced_mode_enable(self):
+        """Set advanced_mode=True on existing domain."""
+        self.backend._build_ifindex_map = Mock(return_value={
+            "5": "1/5", "6": "1/6"})
+        self.backend.client.set_indexed.return_value = True
+
+        self.backend.set_mrp(advanced_mode=True)
+
+        calls = self.backend.client.set_indexed.call_args_list
+        # createAndWait, notInService, set params, activate
+        params = calls[2].kwargs['values']
+        self.assertEqual(params["hm2MrpMRMReactOnLinkChange"], "1")
+
+    def test_set_mrp_advanced_mode_disable(self):
+        """Set advanced_mode=False on existing domain."""
+        self.backend._build_ifindex_map = Mock(return_value={
+            "5": "1/5", "6": "1/6"})
+        self.backend.client.set_indexed.return_value = True
+
+        self.backend.set_mrp(advanced_mode=False)
+
+        calls = self.backend.client.set_indexed.call_args_list
+        params = calls[2].kwargs['values']
+        self.assertEqual(params["hm2MrpMRMReactOnLinkChange"], "2")
+
+
 if __name__ == '__main__':
     unittest.main()

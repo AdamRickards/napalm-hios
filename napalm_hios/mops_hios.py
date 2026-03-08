@@ -1828,6 +1828,77 @@ class MOPSHIOS:
             'location': sys_data.get("sysLocation", "").strip(),
         }
 
+    def set_snmp_information(self, hostname=None, contact=None, location=None):
+        """Set sysName, sysContact, and/or sysLocation via MOPS.
+
+        Args:
+            hostname: system name (sysName.0), None to skip
+            contact: system contact (sysContact.0), None to skip
+            location: system location (sysLocation.0), None to skip
+        """
+        values = {}
+        if hostname is not None:
+            values["sysName"] = encode_string(hostname)
+        if contact is not None:
+            values["sysContact"] = encode_string(contact)
+        if location is not None:
+            values["sysLocation"] = encode_string(location)
+        if not values:
+            return None
+        self._apply_set("SNMPv2-MIB", "system", values)
+        if self._staging:
+            return None
+        return self.get_snmp_information()
+
+    def get_config(self, retrieve='all', full=False, sanitized=False,
+                   format='text', profile=None, source='nvm'):
+        """Download config XML via HTTPS.
+
+        Args:
+            retrieve: ignored (MOPS always returns full running config)
+            full: ignored
+            sanitized: ignored
+            format: ignored (always XML)
+            profile: profile name (default = active profile)
+            source: 'nvm' or 'envm'
+
+        Returns:
+            NAPALM-standard dict::
+
+                {'running': '<xml>...', 'startup': '', 'candidate': ''}
+        """
+        if profile is None:
+            profiles = self.get_profiles(storage=source)
+            active = [p for p in profiles if p.get('active')]
+            if not active:
+                raise ValueError(f"No active profile found on {source}")
+            profile = active[0]['name']
+        xml = self.client.download_config(profile, source=source)
+        return {
+            'running': xml,
+            'startup': '',
+            'candidate': '',
+        }
+
+    def load_config(self, xml_data, profile=None, destination='nvm'):
+        """Upload config XML to a profile via HTTPS.
+
+        Args:
+            xml_data: config XML string
+            profile: target profile name (default = active profile)
+            destination: 'nvm' or 'envm'
+
+        Use activate_profile() after upload to apply.
+        """
+        if profile is None:
+            profiles = self.get_profiles(storage=destination)
+            active = [p for p in profiles if p.get('active')]
+            if not active:
+                raise ValueError(f"No active profile found on {destination}")
+            profile = active[0]['name']
+        return self.client.upload_config(xml_data, profile,
+                                         destination=destination)
+
     # ------------------------------------------------------------------
     # Vendor-specific getters
     # ------------------------------------------------------------------
@@ -1849,6 +1920,129 @@ class MOPSHIOS:
         """Save running config to NVM via MOPS."""
         self.client.save_config()
         return self.get_config_status()
+
+    def get_config_remote(self):
+        """Return remote config backup settings.
+
+        Returns::
+
+            {
+                'server_username': 'admin',
+                'auto_backup': {
+                    'enabled': True,
+                    'destination': 'tftp://192.168.4.3/%p/config-%d.xml',
+                    'username': 'backup_user',
+                }
+            }
+        """
+        server = self.client.get(
+            "HM2-FILEMGMT-MIB", "hm2FileMgmtServerAccessGroup",
+            ["hm2FMServerUserName"], decode_strings=False)
+        server_data = server[0] if server else {}
+
+        backup = self.client.get(
+            "HM2-FILEMGMT-MIB", "hm2FileMgmtConfigRemoteSaveGroup",
+            ["hm2FMConfigRemoteSaveAdminStatus",
+             "hm2FMConfigRemoteSaveDestination",
+             "hm2FMConfigRemoteSaveUsername"],
+            decode_strings=False)
+        backup_data = backup[0] if backup else {}
+
+        return {
+            'server_username': _decode_hex_string(
+                server_data.get("hm2FMServerUserName", "")),
+            'auto_backup': {
+                'enabled': _safe_int(backup_data.get(
+                    "hm2FMConfigRemoteSaveAdminStatus", "2")) == 1,
+                'destination': _decode_hex_string(
+                    backup_data.get("hm2FMConfigRemoteSaveDestination", "")),
+                'username': _decode_hex_string(
+                    backup_data.get("hm2FMConfigRemoteSaveUsername", "")),
+            },
+        }
+
+    def set_config_remote(self, action=None, server=None, profile=None,
+                          source='nvm', destination='nvm',
+                          auto_backup=None, auto_backup_url=None,
+                          auto_backup_username=None, auto_backup_password=None,
+                          username=None, password=None):
+        """Configure remote config transfer and/or auto-backup via MOPS.
+
+        One-shot transfer (requires action + server):
+            action: 'pull' (server→device) or 'push' (device→server)
+            server: TFTP URL (e.g. 'tftp://192.168.4.3/config.xml')
+            profile: target profile name (default = active profile)
+            source: 'nvm' or 'envm' (for push)
+            destination: 'nvm' or 'envm' (for pull)
+
+        Auto-backup config:
+            auto_backup: True/False — enable/disable
+            auto_backup_url: destination URL with wildcards
+            auto_backup_username: auth username for backup server
+            auto_backup_password: auth password for backup server
+
+        Server credentials (shared across all transfers):
+            username: file transfer server login
+            password: file transfer server password
+        """
+        result = {}
+
+        # Server credentials (shared)
+        if username is not None or password is not None:
+            cred_values = {}
+            if username is not None:
+                cred_values["hm2FMServerUserName"] = encode_string(username)
+            if password is not None:
+                cred_values["hm2FMServerPassword"] = encode_string(password)
+            self.client.set("HM2-FILEMGMT-MIB",
+                            "hm2FileMgmtServerAccessGroup", cred_values)
+
+        # Auto-backup config
+        backup_values = {}
+        if auto_backup is not None:
+            backup_values["hm2FMConfigRemoteSaveAdminStatus"] = (
+                "1" if auto_backup else "2")
+        if auto_backup_url is not None:
+            backup_values["hm2FMConfigRemoteSaveDestination"] = (
+                encode_string(auto_backup_url))
+        if auto_backup_username is not None:
+            backup_values["hm2FMConfigRemoteSaveUsername"] = (
+                encode_string(auto_backup_username))
+        if auto_backup_password is not None:
+            backup_values["hm2FMConfigRemoteSavePassword"] = (
+                encode_string(auto_backup_password))
+        if backup_values:
+            self.client.set("HM2-FILEMGMT-MIB",
+                            "hm2FileMgmtConfigRemoteSaveGroup", backup_values)
+
+        # One-shot transfer
+        if action and server:
+            src_map = {'nvm': '2', 'envm': '3'}
+            dst_map = {'nvm': '2', 'envm': '3'}
+
+            if profile is None:
+                storage = destination if action == 'pull' else source
+                profiles = self.get_profiles(storage=storage)
+                active = [p for p in profiles if p.get('active')]
+                if active:
+                    profile = active[0]['name']
+                else:
+                    profile = ''
+
+            if action == 'pull':
+                result = self.client.config_transfer(
+                    action='pull', server_url=server,
+                    source_type='20', dest_type=dst_map.get(destination, '2'),
+                    source_data=server, dest_data=profile)
+            elif action == 'push':
+                result = self.client.config_transfer(
+                    action='push', server_url=server,
+                    source_type=src_map.get(source, '2'), dest_type='20',
+                    source_data=profile, dest_data=server)
+            else:
+                raise ValueError(f"Invalid action '{action}': use 'pull' or 'push'")
+
+        return result or self.get_config_remote()
 
     def clear_config(self, keep_ip=False):
         """Clear running config (back to default) via MOPS.
@@ -2433,7 +2627,8 @@ class MOPSHIOS:
         return self.get_hidiscovery()
 
     def set_mrp(self, operation='enable', mode='client', port_primary=None,
-                port_secondary=None, vlan=None, recovery_delay=None):
+                port_secondary=None, vlan=None, recovery_delay=None,
+                advanced_mode=None):
         """Configure MRP ring on the default domain via MOPS.
 
         Args:
@@ -2443,6 +2638,7 @@ class MOPSHIOS:
             port_secondary: secondary ring port (e.g. '1/4')
             vlan: VLAN ID for MRP domain (0-4042)
             recovery_delay: '200ms', '500ms', '30ms', or '10ms'
+            advanced_mode: True/False — react on link change (faster failover)
         """
         if operation not in ('enable', 'disable'):
             raise ValueError(f"operation must be 'enable' or 'disable', got '{operation}'")
@@ -2499,6 +2695,9 @@ class MOPSHIOS:
                 if delay_val is None:
                     raise ValueError(f"Invalid recovery_delay '{recovery_delay}'")
                 values["hm2MrpRecoveryDelay"] = delay_val
+
+            if advanced_mode is not None:
+                values["hm2MrpMRMReactOnLinkChange"] = "1" if advanced_mode else "2"
 
             self.client.set_indexed("HM2-L2REDUNDANCY-MIB", "hm2MrpEntry",
                                     index=idx, values=values)

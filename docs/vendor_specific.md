@@ -1,9 +1,9 @@
 # Vendor-Specific Methods
 
 These methods extend NAPALM with HiOS-specific functionality not covered
-by the standard NAPALM API. They are available on all three protocols
-(MOPS, SNMP, SSH) unless noted otherwise. Call them directly on the
-driver object (e.g. `device.get_mrp()`).
+by the standard NAPALM API. They are available on all four protocols
+(MOPS, SNMP, SSH, Offline) unless noted otherwise. Call them directly on
+the driver object (e.g. `device.get_mrp()`).
 
 For protocol availability of each method, see the matrix in
 [protocols.md](protocols.md).
@@ -124,6 +124,186 @@ or storage is invalid.
 
 ---
 
+## HTTPS Config Download/Upload (MOPS-only)
+
+MOPS backend supports full config lifecycle via HTTPS — no SSH or TFTP
+required. HiOS 10.x requires MOPS session key auth (`Authorization:
+Mops <key>` via POST to `/mops_login`). HiOS 9.x accepts Basic auth.
+
+### get_config(profile=None, source='nvm')
+
+Download config XML via HTTPS. Returns NAPALM-standard dict.
+
+```python
+# Download active profile config
+config = device.get_config()
+print(config['running'][:200])  # XML string
+
+# Download a specific profile from ENVM
+config = device.get_config(profile='backup', source='envm')
+```
+
+```python
+{
+    'running': '<?xml version="1.0" ...>...',
+    'startup': '',
+    'candidate': '',
+}
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `profile` | profile name | `None` (active) | Target profile (from `get_profiles()`) |
+| `source` | `'nvm'`, `'envm'` | `'nvm'` | Which storage to download from |
+
+**Note**: The standard NAPALM `retrieve`, `full`, `sanitized`, and
+`format` parameters are accepted but ignored — MOPS always returns
+the full config XML. SSH `get_config()` behaviour is unchanged.
+
+### load_config(xml_data, profile=None, destination='nvm')
+
+Upload config XML to a profile via HTTPS. Use `activate_profile()`
+after upload to apply.
+
+```python
+# Upload config to active profile
+with open('config.xml') as f:
+    device.load_config(f.read())
+
+# Upload to a specific profile on ENVM
+device.load_config(xml_data, profile='backup', destination='envm')
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `xml_data` | string | required | Config XML content |
+| `profile` | profile name | `None` (active) | Target profile |
+| `destination` | `'nvm'`, `'envm'` | `'nvm'` | Which storage to upload to |
+
+**Raises** `ConnectionException` on upload failure.
+
+---
+
+## Remote Config Management
+
+Getter/setter pair for TFTP config transfer and automatic backup.
+Available on MOPS, SNMP, and SSH.
+
+### get_config_remote()
+
+Returns remote config backup settings.
+
+```python
+remote = device.get_config_remote()
+```
+
+```python
+{
+    'server_username': 'admin',
+    'auto_backup': {
+        'enabled': True,
+        'destination': 'tftp://192.168.4.3/%p/config-%d.xml',
+        'username': 'backup_user',
+    }
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `server_username` | File transfer server login (SSH returns empty — not available via CLI) |
+| `auto_backup.enabled` | Whether auto-backup is active |
+| `auto_backup.destination` | Destination URL with `%p`/`%i`/`%m`/`%d`/`%t` wildcards |
+| `auto_backup.username` | Auth username for backup server |
+
+### set_config_remote(action, server, profile, source, destination, ...)
+
+Configure remote config transfer and/or auto-backup.
+
+**One-shot transfer** (push config to TFTP server or pull from it):
+
+```python
+# Push active profile to TFTP server
+device.set_config_remote(
+    action='push',
+    server='tftp://192.168.4.3/switch-config.xml',
+    profile='CLAMPS',      # source profile (default = active)
+    source='nvm',
+)
+
+# Pull config from TFTP server into a profile
+device.set_config_remote(
+    action='pull',
+    server='tftp://192.168.4.3/switch-config.xml',
+    profile='CLAMPS',      # destination profile (default = active)
+    destination='nvm',
+)
+```
+
+**Auto-backup configuration**:
+
+```python
+# Enable auto-backup
+device.set_config_remote(
+    auto_backup=True,
+    auto_backup_url='tftp://192.168.4.3/%p/config-%d.xml',
+    auto_backup_username='backup',
+    auto_backup_password='secret',
+)
+
+# Disable auto-backup
+device.set_config_remote(auto_backup=False)
+```
+
+**Server credentials** (shared across all transfers):
+
+```python
+device.set_config_remote(username='admin', password='secret')
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `action` | `'pull'`, `'push'` | `None` | Transfer direction |
+| `server` | TFTP URL | `None` | e.g. `'tftp://192.168.4.3/config.xml'` |
+| `profile` | profile name | `None` (active) | Source (push) or destination (pull) profile |
+| `source` | `'nvm'`, `'envm'` | `'nvm'` | Source storage for push |
+| `destination` | `'nvm'`, `'envm'` | `'nvm'` | Destination storage for pull |
+| `auto_backup` | `True`, `False` | `None` | Enable/disable auto-backup |
+| `auto_backup_url` | URL with wildcards | `None` | Destination URL for auto-backup |
+| `auto_backup_username` | string | `None` | Auth username for backup server |
+| `auto_backup_password` | string | `None` | Auth password for backup server |
+| `username` | string | `None` | File transfer server login |
+| `password` | string | `None` | File transfer server password |
+
+**Note**: SSH cannot set server credentials (`username`/`password`) —
+use MOPS or SNMP for those. SSH `server_username` is always returned
+as empty string in `get_config_remote()`.
+
+---
+
+## SNMP System Information
+
+### set_snmp_information(hostname=None, contact=None, location=None)
+
+Set sysName, sysContact, and/or sysLocation. Pass `None` to skip a
+field. Available on all four protocols (MOPS, SNMP, SSH, Offline).
+
+```python
+device.set_snmp_information(hostname='SW-OFFICE-01')
+device.set_snmp_information(contact='NOC', location='Building A, Rack 3')
+device.set_snmp_information(hostname='SW-01', contact='ops@example.com', location='DC-1')
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `hostname` | string | `None` | System name (sysName.0) |
+| `contact` | string | `None` | System contact (sysContact.0) |
+| `location` | string | `None` | System location (sysLocation.0) |
+
+**Returns** the result of `get_snmp_information()` after setting. MOPS
+respects staging — values are queued if `start_staging()` is active.
+
+---
+
 ## MRP — Media Redundancy Protocol
 
 MRP provides sub-second ring redundancy for industrial Ethernet.
@@ -173,7 +353,7 @@ mrp = device.get_mrp()
 {'configured': False}
 ```
 
-### set_mrp(operation, mode, port_primary, port_secondary, vlan, recovery_delay)
+### set_mrp(operation, mode, port_primary, port_secondary, vlan, recovery_delay, advanced_mode)
 
 Configure MRP on the default domain.
 
@@ -196,6 +376,9 @@ result = device.set_mrp(
 # Reconfigure to manager mode (ports already assigned)
 result = device.set_mrp(operation='enable', mode='manager')
 
+# Enable advanced mode (react on link change — faster failover)
+result = device.set_mrp(advanced_mode=True)
+
 # Disable MRP (keeps domain config)
 result = device.set_mrp(operation='disable')
 ```
@@ -208,6 +391,7 @@ result = device.set_mrp(operation='disable')
 | `port_secondary` | interface name | `None` | Secondary ring port (e.g. `'1/4'`) |
 | `vlan` | `0`–`4042` | `None` | VLAN for MRP frames |
 | `recovery_delay` | `'200ms'`, `'500ms'`, `'30ms'`, `'10ms'` | `None` | Max recovery time |
+| `advanced_mode` | `True`, `False` | `None` | React on link change (faster failover) |
 
 **Returns** the result of `get_mrp()` after configuration.
 

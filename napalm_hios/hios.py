@@ -419,16 +419,27 @@ class HIOSDriver(NetworkDriver):
             return arp_table
         raise NotImplementedError("get_arp_table is not implemented for this protocol")
     
-    def get_config(self, retrieve='all', full=False, sanitized=False, format='text'):
-        if self.active_protocol == 'ssh' or self._ensure_ssh():
+    def get_config(self, retrieve='all', full=False, sanitized=False, format='text',
+                   **kwargs):
+        if self.active_protocol in ('mops', 'offline'):
+            config = self._get_active_connection().get_config(
+                retrieve, full, sanitized, format, **kwargs)
+        elif self.active_protocol == 'ssh' or self._ensure_ssh():
             config = self.ssh.get_config(retrieve, full, sanitized, format)
-            # Ensure all config types are present
-            for config_type in ['running', 'startup', 'candidate']:
-                if config_type not in config:
-                    config[config_type] = ''
-            return config
-        raise NotImplementedError("get_config requires SSH but SSH connection unavailable")
-    
+        else:
+            raise NotImplementedError("get_config requires SSH or MOPS")
+        for config_type in ['running', 'startup', 'candidate']:
+            if config_type not in config:
+                config[config_type] = ''
+        return config
+
+    def load_config(self, xml_data, profile=None, destination='nvm'):
+        if self.active_protocol in ('mops', 'offline'):
+            return self._get_active_connection().load_config(
+                xml_data, profile=profile, destination=destination,
+            )
+        raise NotImplementedError("load_config requires MOPS")
+
     def get_interfaces(self):
         if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
             interfaces = self._get_active_connection().get_interfaces()
@@ -598,6 +609,27 @@ class HIOSDriver(NetworkDriver):
             return self._get_active_connection().save_config()
         raise NotImplementedError("save_config is not implemented for this protocol")
 
+    def get_config_remote(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().get_config_remote()
+        raise NotImplementedError("get_config_remote is not implemented for this protocol")
+
+    def set_config_remote(self, action=None, server=None, profile=None,
+                          source='nvm', destination='nvm',
+                          auto_backup=None, auto_backup_url=None,
+                          auto_backup_username=None, auto_backup_password=None,
+                          username=None, password=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_config_remote(
+                action=action, server=server, profile=profile,
+                source=source, destination=destination,
+                auto_backup=auto_backup, auto_backup_url=auto_backup_url,
+                auto_backup_username=auto_backup_username,
+                auto_backup_password=auto_backup_password,
+                username=username, password=password,
+            )
+        raise NotImplementedError("set_config_remote is not implemented for this protocol")
+
     def is_factory_default(self):
         if self.active_protocol in ('ssh', 'mops', 'offline'):
             return self._get_active_connection().is_factory_default()
@@ -624,10 +656,12 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("clear_factory is not implemented for this protocol")
 
     def set_mrp(self, operation='enable', mode='client', port_primary=None,
-                port_secondary=None, vlan=None, recovery_delay=None):
+                port_secondary=None, vlan=None, recovery_delay=None,
+                advanced_mode=None):
         if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
             return self._get_active_connection().set_mrp(
-                operation, mode, port_primary, port_secondary, vlan, recovery_delay,
+                operation, mode, port_primary, port_secondary, vlan,
+                recovery_delay, advanced_mode,
             )
         raise NotImplementedError("set_mrp is not implemented for this protocol")
 
@@ -702,6 +736,13 @@ class HIOSDriver(NetworkDriver):
                     snmp_info[key] = '' if key != 'community' else {}
             return snmp_info
         raise NotImplementedError("get_snmp_information is not implemented for this protocol")
+
+    def set_snmp_information(self, hostname=None, contact=None, location=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_snmp_information(
+                hostname=hostname, contact=contact, location=location,
+            )
+        raise NotImplementedError("set_snmp_information is not implemented for this protocol")
 
     def get_profiles(self, storage='nvm'):
         if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):

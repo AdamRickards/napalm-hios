@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.15.0
+
+### Config Management — HTTPS Download/Upload
+
+MOPS backend now supports full config lifecycle via HTTPS — no SSH or TFTP required.
+
+- **`get_config()`** on MOPS — downloads config XML via `GET /download.html`. Profile param optional (default = active profile from `get_profiles()`), `source='nvm'|'envm'`. Returns NAPALM-standard dict `{'running': '<xml>...', 'startup': '', 'candidate': ''}`
+- **`load_config()`** on MOPS — uploads config XML via `POST /upload.html` multipart/form-data. Combined with `activate_profile()` (already exists) for full config replace
+- **MOPS session key auth** — HiOS 10.x requires `Authorization: Mops <session-key>` for download/upload endpoints (not Basic auth). Session key obtained via POST to `/mops_login`. Falls back to Basic auth for 9.x firmware
+
+### Remote Config Management
+
+New vendor-specific getter/setter pair covering TFTP transfer and auto-backup across all 3 live backends (MOPS, SNMP, SSH).
+
+- **`get_config_remote()`** — returns remote config backup state: `server_username`, `auto_backup` (`enabled`, `destination` URL with `%p/%i/%m/%d/%t` wildcards, `username`)
+- **`set_config_remote()`** — unified API for:
+  - **One-shot transfer**: `action='pull'|'push'`, `server='tftp://...'`, `profile`, `source`, `destination`. MOPS uses HM2-FILEMGMT-MIB action table copy engine, SNMP uses same OIDs directly, SSH uses `copy config remote` / `running-config remote` CLI
+  - **Auto-backup config**: `auto_backup=True|False`, `auto_backup_url`, `auto_backup_username`, `auto_backup_password`
+  - **Server credentials**: `username`, `password` (shared across all transfers)
+
+### set_snmp_information()
+
+New vendor-specific setter for sysName, sysContact, sysLocation across all 4 backends.
+
+- `set_snmp_information(hostname=, contact=, location=)` — any combination of params, `None` to skip
+- MOPS: `encode_string()` + `_apply_set("SNMPv2-MIB", "system", values)`, respects staging
+- SNMP: `_set_oids()` with `OctetString` on `sysName.0`, `sysContact.0`, `sysLocation.0`
+- SSH: `system name|contact|location` in Global Config Mode
+
+### set_mrp() advanced_mode parameter
+
+- `set_mrp(advanced_mode=True|False)` — enables/disables `hm2MrpMRMReactOnLinkChange` (faster failover via link-change reaction). Already returned by `get_mrp()`, now settable
+
+### Internal refactors
+
+- **SSH `_enter_interface()`** — extracted from 8+ repeated inline patterns into a single helper with consistent `ValueError` on unknown interfaces
+- **SNMP `_build_bp_to_name()`** — extracted bridge-port→interface-name mapping from 6 repeated walk+dict-build patterns into a single async helper
+- **MOPS `_wait_action_idle()`** — action table polling helper with configurable timeout (default 120s), 10s poll interval, `decode_strings=False` for correct integer handling
+- **MOPS `config_transfer()`** — hex-encodes `hm2FMActionSourceData` / `hm2FMActionDestinationData` (DisplayString type requires MOPS hex encoding)
+
 ## 1.14.0
 
 ### Offline Protocol Backend

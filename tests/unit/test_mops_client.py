@@ -705,5 +705,145 @@ class TestIsFactoryDefault(unittest.TestCase):
         self.client.close()
 
 
+class TestSessionKey(unittest.TestCase):
+    """Test MOPS session key authentication for download/upload."""
+
+    def setUp(self):
+        self.client = MOPSClient("198.51.100.1", "admin", "private")
+
+    def test_get_session_key_success(self):
+        """Extract session key from mops_login response."""
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.text = '<mops-auth><session-key>abc123</session-key></mops-auth>'
+        with patch('napalm_hios.mops_client.requests.Session') as MockSession:
+            MockSession.return_value.__enter__ = Mock(return_value=MockSession.return_value)
+            MockSession.return_value.__exit__ = Mock(return_value=False)
+            MockSession.return_value.post.return_value = mock_resp
+            MockSession.return_value.verify = False
+            MockSession.return_value.headers = {}
+            MockSession.return_value.close = Mock()
+            key = self.client._get_session_key()
+            self.assertEqual(key, 'abc123')
+
+    def test_get_session_key_cached(self):
+        """Cached key returned without new request."""
+        self.client._session_key = 'cached-key'
+        key = self.client._get_session_key()
+        self.assertEqual(key, 'cached-key')
+
+    def test_get_session_key_failure_returns_none(self):
+        """Failed login returns None (falls back to Basic auth)."""
+        import requests as req
+        with patch('napalm_hios.mops_client.requests.Session') as MockSession:
+            MockSession.return_value.post.side_effect = (
+                req.exceptions.ConnectionError("connection refused"))
+            MockSession.return_value.verify = False
+            MockSession.return_value.headers = {}
+            MockSession.return_value.close = Mock()
+            key = self.client._get_session_key()
+            self.assertIsNone(key)
+
+    def test_config_auth_headers_with_key(self):
+        """Returns Mops auth header when session key available."""
+        self.client._session_key = 'test-key'
+        headers = self.client._config_auth_headers()
+        self.assertEqual(headers['Authorization'], 'Mops test-key')
+
+    def test_config_auth_headers_without_key(self):
+        """Returns empty dict when no session key (falls back to Basic)."""
+        self.client._session_key = None
+        with patch('napalm_hios.mops_client.requests.Session'):
+            headers = self.client._config_auth_headers()
+            self.assertEqual(headers, {})
+
+    def tearDown(self):
+        self.client.close()
+
+
+class TestConfigTransfer(unittest.TestCase):
+    """Test download_config, upload_config, config_transfer."""
+
+    def setUp(self):
+        self.client = MOPSClient("198.51.100.1", "admin", "private")
+
+    def test_download_config(self):
+        """Download config via HTTPS GET."""
+        self.client._config_auth_headers = Mock(return_value={
+            'Authorization': 'Mops testkey'})
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.text = '<?xml version="1.0"?><Config/>'
+        self.client.session.get = Mock(return_value=mock_resp)
+
+        xml = self.client.download_config('CLAMPS', source='nvm')
+        self.assertEqual(xml, '<?xml version="1.0"?><Config/>')
+        call_args = self.client.session.get.call_args
+        self.assertIn('download.html', call_args[0][0])
+        self.assertIn('profile=CLAMPS', call_args[0][0])
+        self.assertIn('source=nvm', call_args[0][0])
+
+    def test_download_config_http_error(self):
+        """HTTP error raises ConnectionException."""
+        self.client._config_auth_headers = Mock(return_value={})
+        mock_resp = Mock()
+        mock_resp.status_code = 400
+        mock_resp.text = 'Bad Request'
+        self.client.session.get = Mock(return_value=mock_resp)
+        with self.assertRaises(ConnectionException):
+            self.client.download_config('CLAMPS')
+
+    def test_upload_config(self):
+        """Upload config via HTTPS POST multipart."""
+        self.client._config_auth_headers = Mock(return_value={
+            'Authorization': 'Mops testkey'})
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.text = 'OK'
+        self.client.session.post = Mock(return_value=mock_resp)
+
+        result = self.client.upload_config('<Config/>', 'CLAMPS')
+        self.assertTrue(result)
+        call_args = self.client.session.post.call_args
+        self.assertIn('upload.html', call_args[0][0])
+        self.assertIn('profile=CLAMPS', call_args[0][0])
+
+    def test_config_transfer_push(self):
+        """Push triggers action table with correct params."""
+        # Mock _wait_action_idle (returns idle)
+        self.client._wait_action_idle = Mock(return_value={
+            'hm2FMActionStatus': '1'})
+        # Mock get for reading activate key
+        self.client._send = Mock(return_value='<rpc/>')
+        self.client._parse_response = Mock(return_value={
+            'mibs': {'HM2-FILEMGMT-MIB': {'hm2FileMgmtActionGroup': [
+                {'hm2FMActionActivateKey': '44'}
+            ]}}, 'errors': []})
+        self.client.set = Mock(return_value=True)
+        self.client.set_indexed = Mock(return_value=True)
+
+        result = self.client.config_transfer(
+            action='push', server_url='tftp://10.2.1.4/test.xml',
+            source_type='2', dest_type='20',
+            source_data='CLAMPS', dest_data='tftp://10.2.1.4/test.xml')
+
+        # Verify source/dest data SET with hex encoding
+        set_call = self.client.set.call_args
+        values = set_call[0][2]
+        self.assertIn('hm2FMActionSourceData', values)
+        self.assertIn('hm2FMActionDestinationData', values)
+        # Values should be hex-encoded
+        self.assertEqual(values['hm2FMActionSourceData'],
+                         encode_string('CLAMPS'))
+
+        # Verify trigger SET
+        idx_call = self.client.set_indexed.call_args
+        self.assertEqual(idx_call.kwargs['values'],
+                         {'hm2FMActionActivate': '44'})
+
+    def tearDown(self):
+        self.client.close()
+
+
 if __name__ == '__main__':
     unittest.main()

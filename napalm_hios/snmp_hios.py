@@ -386,6 +386,28 @@ OID_hm2ConfigWatchdogOperStatus   = '1.3.6.1.4.1.248.11.21.1.4.1.2'
 OID_hm2ConfigWatchdogTimeInterval = '1.3.6.1.4.1.248.11.21.1.4.1.3'
 OID_hm2ConfigWatchdogTimerValue   = '1.3.6.1.4.1.248.11.21.1.4.1.4'
 
+# HM2-FILEMGMT-MIB — server access  1.3.6.1.4.1.248.11.21.1.4.2.*
+OID_hm2FMServerUserName = '1.3.6.1.4.1.248.11.21.1.4.2.1'
+OID_hm2FMServerPassword = '1.3.6.1.4.1.248.11.21.1.4.2.2'
+
+# HM2-FILEMGMT-MIB — remote save  1.3.6.1.4.1.248.11.21.1.4.5.*
+OID_hm2FMConfigRemoteSaveAdminStatus = '1.3.6.1.4.1.248.11.21.1.4.5.1'
+OID_hm2FMConfigRemoteSaveDestination = '1.3.6.1.4.1.248.11.21.1.4.5.2'
+OID_hm2FMConfigRemoteSaveUsername    = '1.3.6.1.4.1.248.11.21.1.4.5.3'
+OID_hm2FMConfigRemoteSavePassword   = '1.3.6.1.4.1.248.11.21.1.4.5.4'
+
+# HM2-FILEMGMT-MIB — action table scalars  1.3.6.1.4.1.248.11.21.1.2.*
+OID_hm2FMActionSourceData      = '1.3.6.1.4.1.248.11.21.1.2.10'
+OID_hm2FMActionDestinationData = '1.3.6.1.4.1.248.11.21.1.2.11'
+OID_hm2FMActionStatus          = '1.3.6.1.4.1.248.11.21.1.2.14'
+OID_hm2FMActionResult          = '1.3.6.1.4.1.248.11.21.1.2.16'
+OID_hm2FMActionResultText      = '1.3.6.1.4.1.248.11.21.1.2.17'
+# Activate OIDs for copy operations (fully indexed)
+# copy(2).config(10).server(20).nvm(2) — pull from server to NVM
+OID_hm2FMActionActivate_pull = '1.3.6.1.4.1.248.11.21.1.2.1.1.5.2.10.20.2'
+# copy(2).config(10).nvm(2).server(20) — push from NVM to server
+OID_hm2FMActionActivate_push = '1.3.6.1.4.1.248.11.21.1.2.1.1.5.2.10.2.20'
+
 # HM2-TIMESYNC-MIB — SNTP client  1.3.6.1.4.1.248.11.50.1.2.3.*
 OID_hm2SntpRequestInterval = '1.3.6.1.4.1.248.11.50.1.2.3.4'
 OID_hm2SntpClientStatus    = '1.3.6.1.4.1.248.11.50.1.2.3.5'
@@ -929,6 +951,18 @@ class SNMPHIOS:
         self._ifindex_map = {idx: str(val) for idx, val in data.items()}
         return self._ifindex_map
 
+    async def _build_bp_to_name(self, ifmap, engine):
+        """Build bridge-port number -> interface name mapping."""
+        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
+        return {bp: ifmap.get(str(ifidx), f'if{ifidx}')
+                for bp, ifidx in bp_data.items()}
+
+    async def _build_name_to_bp(self, ifmap, engine):
+        """Build interface name -> bridge-port number mapping."""
+        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
+        return {ifmap.get(str(ifidx), f'if{ifidx}'): bp
+                for bp, ifidx in bp_data.items()}
+
     # ------------------------------------------------------------------
     # Getters — standard MIBs
     # ------------------------------------------------------------------
@@ -1123,12 +1157,7 @@ class SNMPHIOS:
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
 
-        # Get bridge port -> ifIndex mapping
-        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
-        bp_to_name = {}
-        for bp_num, ifindex_val in bp_data.items():
-            ifindex = str(ifindex_val)
-            bp_to_name[bp_num] = ifmap.get(ifindex, f'if{ifindex}')
+        bp_to_name = await self._build_bp_to_name(ifmap, engine)
 
         # Walk FDB table
         rows = await self._walk_columns({
@@ -1310,12 +1339,7 @@ class SNMPHIOS:
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
 
-        # Bridge port -> interface name mapping
-        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
-        bp_to_name = {}
-        for bp_num, ifindex_val in bp_data.items():
-            ifindex = str(ifindex_val)
-            bp_to_name[bp_num] = ifmap.get(ifindex, f'if{ifindex}')
+        bp_to_name = await self._build_bp_to_name(ifmap, engine)
 
         rows = await self._walk_columns({
             'name': OID_dot1qVlanStaticName,
@@ -1344,10 +1368,7 @@ class SNMPHIOS:
     async def _get_vlan_ingress_async(self, *ports):
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
-        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
-        bp_to_name = {}
-        for bp_num, ifindex_val in bp_data.items():
-            bp_to_name[bp_num] = ifmap.get(str(ifindex_val), f'if{ifindex_val}')
+        bp_to_name = await self._build_bp_to_name(ifmap, engine)
 
         rows = await self._walk_columns({
             'pvid': OID_dot1qPvid,
@@ -1377,10 +1398,7 @@ class SNMPHIOS:
     async def _get_vlan_egress_async(self, *ports):
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
-        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
-        bp_to_name = {}
-        for bp_num, ifindex_val in bp_data.items():
-            bp_to_name[bp_num] = ifmap.get(str(ifindex_val), f'if{ifindex_val}')
+        bp_to_name = await self._build_bp_to_name(ifmap, engine)
 
         rows = await self._walk_columns({
             'name': OID_dot1qVlanStaticName,
@@ -1434,11 +1452,7 @@ class SNMPHIOS:
         ports = [port] if isinstance(port, str) else list(port)
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
-        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
-        name_to_bp = {}
-        for bp_num, ifindex_val in bp_data.items():
-            name = ifmap.get(str(ifindex_val), f'if{ifindex_val}')
-            name_to_bp[name] = bp_num
+        name_to_bp = await self._build_name_to_bp(ifmap, engine)
 
         # Validate frame_types once
         ft_val = None
@@ -1486,11 +1500,7 @@ class SNMPHIOS:
         ports = [port] if isinstance(port, str) else list(port)
         engine = SnmpEngine()
         ifmap = await self._build_ifindex_map(engine)
-        bp_data = await self._walk(OID_dot1dBasePortIfIndex, engine)
-        name_to_bp = {}
-        for bp_num, ifindex_val in bp_data.items():
-            name = ifmap.get(str(ifindex_val), f'if{ifindex_val}')
-            name_to_bp[name] = bp_num
+        name_to_bp = await self._build_name_to_bp(ifmap, engine)
 
         # Validate all ports up front
         bp_ints = []
@@ -1603,6 +1613,26 @@ class SNMPHIOS:
             'contact': str(scalars.get(OID_sysContact, '')).strip(),
             'location': str(scalars.get(OID_sysLocation, '')).strip(),
         }
+
+    def set_snmp_information(self, hostname=None, contact=None, location=None):
+        """Set sysName, sysContact, and/or sysLocation via SNMP.
+
+        Args:
+            hostname: system name (sysName.0), None to skip
+            contact: system contact (sysContact.0), None to skip
+            location: system location (sysLocation.0), None to skip
+        """
+        sets = []
+        if hostname is not None:
+            sets.append((f"{OID_sysName}.0", OctetString(hostname)))
+        if contact is not None:
+            sets.append((f"{OID_sysContact}.0", OctetString(contact)))
+        if location is not None:
+            sets.append((f"{OID_sysLocation}.0", OctetString(location)))
+        if not sets:
+            return None
+        asyncio.run(self._set_oids(*sets))
+        return self.get_snmp_information()
 
     # ------------------------------------------------------------------
     # Getters — Hirschmann private MIBs
@@ -2103,6 +2133,136 @@ class SNMPHIOS:
 
         return await self._get_config_status_async()
 
+    def get_config_remote(self):
+        """Return remote config backup settings via SNMP."""
+        return asyncio.run(self._get_config_remote_async())
+
+    async def _get_config_remote_async(self):
+        scalars = await self._get_scalar(
+            OID_hm2FMServerUserName,
+            OID_hm2FMConfigRemoteSaveAdminStatus,
+            OID_hm2FMConfigRemoteSaveDestination,
+            OID_hm2FMConfigRemoteSaveUsername,
+        )
+        return {
+            'server_username': str(
+                scalars.get(OID_hm2FMServerUserName, '')).strip(),
+            'auto_backup': {
+                'enabled': int(scalars.get(
+                    OID_hm2FMConfigRemoteSaveAdminStatus, 2)) == 1,
+                'destination': str(scalars.get(
+                    OID_hm2FMConfigRemoteSaveDestination, '')).strip(),
+                'username': str(scalars.get(
+                    OID_hm2FMConfigRemoteSaveUsername, '')).strip(),
+            },
+        }
+
+    def set_config_remote(self, action=None, server=None, profile=None,
+                          source='nvm', destination='nvm',
+                          auto_backup=None, auto_backup_url=None,
+                          auto_backup_username=None, auto_backup_password=None,
+                          username=None, password=None):
+        """Configure remote config transfer and/or auto-backup via SNMP."""
+        return asyncio.run(self._set_config_remote_async(
+            action=action, server=server, profile=profile,
+            source=source, destination=destination,
+            auto_backup=auto_backup, auto_backup_url=auto_backup_url,
+            auto_backup_username=auto_backup_username,
+            auto_backup_password=auto_backup_password,
+            username=username, password=password))
+
+    async def _set_config_remote_async(self, action=None, server=None,
+                                        profile=None, source='nvm',
+                                        destination='nvm',
+                                        auto_backup=None, auto_backup_url=None,
+                                        auto_backup_username=None,
+                                        auto_backup_password=None,
+                                        username=None, password=None):
+        # Server credentials
+        cred_sets = []
+        if username is not None:
+            cred_sets.append((f"{OID_hm2FMServerUserName}.0",
+                              OctetString(username)))
+        if password is not None:
+            cred_sets.append((f"{OID_hm2FMServerPassword}.0",
+                              OctetString(password)))
+        if cred_sets:
+            await self._set_oids(*cred_sets)
+
+        # Auto-backup config
+        backup_sets = []
+        if auto_backup is not None:
+            backup_sets.append((
+                f"{OID_hm2FMConfigRemoteSaveAdminStatus}.0",
+                Integer32(1 if auto_backup else 2)))
+        if auto_backup_url is not None:
+            backup_sets.append((
+                f"{OID_hm2FMConfigRemoteSaveDestination}.0",
+                OctetString(auto_backup_url)))
+        if auto_backup_username is not None:
+            backup_sets.append((
+                f"{OID_hm2FMConfigRemoteSaveUsername}.0",
+                OctetString(auto_backup_username)))
+        if auto_backup_password is not None:
+            backup_sets.append((
+                f"{OID_hm2FMConfigRemoteSavePassword}.0",
+                OctetString(auto_backup_password)))
+        if backup_sets:
+            await self._set_oids(*backup_sets)
+
+        # One-shot transfer
+        if action and server:
+            src_map = {'nvm': '2', 'envm': '3'}
+            dst_map = {'nvm': '2', 'envm': '3'}
+
+            if profile is None:
+                storage = destination if action == 'pull' else source
+                profiles = self.get_profiles(storage=storage)
+                active = [p for p in profiles if p.get('active')]
+                profile = active[0]['name'] if active else ''
+
+            # Set source/destination data
+            if action == 'pull':
+                await self._set_oids(
+                    (f"{OID_hm2FMActionSourceData}.0", OctetString(server)),
+                    (f"{OID_hm2FMActionDestinationData}.0",
+                     OctetString(profile)))
+            elif action == 'push':
+                await self._set_oids(
+                    (f"{OID_hm2FMActionSourceData}.0", OctetString(profile)),
+                    (f"{OID_hm2FMActionDestinationData}.0",
+                     OctetString(server)))
+            else:
+                raise ValueError(
+                    f"Invalid action '{action}': use 'pull' or 'push'")
+
+            # Read activation key
+            scalars = await self._get_scalar(OID_hm2FMActionActivateKey)
+            key = int(scalars.get(OID_hm2FMActionActivateKey, 0))
+
+            # Trigger the copy
+            activate_oid = (OID_hm2FMActionActivate_pull if action == 'pull'
+                            else OID_hm2FMActionActivate_push)
+            await self._set_scalar(activate_oid, Integer32(key))
+
+            # Poll until idle (up to 30s)
+            for _ in range(30):
+                status = await self._get_scalar(OID_hm2FMActionStatus)
+                if int(status.get(OID_hm2FMActionStatus, 1)) != 2:
+                    break
+                await asyncio.sleep(1)
+
+            # Read result
+            result = await self._get_scalar(
+                OID_hm2FMActionResult, OID_hm2FMActionResultText)
+            ok = int(result.get(OID_hm2FMActionResult, 1)) == 1
+            text = str(result.get(OID_hm2FMActionResultText, '')).strip()
+            if not ok:
+                raise ConnectionException(
+                    f"Config transfer failed: {text}")
+
+        return self.get_config_remote()
+
     def clear_config(self, keep_ip=False):
         """Clear running config (back to default) via SNMP.
 
@@ -2279,7 +2439,8 @@ class SNMPHIOS:
         return await self._get_hidiscovery_async()
 
     def set_mrp(self, operation='enable', mode='client', port_primary=None,
-                port_secondary=None, vlan=None, recovery_delay=None):
+                port_secondary=None, vlan=None, recovery_delay=None,
+                advanced_mode=None):
         """Configure MRP ring on the default domain via SNMP.
 
         Args:
@@ -2289,6 +2450,7 @@ class SNMPHIOS:
             port_secondary: secondary ring port (e.g. '1/4')
             vlan: VLAN ID for MRP domain (0-4042)
             recovery_delay: '200ms', '500ms', '30ms', or '10ms'
+            advanced_mode: True/False — react on link change (faster failover)
 
         Creates the default domain if none exists.
         """
@@ -2297,11 +2459,12 @@ class SNMPHIOS:
         if mode not in ('manager', 'client'):
             raise ValueError(f"mode must be 'manager' or 'client', got '{mode}'")
         return asyncio.run(self._set_mrp_async(
-            operation, mode, port_primary, port_secondary, vlan, recovery_delay,
+            operation, mode, port_primary, port_secondary, vlan,
+            recovery_delay, advanced_mode,
         ))
 
     async def _set_mrp_async(self, operation, mode, port_primary, port_secondary,
-                             vlan, recovery_delay):
+                             vlan, recovery_delay, advanced_mode):
         engine = SnmpEngine()
         sfx = MRP_DEFAULT_DOMAIN_SUFFIX
 
@@ -2368,6 +2531,10 @@ class SNMPHIOS:
                 if delay_val is None:
                     raise ValueError(f"Invalid recovery_delay '{recovery_delay}'")
                 sets.append((OID_hm2MrpRecoveryDelay + sfx, Integer32(delay_val)))
+
+            if advanced_mode is not None:
+                sets.append((OID_hm2MrpMRMReactOnLinkChange + sfx,
+                             Integer32(1 if advanced_mode else 2)))
 
             # SET all parameters
             for oid, val in sets:

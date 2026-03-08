@@ -9,7 +9,7 @@ The driver supports four protocols, selected via `protocol_preference` in `optio
 | **SSH** | TCP 22 | Password | CLI parsing | No (one command at a time) | `netmiko` |
 | **Offline** | XML file | None | In-memory | N/A (file) | None |
 
-MOPS is the default and preferred protocol — it uses the same internal mechanism as the HiOS web UI, supports atomic multi-table writes in a single POST, and requires only HTTP Basic auth (no USM key derivation). SSH is lazy-connected on demand when SSH-only methods are called (`get_config`, `ping`, `cli`, `commit_config` in SSH mode).
+MOPS is the default and preferred protocol — it uses the same internal mechanism as the HiOS web UI, supports atomic multi-table writes in a single POST, and requires only HTTP Basic auth (no USM key derivation). `get_config` now works on MOPS (HTTPS download) as well as SSH (CLI scraping). SSH is lazy-connected on demand when SSH-only methods are called (`ping`, `cli`, `commit_config` in SSH mode).
 
 ## MOPS Configuration
 
@@ -140,7 +140,8 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `save_config` | Yes | Yes | Yes | Yes | Offline: writes XML to disk |
 | `clear_config` | Yes | Yes | Yes | No | Raises NotImplementedError |
 | `clear_factory` | Yes | Yes | Yes | No | Raises NotImplementedError |
-| `get_config` | No | Yes | No | No | SSH-only (lazy-connects) |
+| `get_config` | Yes | Yes | No | No | MOPS: HTTPS download; SSH: CLI |
+| `load_config` | Yes | No | No | No | MOPS: HTTPS upload |
 | `ping` | No | Yes | No | No | SSH-only (lazy-connects) |
 | `cli` | No | Yes | No | No | SSH-only (lazy-connects) |
 | `load_merge_candidate` | Yes | Yes | Yes | Yes | MOPS: staging; SSH: in-memory |
@@ -187,6 +188,10 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `set_management_priority` | Yes | Yes | Yes | Yes | Vendor write |
 | `get_management` | Yes | Yes | Yes | Yes | Vendor |
 | `set_management` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_snmp_information` | Yes | Yes | Yes | Yes | |
+| `set_snmp_information` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_config_remote` | Yes | Yes | Yes | No | Vendor |
+| `set_config_remote` | Yes | Yes | Yes | No | Vendor write |
 | `is_factory_default` | Yes | Yes | No (gated) | No | Vendor |
 | `onboard` | Yes | Yes | No (gated) | No | Vendor |
 | `start_staging` | Yes | No | No | Yes | MOPS + Offline only |
@@ -198,7 +203,7 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 
 ## Known Issues
 
-- SSH-only methods (`get_config`, `ping`, `cli`, `commit_config` in SSH mode) auto-connect SSH when the active protocol is MOPS or SNMP. If SSH credentials are incorrect or the SSH port is blocked, these methods raise `NotImplementedError`.
+- SSH-only methods (`ping`, `cli`, `commit_config` in SSH mode) auto-connect SSH when the active protocol is MOPS or SNMP. If SSH credentials are incorrect or the SSH port is blocked, these methods raise `NotImplementedError`.
 - `activate_profile()` triggers a warm restart — the connection will drop. Reconnect after the device reboots.
 - `commit_config()` in SSH mode executes commands in configure mode. CLI errors are detected and raised as `CommitError`. NVM busy state is polled through (up to 5s) to handle back-to-back commits.
 - MOPS getter output matches SNMP output (same underlying MIB data), but some MOPS MIB/Node names are still being discovered.

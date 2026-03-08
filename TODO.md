@@ -19,16 +19,14 @@
 15. Test PyPI-deployed version against local test environment
 16. Done
 
-## Vendor-specific methods (driver)
+## Next Release
 
-- [ ] `set_mrp()` advanced_mode parameter — `get_mrp()` returns `advanced_mode` (OID `hm2MrpMRMReactOnLinkChange`) but `set_mrp()` doesn't accept it. Despite the "MRM" in the OID name, this applies to ALL ring participants. More critical on clients than the manager — enables link-down detection on RCs so they immediately signal the MRM to start recovery, dramatically faster failover in Hirschmann-only rings. Currently defaults to True on 10.3.04 but should be explicitly settable
+## Vendor-specific methods (driver) — future
+
 - [ ] `set_access_port(port(s), vlan_id)` — atomic access mode change via MOPS `set_multi`. Reads VLAN table + ifIndex, then in a single POST: add untagged on new VLAN, remove from old VLAN(s), set PVID. Currently VIKTOR does this as staged egress + separate PVID call (two round-trips, measurable blip). Same function design should accommodate management VLAN migration: egress + PVID + management VLAN ID all in one atomic set. MOPS-only (SSH/SNMP fall back to current multi-call approach). Benchmark improvement with [BLIP](tools/blip/TODO.md). **Mirror**: VIKTOR TODO in `tools/viktor/TODO.md` — update both when complete
 - [ ] Multi-get composition — `get_multi()` API that lets callers request multiple getters in one HTTP POST. Phase 0 gather (CLAMPS, VIKTOR, AARON) gets all facts in a single round-trip. Each additional safety check (SRM ports, VLAN egress, etc.) costs zero extra HTTP requests
-- [ ] `get_tftp()` / `set_tftp()` — TFTP config management. Two functions: manual config pull from TFTP server, and enable/disable auto-backup on save. **Unlocks**: [POLO](tools/polo/TODO.md), MOHAWC `--tftp-pull`
 - [ ] `get_syslog()` / `set_syslog()` — syslog server config (destination IP/port, severity filter, facility). MOPS + SNMP, SSH stub. **Unlocks**: [SNOOP](tools/snoop/TODO.md) syslog listener, fleet-wide log aggregation
 - [ ] `get_users()` / `set_user()` / `delete_user()` — local user account CRUD. Create/modify/delete user accounts with role (admin/operator/guest). **Unlocks**: fleet-wide credential management, audit-ready accounts (e.g. per-tool service accounts)
-- [ ] SSH backend: extract `_enter_interface()` helper — the 4-line pattern `self.cli(f'interface {iface}')` + check for Error/Invalid + raise ValueError is repeated 8+ times across setters. Single helper with consistent error message
-- [ ] SNMP backend: extract `_build_bp_to_name()` helper — the bridge port walk + dict build loop (`_walk(OID_dot1dBasePortIfIndex)` → `{bp_num: ifmap.get(str(ifindex_val))}`) is repeated 6 times across vlan/mac/sflow getters. One async helper, called with engine param
 
 ## CLAMPS
 
@@ -71,6 +69,15 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 
 - [ ] TSN getters/setters — gate control lists, stream filters, PTP config, traffic scheduling. MOPS will have the OIDs (everything in HiOS backend is SNMP). Hard part is designing a sane abstraction over the MIB tables. **Unlocks**: NILS TSN enricher, deterministic scheduling config
 
+## Offline Backend — Build Mode (`NEW`)
+
+- [ ] `hostname='NEW'` (or similar) starts from factory-default template instead of empty data. Enables config generation from scratch via driver API: `create_vlan()`, `set_mrp()`, `set_qos()` → complete config XML ready to load onto a switch
+- [ ] Copy minimal config template + XML-CONFIG-LOGIC.md research into `local/reference/`:
+  - Template: `local/reference/XML/minimal-192_168_1_85.xml` (88 lines — 8 mandatory VACM entries, header, footer)
+  - Research: `local/reference/XML/XML-CONFIG-LOGIC.md` (missing MIBs = factory defaults, VACM gate, checksum rules)
+- [ ] Embed template in `offline_client.py` or load from package data — no external file dependency at runtime
+- [ ] **Unlocks**: CLAMPS `--build configs/` (generate ring configs from script.cfg or interactive mode, no hardware needed), POLO zero-touch (generate configs from site templates), CLI→XML pipeline (Provize CLI output → driver API → config XML)
+
 ## Future — firmware update
 
 - [ ] Firmware update: upload firmware image, trigger install + reboot
@@ -78,7 +85,7 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 ## SSH CLI State Machine
 
 - [ ] CLI context navigator — track current mode (User → Privileged Exec → Global Config → Interface Range / VLAN Database) from prompt detection. Single `_ensure_context(mode, target=None)` replaces all `_config_mode()` / `self.cli('exit')` / `self.cli(f'interface {iface}')` patterns. Each setter declares what it needs, navigator handles transitions
-- [ ] Wire up `local/cli_ref_hios_merged.json` — 1,849 commands already have `mode` and `privilege` fields. Setter functions can look up required context from the JSON instead of hardcoding. New CLI features become: define command name → state machine handles navigation automatically
+- [ ] Wire up `local/reference/CLI/cli_ref_hios_merged.json` — 1,849 commands already have `mode` and `privilege` fields. Setter functions can look up required context from the JSON instead of hardcoding. New CLI features become: define command name → state machine handles navigation automatically
 - [ ] Port loop optimisation — setters that loop over ports currently bounce in/out of interface mode per port. State machine stays in Interface Range and just switches ports. Fewer CLI round-trips on SSH
 
 ## Backburner
@@ -87,4 +94,5 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 `set_mrp()`, `delete_mrp()`, `set_mrp_sub_ring()`, `delete_mrp_sub_ring()` use multi-step RowStatus sequences (createAndWait → notInService → set values → active) with try/except. Each transition depends on the previous one completing, so they can't be batched into one `set_multi()`. Would need a different staging approach (e.g. ordered sub-batches). Low value — MRP config is infrequent and CLAMPS already parallelizes across devices.
 
 ### get_config via SNMP
-Investigated extensively — walked the entire Hirschmann enterprise OID tree (17,132 OIDs) and found no config XML or text blob available via SNMP. The running-config as a single retrievable object does not exist in any standard or private MIB. Future approach: replicate the HTTPS mechanism (authenticate to web interface, download config XML). For now, `get_config()` remains SSH-only.
+Investigated extensively — walked the entire Hirschmann enterprise OID tree (17,132 OIDs) and found no config XML or text blob available via SNMP. The running-config as a single retrievable object does not exist in any standard or private MIB. For now, `get_config()` remains SSH-only. See HTTPS config transfer below — that's the path forward.
+

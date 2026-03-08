@@ -84,6 +84,12 @@ from napalm_hios.snmp_hios import (
     OID_hm2NetDHCPClientId, OID_hm2NetDHCPClientLeaseTime,
     OID_hm2NetDHCPClientConfigLoad,
     OID_hm2NetIPv6AdminStatus, OID_hm2NetIPv6ConfigProtocol,
+    OID_hm2FMServerUserName, OID_hm2FMServerPassword,
+    OID_hm2FMConfigRemoteSaveAdminStatus,
+    OID_hm2FMConfigRemoteSaveDestination,
+    OID_hm2FMConfigRemoteSaveUsername,
+    OID_hm2FMConfigRemoteSavePassword,
+    OID_hm2FMActionSourceData, OID_hm2FMActionDestinationData,
 )
 from napalm.base.exceptions import ConnectionException
 
@@ -2843,6 +2849,160 @@ class TestSNMPHIOS(unittest.TestCase):
         """Rejects out-of-range VLAN."""
         with self.assertRaises(ValueError):
             self.snmp.set_management(vlan_id=0)
+
+
+class TestSNMPConfigRemote(unittest.TestCase):
+    """Test SNMP set_snmp_information, get_config_remote, set_config_remote."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    # --- set_snmp_information ---
+
+    def test_set_snmp_information_hostname(self):
+        """SET sysName only."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set), \
+             patch.object(self.snmp, 'get_snmp_information',
+                          return_value={'chassis_id': 'TEST', 'contact': '',
+                                        'location': '', 'community': {}}):
+            result = self.snmp.set_snmp_information(hostname='TEST')
+            self.assertEqual(len(set_calls), 1)
+            self.assertIn(OID_sysName, set_calls[0][0])
+
+    def test_set_snmp_information_all(self):
+        """SET sysName + sysContact + sysLocation."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set), \
+             patch.object(self.snmp, 'get_snmp_information',
+                          return_value={'chassis_id': 'H', 'contact': 'C',
+                                        'location': 'L', 'community': {}}):
+            self.snmp.set_snmp_information(
+                hostname='H', contact='C', location='L')
+            self.assertEqual(len(set_calls), 3)
+            oids = [c[0] for c in set_calls]
+            self.assertTrue(any(OID_sysName in o for o in oids))
+            self.assertTrue(any(OID_sysContact in o for o in oids))
+            self.assertTrue(any(OID_sysLocation in o for o in oids))
+
+    def test_set_snmp_information_no_args(self):
+        """No args returns None without SET."""
+        result = self.snmp.set_snmp_information()
+        self.assertIsNone(result)
+
+    # --- get_config_remote ---
+
+    def test_get_config_remote(self):
+        """Parse remote backup settings from SNMP scalars."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2FMServerUserName: 'admin',
+                OID_hm2FMConfigRemoteSaveAdminStatus: 1,
+                OID_hm2FMConfigRemoteSaveDestination:
+                    'tftp://10.2.1.4/test.xml',
+                OID_hm2FMConfigRemoteSaveUsername: 'backup',
+            }
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_config_remote()
+            self.assertEqual(result['server_username'], 'admin')
+            self.assertTrue(result['auto_backup']['enabled'])
+            self.assertEqual(result['auto_backup']['destination'],
+                             'tftp://10.2.1.4/test.xml')
+            self.assertEqual(result['auto_backup']['username'], 'backup')
+
+    def test_get_config_remote_disabled(self):
+        """Auto-backup disabled."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2FMServerUserName: '',
+                OID_hm2FMConfigRemoteSaveAdminStatus: 2,
+                OID_hm2FMConfigRemoteSaveDestination: '',
+                OID_hm2FMConfigRemoteSaveUsername: '',
+            }
+
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_config_remote()
+            self.assertFalse(result['auto_backup']['enabled'])
+
+    # --- set_config_remote ---
+
+    def test_set_config_remote_auto_backup(self):
+        """Set auto-backup URL and enable."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, str(val)))
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set), \
+             patch.object(self.snmp, 'get_config_remote',
+                          return_value={'server_username': '',
+                                        'auto_backup': {'enabled': True,
+                                                         'destination': 'x',
+                                                         'username': ''}}):
+            self.snmp.set_config_remote(
+                auto_backup=True,
+                auto_backup_url='tftp://10.2.1.4/test.xml')
+            oids_set = [c[0] for c in set_calls]
+            self.assertTrue(any(
+                OID_hm2FMConfigRemoteSaveAdminStatus in o for o in oids_set))
+            self.assertTrue(any(
+                OID_hm2FMConfigRemoteSaveDestination in o for o in oids_set))
+
+    def test_set_config_remote_server_creds(self):
+        """Set server username and password."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, str(val)))
+
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set), \
+             patch.object(self.snmp, 'get_config_remote',
+                          return_value={'server_username': 'admin',
+                                        'auto_backup': {'enabled': False,
+                                                         'destination': '',
+                                                         'username': ''}}):
+            self.snmp.set_config_remote(username='admin', password='secret')
+            oids_set = [c[0] for c in set_calls]
+            self.assertTrue(any(
+                OID_hm2FMServerUserName in o for o in oids_set))
+            self.assertTrue(any(
+                OID_hm2FMServerPassword in o for o in oids_set))
+
+    # --- _build_bp_to_name ---
+
+    def test_build_bp_to_name(self):
+        """Bridge-port → interface name mapping."""
+        ifmap = {'1': '1/1', '2': '1/2', '5': '1/5'}
+        async def mock_walk(oid, engine):
+            return {'1': 1, '2': 2, '5': 5}
+
+        with patch.object(self.snmp, '_walk', side_effect=mock_walk):
+            result = asyncio.run(
+                self.snmp._build_bp_to_name(ifmap, engine=None))
+            self.assertEqual(result['1'], '1/1')
+            self.assertEqual(result['2'], '1/2')
+            self.assertEqual(result['5'], '1/5')
+
+    def test_build_bp_to_name_unknown_ifindex(self):
+        """Unknown ifindex gets fallback name."""
+        ifmap = {'1': '1/1'}
+        async def mock_walk(oid, engine):
+            return {'1': 1, '2': 99}  # 99 not in ifmap
+
+        with patch.object(self.snmp, '_walk', side_effect=mock_walk):
+            result = asyncio.run(
+                self.snmp._build_bp_to_name(ifmap, engine=None))
+            self.assertEqual(result['1'], '1/1')
+            self.assertEqual(result['2'], 'if99')
 
 
 class TestEncodePortlist(unittest.TestCase):

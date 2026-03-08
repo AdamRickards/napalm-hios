@@ -116,6 +116,7 @@ class MOPSClient:
             "Accept-Encoding": "gzip",
         })
         self._message_id = 0
+        self._session_key = None
 
     def __enter__(self):
         return self
@@ -125,6 +126,44 @@ class MOPSClient:
 
     def close(self):
         self.session.close()
+
+    def _get_session_key(self):
+        """Get MOPS session key via /mops_login.
+
+        Required for download/upload on HiOS 10.x (uses Authorization: Mops).
+        Falls back silently if login endpoint is unavailable (HiOS 9.x uses Basic).
+
+        Uses a separate session without HTTP Basic auth — the /mops_login
+        endpoint rejects Basic and expects credentials in the XML body.
+        """
+        if self._session_key:
+            return self._session_key
+        user, pwd = self.session.auth
+        payload = (
+            "<mops-auth><login>"
+            "<app-name>webif</app-name>"
+            "<credentials>"
+            f"<user>{user}</user>"
+            f"<password>{pwd}</password>"
+            "</credentials>"
+            "</login></mops-auth>"
+        )
+        try:
+            login_session = requests.Session()
+            login_session.verify = False
+            login_session.headers.update({"Content-Type": "application/xml"})
+            r = login_session.post(
+                f"https://{self.host}:{self.port}/mops_login",
+                data=payload, timeout=self.timeout)
+            login_session.close()
+            if r.status_code == 200 and "<session-key>" in r.text:
+                import re
+                m = re.search(r'<session-key>([^<]+)</session-key>', r.text)
+                if m:
+                    self._session_key = m.group(1)
+        except requests.exceptions.RequestException:
+            pass
+        return self._session_key
 
     def _next_id(self):
         self._message_id += 1
@@ -505,6 +544,72 @@ class MOPSClient:
                             "hm2FMActionResult", "hm2FMActionResultText"])
         return entries[0] if entries else {}
 
+    def _wait_action_idle(self, timeout=120):
+        """Wait for the action table to be idle. Returns status dict."""
+        import time
+        entries = None
+        elapsed = 0
+        interval = 10
+        while elapsed < timeout:
+            time.sleep(interval)
+            elapsed += interval
+            entries = self.get(
+                "HM2-FILEMGMT-MIB", "hm2FileMgmtActionGroup",
+                ["hm2FMActionStatus", "hm2FMActionResult",
+                 "hm2FMActionResultText"],
+                decode_strings=False)
+            if not entries:
+                return {}
+            if entries[0].get("hm2FMActionStatus") != "2":  # not running
+                return entries[0]
+        return entries[0] if entries else {}
+
+    def config_transfer(self, action, server_url, source_type, dest_type,
+                        source_data='', dest_data=''):
+        """Transfer config via TFTP using the action table copy engine.
+
+        Args:
+            action: 'pull' (server→device) or 'push' (device→server)
+            server_url: TFTP URL (e.g. 'tftp://192.168.4.3/config.xml')
+            source_type: '2'=nvm, '3'=envm, '20'=server
+            dest_type: '2'=nvm, '3'=envm, '20'=server
+            source_data: profile name or URL for source
+            dest_data: profile name or URL for destination
+
+        Returns: dict with action result fields
+        """
+        # Step 0: Wait for any previous action to finish
+        self._wait_action_idle()
+
+        # Step 1: Read the activation key
+        xml = self._build_get_request([
+            ("HM2-FILEMGMT-MIB", "hm2FileMgmtActionGroup",
+             ["hm2FMActionActivateKey"])
+        ])
+        response = self._send(xml)
+        parsed = self._parse_response(response, decode_strings=False)
+        entries = parsed["mibs"]["HM2-FILEMGMT-MIB"]["hm2FileMgmtActionGroup"]
+        key = entries[0]["hm2FMActionActivateKey"]
+
+        # Step 2: Set source/dest data (DisplayString — needs hex encoding)
+        self.set("HM2-FILEMGMT-MIB", "hm2FileMgmtActionGroup", {
+            "hm2FMActionSourceData": encode_string(source_data),
+            "hm2FMActionDestinationData": encode_string(dest_data),
+        })
+
+        # Step 3: Trigger the copy
+        self.set_indexed("HM2-FILEMGMT-MIB", "hm2FMActionEntry",
+            index={
+                "hm2FMActionType": "2",            # copy
+                "hm2FMActionItemType": "10",        # config
+                "hm2FMActionSourceType": source_type,
+                "hm2FMActionDestinationType": dest_type,
+            },
+            values={"hm2FMActionActivate": key})
+
+        # Step 4: Poll until idle (up to 60s for TFTP over slow links)
+        return self._wait_action_idle(timeout=60)
+
     def nvm_state(self):
         """Check if running config is saved.
 
@@ -821,3 +926,71 @@ class MOPSClient:
             raise ConnectionException(
                 f"MOPS probe on {self.host}: sysDescr not returned")
         return entries[0]["sysDescr"]
+
+    def _config_auth_headers(self):
+        """Build auth headers for download/upload endpoints.
+
+        HiOS 10.x requires Authorization: Mops <session-key>.
+        HiOS 9.x accepts Basic auth (no extra headers needed).
+        """
+        key = self._get_session_key()
+        if key:
+            return {'Authorization': f'Mops {key}'}
+        return {}
+
+    def download_config(self, profile, source='nvm'):
+        """Download config XML from the device.
+
+        Args:
+            profile: profile name (from get_profiles)
+            source: 'nvm' or 'envm'
+
+        Returns:
+            Config XML as string.
+        """
+        url = (f"https://{self.host}:{self.port}/download.html"
+               f"?filetype=config&source={source}&profile={profile}")
+        headers = self._config_auth_headers()
+        try:
+            # Use auth=() to suppress session.auth (Basic) when using Mops key
+            auth = () if 'Authorization' in headers else None
+            r = self.session.get(url, timeout=self.timeout, headers=headers,
+                                auth=auth)
+        except requests.exceptions.RequestException as e:
+            raise ConnectionException(
+                f"Config download failed on {self.host}: {e}")
+        if r.status_code != 200:
+            raise ConnectionException(
+                f"Config download HTTP {r.status_code} from {self.host}")
+        return r.text
+
+    def upload_config(self, xml_data, profile, destination='nvm'):
+        """Upload config XML to the device.
+
+        Args:
+            xml_data: config XML string
+            profile: target profile name
+            destination: 'nvm' or 'envm'
+
+        Returns:
+            True on success.
+        """
+        url = (f"https://{self.host}:{self.port}/upload.html"
+               f"?filetype=config&destination={destination}&profile={profile}")
+        headers = self._config_auth_headers()
+        try:
+            auth = () if 'Authorization' in headers else None
+            r = self.session.post(
+                url,
+                files={'file': ('config.xml', xml_data, 'text/xml')},
+                headers=headers,
+                auth=auth,
+                timeout=self.timeout,
+            )
+        except requests.exceptions.RequestException as e:
+            raise ConnectionException(
+                f"Config upload failed on {self.host}: {e}")
+        if r.status_code != 200:
+            raise ConnectionException(
+                f"Config upload HTTP {r.status_code} from {self.host}")
+        return True
