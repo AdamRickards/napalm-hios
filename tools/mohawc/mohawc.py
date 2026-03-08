@@ -20,6 +20,7 @@ Usage:
     python mohawc.py delete --index 3
     python mohawc.py download --profile CLAMPS -o config.xml
     python mohawc.py upload config.xml --name pre-upgrade
+    python mohawc.py snapshot --name FAT
 """
 
 import sys
@@ -185,6 +186,16 @@ def parse_arguments():
                        help='profile name (default: active profile)')
     p_dl.add_argument('-o', '--output', default=None,
                        help='output file (default: stdout)')
+
+    # snapshot
+    p_snap = subparsers.add_parser('snapshot',
+                                    help='named backup of active NVM profile (MOPS-only)')
+    p_snap.add_argument('--name', required=True,
+                         help='snapshot name (e.g. FAT, pre-upgrade)')
+    p_snap.add_argument('--yes', action='store_true',
+                         help='skip confirmation prompt')
+    p_snap.add_argument('--force', action='store_true',
+                         help='snapshot even if config is unsaved')
 
     # upload
     p_ul = subparsers.add_parser('upload',
@@ -1120,6 +1131,33 @@ def worker_save_rollback(device, ip, rollback_name):
         return ip, 'FAIL', str(e)
 
 
+def worker_snapshot(device, ip, snapshot_name):
+    """Copy active NVM profile to a new named profile. No save, no restart."""
+    try:
+        profiles = device.get_profiles()
+        active = [p for p in profiles if p.get('active')]
+        if not active:
+            return ip, 'FAIL', 'no active profile found'
+        active_name = active[0]['name']
+
+        # Avoid collisions
+        existing_names = {p['name'] for p in profiles}
+        name = snapshot_name
+        if name in existing_names:
+            n = 1
+            while f'{snapshot_name}-{n}' in existing_names:
+                n += 1
+            name = f'{snapshot_name}-{n}'
+
+        # Download active NVM config, upload as snapshot
+        nvm_cfg = device.get_config(profile=active_name, source='nvm')
+        device.load_config(nvm_cfg['running'], profile=name, destination='nvm')
+
+        return ip, 'OK', {'active': active_name, 'snapshot': name}
+    except Exception as e:
+        return ip, 'FAIL', str(e)
+
+
 # ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
@@ -1536,6 +1574,76 @@ def cmd_save_rollback(args, config, driver):
         active = data['active']
         print(f"\n  {label:<17s}[SAVED] rollback profile: '{rollback}'")
         print(f"    Running config saved to '{active}'")
+
+    close_all(connections)
+    return sum(1 for s, _ in results.values() if s == 'OK')
+
+
+def cmd_snapshot(args, config, driver):
+    """Snapshot active NVM profile under a new name."""
+    if config['protocol'] != 'mops':
+        print("\n  ERROR: snapshot requires MOPS protocol "
+              "(HTTPS config download/upload)\n", file=sys.stderr)
+        sys.exit(1)
+
+    snapshot_name = args.name
+
+    if not is_valid_profile_name(snapshot_name):
+        print(f"\n  ERROR: invalid profile name '{snapshot_name}' — "
+              f"use letters, numbers, hyphens, underscores only\n", file=sys.stderr)
+        sys.exit(1)
+
+    if not args.yes:
+        print(f"\n  Action: Snapshot active NVM profile as '{snapshot_name}'")
+        print(f"  Devices: {', '.join(config['devices'])}")
+        print(f"\n  Type 'yes' to continue: ", end='', flush=True)
+        confirm = input().strip()
+        if confirm != 'yes':
+            print("  Aborted.\n")
+            return 0
+
+    connections = connect_all(driver, config)
+    if not connections:
+        return 0
+
+    # Refuse if unsaved changes unless --force
+    if not args.force:
+        unsaved = []
+        for ip, device in connections.items():
+            try:
+                cs = device.get_config_status()
+                if not cs.get('saved', True):
+                    unsaved.append(ip)
+            except Exception:
+                pass
+        if unsaved:
+            for ip in unsaved:
+                print(f"\n  ERROR: {display_name(ip)} has unsaved changes")
+            print(f"\n  Snapshot captures NVM, not running config."
+                  f"\n  Save first (mohawc save) or use --force to snapshot anyway.\n",
+                  file=sys.stderr)
+            close_all(connections)
+            sys.exit(1)
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(connections)) as pool:
+        futures = {
+            pool.submit(worker_snapshot, device, ip, snapshot_name): ip
+            for ip, device in connections.items()
+        }
+        for future in as_completed(futures):
+            ip, status, data = future.result()
+            results[ip] = (status, data)
+
+    for ip in config['devices']:
+        if ip not in results:
+            continue
+        status, data = results[ip]
+        label = display_name(ip)
+        if status == 'FAIL':
+            print(f"\n  {label:<17s}[FAIL] {data}")
+        else:
+            print(f"\n  {label:<17s}[OK  ] '{data['active']}' → '{data['snapshot']}'")
 
     close_all(connections)
     return sum(1 for s, _ in results.values() if s == 'OK')
@@ -2033,6 +2141,7 @@ def interactive_mode(args, config, driver):
             ops.append(('Save',                 'save'))
             if is_mops:
                 ops.append(('Save with rollback',   'save-rollback'))
+                ops.append(('Snapshot (named backup)', 'snapshot'))
             ops.append(('Activate profile',     'activate'))
             ops.append(('Delete profile',       'delete'))
             ops.append(('Download config',      'download'))
@@ -2142,6 +2251,47 @@ def interactive_mode(args, config, driver):
                         print(f"  [FAIL] {label:<17s}{data}")
                     else:
                         print(f"  [OK  ] {label:<17s}rollback: '{data['rollback']}'")
+                print(f'\n  {DM}Refreshing...{RS}')
+                state = refresh_state(connections)
+
+            # ── SNAPSHOT ──
+            elif op == 'snapshot':
+                # Check for unsaved changes — offer to save first
+                unsaved = [ip for ip in config['devices']
+                           if not state.get(ip, {}).get('config_status', {}).get('saved', True)
+                           and 'error' not in state.get(ip, {})]
+                if unsaved:
+                    for ip in unsaved:
+                        print(f"  {YL}{display_name(ip)} has unsaved changes{RS}")
+                    print(f"\n  {DM}Snapshot captures NVM, not running config.{RS}")
+                    if yesno('Save to NVM first?', default=True):
+                        print()
+                        for ip in unsaved:
+                            device = connections.get(ip)
+                            if device:
+                                _, tag, msg = worker_save(device, ip)
+                                print(f"  [{tag:4s}] {display_name(ip):<17s}{msg}")
+                        state = refresh_state(connections)
+                print()
+                name = ask('Snapshot name (e.g. FAT, pre-upgrade)')
+                if not name:
+                    continue
+                if not is_valid_profile_name(name):
+                    print(f"  {YL}Invalid name — use letters, numbers, hyphens, underscores only.{RS}")
+                    continue
+                if not yesno(f"Snapshot active config as '{name}'?"):
+                    continue
+                print()
+                for ip in config['devices']:
+                    device = connections.get(ip)
+                    if not device:
+                        continue
+                    _, tag, data = worker_snapshot(device, ip, name)
+                    label = display_name(ip)
+                    if tag == 'FAIL':
+                        print(f"  {YL}[FAIL]{RS} {label:<17s}{data}")
+                    else:
+                        print(f"  {GR}[OK  ]{RS} {label:<17s}'{data['active']}' → '{data['snapshot']}'")
                 print(f'\n  {DM}Refreshing...{RS}')
                 state = refresh_state(connections)
 
@@ -2617,6 +2767,7 @@ def main():
             'delete': cmd_delete,
             'download': cmd_download,
             'upload': cmd_upload,
+            'snapshot': cmd_snapshot,
         }
 
         handler = dispatch[args.command]

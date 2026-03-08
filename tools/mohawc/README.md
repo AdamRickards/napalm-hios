@@ -54,10 +54,13 @@ Menu adapts to protocol — MOPS-only items (diff, save-rollback) are hidden whe
 | 5 | Save with rollback | Mutation (MOPS) |
 | 6 | Activate profile | Mutation (warm restart) |
 | 7 | Delete profile | Mutation |
-| 8 | HiDiscovery | Mutation |
-| 9 | Reset | Mutation (destructive) |
-| 10 | Onboard | Mutation |
-| 11 | Quit | — |
+| 8 | Download config | Read-only |
+| 9 | Upload config | Mutation (MOPS) |
+| 10 | Snapshot (named backup) | Mutation (MOPS) |
+| 11 | HiDiscovery | Mutation |
+| 12 | Reset | Mutation (destructive) |
+| 13 | Onboard | Mutation |
+| q | Quit | — |
 
 Profile/config state is refreshed after every mutation. Activate handles the connection drop and reconnects on single-device sessions.
 
@@ -114,6 +117,18 @@ python mohawc.py -d 192.168.1.4 save-rollback
 python mohawc.py save-rollback --name pre-upgrade --yes
 ```
 
+### `snapshot`
+
+Named backup of the active NVM profile — copies it to a new profile without saving running config or restarting. MOPS-only. Avoids name collisions automatically.
+
+Fails if any device has unsaved changes (snapshot captures NVM, not running config). Use `--force` to override, or save first with `mohawc save`. In interactive mode, MOHAWC offers to save before snapshotting.
+
+```bash
+python mohawc.py snapshot --name FAT
+python mohawc.py snapshot --name pre-upgrade --yes
+python mohawc.py snapshot --name FAT --force    # snapshot even if unsaved
+```
+
 ### `activate`
 
 Activate a config profile by index or name. Triggers a warm restart — the device reboots. Requires confirmation unless `--yes`.
@@ -142,6 +157,15 @@ python mohawc.py -d 192.168.1.4 download --profile CLAMPS -o config.xml
 ```
 
 Multi-device downloads append `_IP` to the filename (e.g. `config_192_168_1_4.xml`).
+
+### `upload`
+
+Upload a config XML file to a device as a new NVM profile. MOPS-only. Defaults the profile name to the filename.
+
+```bash
+python mohawc.py -d 192.168.1.4 upload config.xml
+python mohawc.py -d 192.168.1.4 upload config.xml --name pre-upgrade --yes
+```
 
 ### `onboard`
 
