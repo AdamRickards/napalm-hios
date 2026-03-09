@@ -277,6 +277,31 @@ cli_20260309_143022/
 
 In interactive mode: Status → CLI command (loops until blank input, no folder output).
 
+## Protocol Support
+
+| Subcommand | MOPS | SNMP | SSH | Offline | Notes |
+|------------|------|------|-----|---------|-------|
+| `status` | Yes | Yes | Yes | Yes | SNMP always reports factory-default=No |
+| `profiles` | Yes | Yes | Yes | Yes | |
+| `diff` | Yes | — | — | — | Requires HTTPS config download |
+| `save` | Yes | Yes | Yes | Yes | Offline = write XML to disk |
+| `save-rollback` | Yes | — | — | — | Requires profile upload |
+| `snapshot` | Yes | — | — | — | Requires profile upload |
+| `activate` | Yes | Yes | Yes | Yes | Triggers warm restart |
+| `delete` | Yes | Yes | Yes | Yes | |
+| `download` | Yes | Yes | Yes | Yes | |
+| `upload` | Yes | — | — | — | Requires config upload |
+| `onboard` | Yes | — | Yes | — | SNMP gated on factory-default |
+| `hidiscovery` | Yes | Yes | Yes | Yes | |
+| `reset` | Yes | Yes | Yes | — | |
+| `system` | Yes | Yes | Yes | Yes | |
+| `management` | Yes | Yes | Yes | Yes | |
+| `auto-backup` | Yes | Yes | Yes | — | Push/pull need live network |
+| `ping` | Yes | Yes | Yes | — | SSH fallback (any protocol) |
+| `cli` | Yes | Yes | Yes | — | SSH fallback (any protocol) |
+
+Interactive menu auto-hides unavailable items based on the active protocol.
+
 ## Global Arguments
 
 | Flag | Description |
@@ -369,3 +394,8 @@ Global settings `save = true` and `yes = true` can also be set in the config fil
 ## Logs
 
 Written to `logs/mohawc_YYYYMMDD_HHMMSS.log` in the script directory. Always captured regardless of `--silent`.
+
+## See Also
+
+- [LOGIC.md](LOGIC.md) — Decision logic: reset ordering, profile management, config diff, HiDiscovery mapping
+- [napalm-hios](https://github.com/adamr/napalm-hios) — NAPALM driver for HiOS

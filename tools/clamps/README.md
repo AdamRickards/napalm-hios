@@ -385,6 +385,24 @@ deploy, test, power cycle to undo.
 
 Set `save true` to persist configs after verifying the ring is healthy.
 
+## Protocol Support
+
+| Feature | MOPS | SNMP | SSH | Offline | Notes |
+|---------|------|------|-----|---------|-------|
+| Deploy (MRP + edge) | Yes | Yes | Yes | Yes | |
+| Undeploy | Yes | Yes | Yes | Yes | |
+| Migrate edge | Yes | Yes | Yes | — | Requires live ring state |
+| Verify ring | Yes | Yes | Yes | — | Requires live ring |
+| `--export` | Yes | Yes | Yes | Yes | |
+| `--import` | Yes | Yes | Yes | Yes | |
+| Sub-rings | Yes | Yes | Yes | Yes | |
+| Edge: `rstp-full` | Yes | Yes | Yes | Yes | All SW levels |
+| Edge: `loop` | Yes | Yes | Yes | Yes | L2A+ only (not L2S) |
+| Edge: `rstp` | Yes | Yes | Yes | Yes | All SW levels |
+| Storm control | Yes | Yes | Yes | Yes | L2A+ (silently skipped on L2S) |
+
+Offline mode requires `napalm-hios >= 1.14.0`. Auto-detects when device paths are `.xml` files. Ring verification and migrate-edge are skipped offline (no live ring to verify or migrate).
+
 ## Files
 
 | File | Purpose |

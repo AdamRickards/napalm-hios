@@ -228,9 +228,28 @@ protocol = mops
 
 CLI args (`-u`, `-p`, `--protocol`) override config file values. With `-d`, no config file is needed.
 
+## Protocol Support
+
+| Feature | MOPS | SNMP | SSH | Offline | Notes |
+|---------|------|------|-----|---------|-------|
+| `vlan list` | Yes | Yes | Yes | Yes | |
+| `vlan create` | Yes | Yes | Yes | Yes | |
+| `vlan delete` | Yes | Yes | Yes | Yes | |
+| `vlan rename` | Yes | Yes | Yes | Yes | |
+| `access` | Yes | Yes | Yes | Yes | Staged on MOPS/Offline |
+| `trunk` | Yes | Yes | Yes | Yes | Staged on MOPS/Offline |
+| `auto-trunk` | Yes | Yes | Yes | — | Requires live LLDP |
+| `qos` | Yes | Yes | Yes | Yes | `napalm-hios >= 1.13.0` |
+| `--audit` | Yes | Yes | Yes | — | Requires live LLDP |
+| `--names` | Yes | Yes | Yes | Yes | |
+| `--export` | Yes | Yes | Yes | Yes | QoS columns need `>= 1.13.0` |
+| `--import` | Yes | Yes | Yes | Yes | Staged on MOPS/Offline |
+
+Offline mode requires `napalm-hios >= 1.14.0`. Auto-detects when all device paths are `.xml` files.
+
 ## MOPS Staging
 
-When using MOPS protocol, port operations (`access`, `trunk`, `auto-trunk`) use staging to batch egress mutations into a single atomic POST per device. VLAN CRUD (`create`/`delete`/`rename`) always fires immediately. PVID changes (`set_vlan_ingress`) are a separate call after staging commits — different MIB table.
+When using MOPS or Offline protocol, port operations (`access`, `trunk`, `auto-trunk`, `import`) use staging to batch egress mutations into a single atomic POST per device. VLAN CRUD (`create`/`delete`/`rename`) always fires immediately. PVID and QoS changes are separate calls after staging commits — different MIB tables.
 
 ## Example Output
 
@@ -264,3 +283,8 @@ When using MOPS protocol, port operations (`access`, `trunk`, `auto-trunk`) use 
 ## Logs
 
 Written to `logs/viktor_YYYYMMDD_HHMMSS.log` in the script directory.
+
+## See Also
+
+- [LOGIC.md](LOGIC.md) — Decision logic: access mode ordering, MOPS staging, ring selector, LLDP link discovery, audit checks
+- [napalm-hios](https://github.com/adamr/napalm-hios) — NAPALM driver for HiOS

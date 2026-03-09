@@ -13,6 +13,11 @@ pip install -r requirements.txt
 
 ## Quick Start
 
+Two access patterns (no interactive mode — AARON is a single-run scan):
+
+1. **Config file** — `python aaron.py` — fleet-scale batch scan
+2. **CLI overrides** — `python aaron.py -c site.cfg --debug` — custom config
+
 ```bash
 python aaron.py                    # CSV output (default)
 python aaron.py -j                 # JSON output
@@ -124,6 +129,21 @@ hide_uplinks = false
 | `lldp_neighbor_name` | LLDP neighbour hostname |
 | `lldp_neighbor_port` | LLDP neighbour port description |
 
+## Protocol Support
+
+Read-only tool — all features work with all live protocols. No offline mode (requires live LLDP, MAC table, and ARP data).
+
+| Feature | MOPS | SNMP | SSH | Offline |
+|---------|------|------|-----|---------|
+| Port classification | Yes | Yes | Yes | — |
+| ARP resolution (local cache) | Yes | Yes | Yes | — |
+| ARP resolution (gateway) | Yes | Yes | Yes | — |
+
 ## Logs
 
 Written to `logs/aaron_YYYYMMDD_HHMMSS.log` in the script directory.
+
+## See Also
+
+- [LOGIC.md](LOGIC.md) — Decision logic: port classification, ARP resolution, cross-device correlation
+- [napalm-hios](https://github.com/adamr/napalm-hios) — NAPALM driver for HiOS
