@@ -28,6 +28,8 @@ Usage:
 
 import sys
 import os
+import re
+import csv
 import logging
 import ipaddress
 import argparse
@@ -37,6 +39,27 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
 EDGE_MODES = ('loop', 'rstp-full', 'rstp')
+
+PROTECTION_CSV_HEADERS = [
+    'device_ip', 'hostname', 'port',
+    'rstp_enabled', 'rstp_edge', 'rstp_auto_edge', 'rstp_priority', 'rstp_path_cost',
+    'rstp_root_guard', 'rstp_loop_guard', 'rstp_tcn_guard', 'rstp_bpdu_filter', 'rstp_bpdu_flood',
+    'loop_enabled', 'loop_mode', 'loop_action',
+    'storm_unit', 'storm_bc_enabled', 'storm_bc_threshold',
+    'storm_mc_enabled', 'storm_mc_threshold',
+    'storm_uc_enabled', 'storm_uc_threshold',
+    'auto_disable_timer',
+]
+
+
+def natural_sort_key(interface: str):
+    """Sort key that handles '1/1', '1/10', '2/3' naturally."""
+    return [int(x) if x.isdigit() else x for x in re.split(r'(\d+)', interface)]
+
+
+def is_switchport(p):
+    """Filter out non-switchports (cpu/, vlan/)."""
+    return not (p.startswith('cpu/') or p.startswith('vlan/'))
 
 
 def get_resource_path(relative_path: str) -> str:
@@ -393,6 +416,12 @@ def parse_arguments():
                         help='Skip storm control deployment on edge ports')
     parser.add_argument('--verify', action='store_true',
                         help='Re-gather state after deploy to confirm changes (logged to file)')
+    parser.add_argument('--export', metavar='FILE',
+                        help='Export per-port protection config to CSV')
+    parser.add_argument('--import', metavar='FILE', dest='import_file',
+                        help='Import per-port protection config from CSV, diff + apply')
+    parser.add_argument('--save', action='store_true',
+                        help='Save config to NVM after import changes')
     return parser.parse_args()
 
 
@@ -816,7 +845,7 @@ def worker_gather_facts(device, dev, config=None, is_l2s_possible=True):
     """Thread worker: gather current state from one device.
 
     Returns: (ip, facts_dict, error_str)
-    facts_dict has keys: sw_level, mrp, rstp, auto_disable, loop_protection,
+    facts_dict has keys: sw_level, mrp, rstp, rstp_port, auto_disable, loop_protection,
                          all_ports, srm_ports
     """
     ip = dev['ip']
@@ -824,6 +853,7 @@ def worker_gather_facts(device, dev, config=None, is_l2s_possible=True):
         'sw_level': 'unknown',
         'mrp': None,
         'rstp': None,
+        'rstp_port': {},
         'auto_disable': None,
         'loop_protection': None,
         'all_ports': [],
@@ -841,6 +871,11 @@ def worker_gather_facts(device, dev, config=None, is_l2s_possible=True):
 
         result['mrp'] = device.get_mrp()
         result['rstp'] = device.get_rstp()
+
+        try:
+            result['rstp_port'] = device.get_rstp_port()
+        except Exception as e:
+            logging.warning(f"[{ip}] get_rstp_port failed: {e}")
 
         # Discover sub-ring ports from live device state
         try:
@@ -1638,6 +1673,323 @@ def deploy_edge_protection(config, connections, device_facts, l2s_devices):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: --export / --import
+# ---------------------------------------------------------------------------
+
+def _bool_csv(val):
+    """Format a bool for CSV export."""
+    if val is None:
+        return ''
+    return 'true' if val else 'false'
+
+
+def cmd_export(args, config, connections):
+    """Export per-port protection config to CSV."""
+    output_file = args.export
+
+    # Gather state from all devices
+    device_facts, _ = gather_device_state(config, connections)
+
+    rows = []
+    for dev in config['devices']:
+        ip = dev['ip']
+        if ip not in device_facts:
+            continue
+        facts = device_facts[ip]
+        hostname = display_name(ip)
+
+        rstp_port = facts.get('rstp_port', {})
+        loop_prot = facts.get('loop_protection')
+        loop_ifaces = loop_prot.get('interfaces', {}) if loop_prot else {}
+        storm = facts.get('storm_control')
+        storm_ifaces = storm.get('interfaces', {}) if storm else {}
+        auto_dis = facts.get('auto_disable')
+        auto_ifaces = auto_dis.get('interfaces', {}) if auto_dis else {}
+
+        ports = facts.get('all_ports', [])
+        if not ports:
+            continue
+
+        for port in sorted(ports, key=natural_sort_key):
+            rp = rstp_port.get(port, {})
+            lp = loop_ifaces.get(port, {})
+            sp = storm_ifaces.get(port, {})
+            ad = auto_ifaces.get(port, {})
+
+            rows.append({
+                'device_ip': ip,
+                'hostname': hostname,
+                'port': port,
+                'rstp_enabled': _bool_csv(rp.get('enabled')),
+                'rstp_edge': _bool_csv(rp.get('edge_port')),
+                'rstp_auto_edge': _bool_csv(rp.get('auto_edge')),
+                'rstp_priority': rp.get('priority', ''),
+                'rstp_path_cost': rp.get('path_cost', ''),
+                'rstp_root_guard': _bool_csv(rp.get('root_guard')),
+                'rstp_loop_guard': _bool_csv(rp.get('loop_guard')),
+                'rstp_tcn_guard': _bool_csv(rp.get('tcn_guard')),
+                'rstp_bpdu_filter': _bool_csv(rp.get('bpdu_filter')),
+                'rstp_bpdu_flood': _bool_csv(rp.get('bpdu_flood')),
+                'loop_enabled': _bool_csv(lp.get('enabled')),
+                'loop_mode': lp.get('mode', ''),
+                'loop_action': lp.get('action', ''),
+                'storm_unit': sp.get('unit', ''),
+                'storm_bc_enabled': _bool_csv(sp.get('broadcast', {}).get('enabled')),
+                'storm_bc_threshold': sp.get('broadcast', {}).get('threshold', ''),
+                'storm_mc_enabled': _bool_csv(sp.get('multicast', {}).get('enabled')),
+                'storm_mc_threshold': sp.get('multicast', {}).get('threshold', ''),
+                'storm_uc_enabled': _bool_csv(sp.get('unicast', {}).get('enabled')),
+                'storm_uc_threshold': sp.get('unicast', {}).get('threshold', ''),
+                'auto_disable_timer': ad.get('timer', ''),
+            })
+
+    output_path = get_resource_path(output_file)
+    with open(output_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=PROTECTION_CSV_HEADERS)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    log_print(f"\n  Exported {len(rows)} rows to {output_file}")
+
+
+def _parse_csv_bool(val):
+    """Parse a CSV bool value. Returns True/False/None (empty = no change)."""
+    val = val.strip().lower()
+    if not val:
+        return None
+    return val in ('true', '1', 'yes')
+
+
+def _parse_csv_int(val):
+    """Parse a CSV int value. Returns int or None (empty = no change)."""
+    val = val.strip()
+    if not val:
+        return None
+    return int(val)
+
+
+def cmd_import(args, config, connections):
+    """Import per-port protection config from CSV, diff against current, apply changes."""
+    import_file = args.import_file
+    import_path = get_resource_path(import_file)
+
+    if not os.path.exists(import_path):
+        log_print(f"\n  ERROR: File not found: {import_file}")
+        sys.exit(1)
+
+    with open(import_path, 'r') as f:
+        reader = csv.DictReader(f)
+        csv_rows = list(reader)
+
+    if not csv_rows:
+        log_print("\n  ERROR: CSV file is empty")
+        sys.exit(1)
+
+    # Build desired state: {ip: {port: {field: value}}}
+    desired = {}
+    for row in csv_rows:
+        ip = row['device_ip']
+        port = row['port']
+        d = {}
+        # RSTP
+        d['rstp_enabled'] = _parse_csv_bool(row.get('rstp_enabled', ''))
+        d['rstp_edge'] = _parse_csv_bool(row.get('rstp_edge', ''))
+        d['rstp_auto_edge'] = _parse_csv_bool(row.get('rstp_auto_edge', ''))
+        d['rstp_priority'] = _parse_csv_int(row.get('rstp_priority', ''))
+        d['rstp_path_cost'] = _parse_csv_int(row.get('rstp_path_cost', ''))
+        d['rstp_root_guard'] = _parse_csv_bool(row.get('rstp_root_guard', ''))
+        d['rstp_loop_guard'] = _parse_csv_bool(row.get('rstp_loop_guard', ''))
+        d['rstp_tcn_guard'] = _parse_csv_bool(row.get('rstp_tcn_guard', ''))
+        d['rstp_bpdu_filter'] = _parse_csv_bool(row.get('rstp_bpdu_filter', ''))
+        d['rstp_bpdu_flood'] = _parse_csv_bool(row.get('rstp_bpdu_flood', ''))
+        # Loop protection
+        d['loop_enabled'] = _parse_csv_bool(row.get('loop_enabled', ''))
+        d['loop_mode'] = row.get('loop_mode', '').strip() or None
+        d['loop_action'] = row.get('loop_action', '').strip() or None
+        # Storm control
+        d['storm_unit'] = row.get('storm_unit', '').strip() or None
+        d['storm_bc_enabled'] = _parse_csv_bool(row.get('storm_bc_enabled', ''))
+        d['storm_bc_threshold'] = _parse_csv_int(row.get('storm_bc_threshold', ''))
+        d['storm_mc_enabled'] = _parse_csv_bool(row.get('storm_mc_enabled', ''))
+        d['storm_mc_threshold'] = _parse_csv_int(row.get('storm_mc_threshold', ''))
+        d['storm_uc_enabled'] = _parse_csv_bool(row.get('storm_uc_enabled', ''))
+        d['storm_uc_threshold'] = _parse_csv_int(row.get('storm_uc_threshold', ''))
+        # Auto-disable
+        d['auto_disable_timer'] = _parse_csv_int(row.get('auto_disable_timer', ''))
+        desired.setdefault(ip, {})[port] = d
+
+    # Gather live state
+    device_facts, _ = gather_device_state(config, connections)
+
+    # Build current state in same format
+    current = {}
+    for ip, facts in device_facts.items():
+        rstp_port = facts.get('rstp_port', {})
+        loop_prot = facts.get('loop_protection')
+        loop_ifaces = loop_prot.get('interfaces', {}) if loop_prot else {}
+        storm = facts.get('storm_control')
+        storm_ifaces = storm.get('interfaces', {}) if storm else {}
+        auto_dis = facts.get('auto_disable')
+        auto_ifaces = auto_dis.get('interfaces', {}) if auto_dis else {}
+
+        for port in facts.get('all_ports', []):
+            rp = rstp_port.get(port, {})
+            lp = loop_ifaces.get(port, {})
+            sp = storm_ifaces.get(port, {})
+            ad = auto_ifaces.get(port, {})
+            current.setdefault(ip, {})[port] = {
+                'rstp_enabled': rp.get('enabled'),
+                'rstp_edge': rp.get('edge_port'),
+                'rstp_auto_edge': rp.get('auto_edge'),
+                'rstp_priority': rp.get('priority'),
+                'rstp_path_cost': rp.get('path_cost'),
+                'rstp_root_guard': rp.get('root_guard'),
+                'rstp_loop_guard': rp.get('loop_guard'),
+                'rstp_tcn_guard': rp.get('tcn_guard'),
+                'rstp_bpdu_filter': rp.get('bpdu_filter'),
+                'rstp_bpdu_flood': rp.get('bpdu_flood'),
+                'loop_enabled': lp.get('enabled'),
+                'loop_mode': lp.get('mode'),
+                'loop_action': lp.get('action'),
+                'storm_unit': sp.get('unit'),
+                'storm_bc_enabled': sp.get('broadcast', {}).get('enabled'),
+                'storm_bc_threshold': sp.get('broadcast', {}).get('threshold'),
+                'storm_mc_enabled': sp.get('multicast', {}).get('enabled'),
+                'storm_mc_threshold': sp.get('multicast', {}).get('threshold'),
+                'storm_uc_enabled': sp.get('unicast', {}).get('enabled'),
+                'storm_uc_threshold': sp.get('unicast', {}).get('threshold'),
+                'auto_disable_timer': ad.get('timer'),
+            }
+
+    # Diff — skip None (empty CSV cell = no change)
+    changes = []  # (ip, port, field, current_val, desired_val)
+    for ip, ports in desired.items():
+        if ip not in current:
+            log_print(f"  [SKIP] {ip} — not in fleet")
+            continue
+        for port, d_state in ports.items():
+            c_state = current.get(ip, {}).get(port)
+            if not c_state:
+                log_print(f"  [SKIP] {ip} port {port} — not in current state")
+                continue
+            for field, d_val in d_state.items():
+                if d_val is None:
+                    continue
+                c_val = c_state.get(field)
+                if d_val != c_val:
+                    changes.append((ip, port, field, c_val, d_val))
+
+    if not changes:
+        log_print("\n  No changes needed — fleet matches CSV.")
+        return
+
+    log_print(f"\n  Import diff: {len(changes)} change(s)")
+    for ip, port, field, cur, des in changes:
+        log_print(f"    {display_name(ip)} {port}: {field} {cur} -> {des}")
+
+    if args.dry_run:
+        log_print("\n  [DRY RUN] No changes applied.")
+        return
+
+    # Group changes by device
+    by_device = {}
+    for ip, port, field, cur, des in changes:
+        by_device.setdefault(ip, []).append((port, field, cur, des))
+
+    use_staging = config['protocol'] in ('mops', 'offline')
+    ok_count = 0
+    fail_count = 0
+
+    for ip, device_changes in by_device.items():
+        if ip not in connections:
+            continue
+        device = connections[ip]
+
+        try:
+            # Group by setter domain
+            rstp_ports = {}  # {port: {kwarg: val}}
+            loop_ports = {}  # {port: {kwarg: val}}
+            storm_ports = {}  # {port: {kwarg: val}}
+            ad_ports = {}  # {port: timer}
+
+            for port, field, cur, des in device_changes:
+                if field.startswith('rstp_'):
+                    rstp_ports.setdefault(port, {})[field] = des
+                elif field.startswith('loop_'):
+                    loop_ports.setdefault(port, {})[field] = des
+                elif field.startswith('storm_'):
+                    storm_ports.setdefault(port, {})[field] = des
+                elif field == 'auto_disable_timer':
+                    ad_ports[port] = des
+
+            # Apply RSTP per-port
+            for port, kwargs in rstp_ports.items():
+                device.set_rstp_port(
+                    port,
+                    enabled=kwargs.get('rstp_enabled'),
+                    edge_port=kwargs.get('rstp_edge'),
+                    auto_edge=kwargs.get('rstp_auto_edge'),
+                    priority=kwargs.get('rstp_priority'),
+                    path_cost=kwargs.get('rstp_path_cost'),
+                    root_guard=kwargs.get('rstp_root_guard'),
+                    loop_guard=kwargs.get('rstp_loop_guard'),
+                    tcn_guard=kwargs.get('rstp_tcn_guard'),
+                    bpdu_filter=kwargs.get('rstp_bpdu_filter'),
+                    bpdu_flood=kwargs.get('rstp_bpdu_flood'),
+                )
+
+            # Apply loop protection per-port
+            for port, kwargs in loop_ports.items():
+                device.set_loop_protection(
+                    interface=port,
+                    enabled=kwargs.get('loop_enabled'),
+                    mode=kwargs.get('loop_mode'),
+                    action=kwargs.get('loop_action'),
+                )
+
+            # Apply storm control per-port
+            for port, kwargs in storm_ports.items():
+                device.set_storm_control(
+                    port,
+                    unit=kwargs.get('storm_unit'),
+                    broadcast_enabled=kwargs.get('storm_bc_enabled'),
+                    broadcast_threshold=kwargs.get('storm_bc_threshold'),
+                    multicast_enabled=kwargs.get('storm_mc_enabled'),
+                    multicast_threshold=kwargs.get('storm_mc_threshold'),
+                    unicast_enabled=kwargs.get('storm_uc_enabled'),
+                    unicast_threshold=kwargs.get('storm_uc_threshold'),
+                )
+
+            # Apply auto-disable per-port
+            for port, timer in ad_ports.items():
+                device.set_auto_disable(port, timer=timer)
+
+            ok_count += 1
+            n = len(device_changes)
+            log_print(f"  [OK  ] {display_name(ip)} — {n} change(s)")
+
+        except Exception as e:
+            fail_count += 1
+            log_print(f"  [FAIL] {display_name(ip)} — {e}")
+
+    log_print(f"\n  Applied: {ok_count} devices OK, {fail_count} failed")
+
+    # Save if requested
+    if args.save:
+        log_print("\n  Saving to NVM...")
+        save_ok = 0
+        for ip in by_device:
+            if ip not in connections:
+                continue
+            try:
+                connections[ip].save_config()
+                save_ok += 1
+            except Exception as e:
+                log_print(f"  [FAIL] {display_name(ip)} save: {e}")
+        log_print(f"  {save_ok}/{len(by_device)} saved")
+
+
+# ---------------------------------------------------------------------------
 # Main deploy flow
 # ---------------------------------------------------------------------------
 
@@ -1648,7 +2000,9 @@ def main():
     if args.interactive:
         return interactive_mode()
     cfg_path = get_resource_path(args.config)
-    if not os.path.exists(cfg_path) and not args.dry_run and args.migrate_edge is None:
+    if (not os.path.exists(cfg_path) and not args.dry_run
+            and args.migrate_edge is None
+            and not args.export and not args.import_file):
         return interactive_mode()
 
     # Logging setup
@@ -1691,6 +2045,46 @@ def main():
         if args.no_storm_control:
             config['storm_control'] = False
         config['verify'] = args.verify
+
+        # Route to export/import mode if requested
+        if args.export or args.import_file:
+            from napalm import get_network_driver
+            driver = get_network_driver('hios')
+
+            log_print("  Connecting...")
+            connections = {}
+            with ThreadPoolExecutor(max_workers=len(config['devices'])) as pool:
+                futures = {
+                    pool.submit(worker_connect, driver, config, dev, args.timeout): dev
+                    for dev in config['devices']
+                }
+                for future in as_completed(futures):
+                    ip, device, err = future.result()
+                    if device:
+                        connections[ip] = device
+                    else:
+                        log_print(f"  FAIL: {display_name(ip)} — {err}")
+
+            if not connections:
+                log_print("\n  FATAL: No devices reachable.\n")
+                sys.exit(1)
+
+            try:
+                if args.export:
+                    cmd_export(args, config, connections)
+                else:
+                    cmd_import(args, config, connections)
+
+                elapsed = time.time() - start_time
+                log_print(f"\n  Done in {elapsed:.1f}s")
+                log_print(f"  Log: {log_filename}\n")
+            finally:
+                for ip, device in connections.items():
+                    try:
+                        device.close()
+                    except Exception:
+                        pass
+            return
 
         # Route to migrate-edge mode if requested
         if args.migrate_edge is not None:

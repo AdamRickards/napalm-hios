@@ -455,11 +455,16 @@ def worker_gather_vlan(device, ip):
         facts = device.get_facts()
         ingress = device.get_vlan_ingress()
         egress = device.get_vlan_egress()
+        try:
+            qos = device.get_qos()
+        except Exception:
+            qos = None
         return ip, {
             'hostname': facts.get('hostname', ip),
             'interfaces': facts.get('interface_list', []),
             'ingress': ingress,
             'egress': egress,
+            'qos': qos,
         }, None
     except Exception as e:
         return ip, None, str(e)
@@ -472,12 +477,17 @@ def worker_gather_full(device, ip):
         ingress = device.get_vlan_ingress()
         egress = device.get_vlan_egress()
         lldp = device.get_lldp_neighbors_detail()
+        try:
+            qos = device.get_qos()
+        except Exception:
+            qos = None
         return ip, {
             'hostname': facts.get('hostname', ip),
             'interfaces': facts.get('interface_list', []),
             'ingress': ingress,
             'egress': egress,
             'lldp': lldp,
+            'qos': qos,
         }, None
     except Exception as e:
         return ip, None, str(e)
@@ -1315,7 +1325,8 @@ def cmd_names(args, config, connections, fleet_data):
 # Subcommand: --export
 # ---------------------------------------------------------------------------
 
-CSV_HEADERS = ['device_ip', 'hostname', 'port', 'pvid', 'tagged_vlans', 'untagged_vlans']
+CSV_HEADERS = ['device_ip', 'hostname', 'port', 'pvid', 'tagged_vlans', 'untagged_vlans',
+               'qos_trust', 'qos_pcp']
 
 
 def cmd_export(args, config, connections, fleet_data):
@@ -1347,6 +1358,14 @@ def cmd_export(args, config, connections, fleet_data):
                 elif mode == 'untagged':
                     untagged.append(vid)
 
+            qos_data = data.get('qos')
+            if qos_data:
+                port_qos = qos_data.get('interfaces', {}).get(port, {})
+                trust = port_qos.get('trust_mode', '')
+                pcp = port_qos.get('default_priority', '')
+            else:
+                trust, pcp = '', ''
+
             rows.append({
                 'device_ip': ip,
                 'hostname': hostname,
@@ -1354,6 +1373,8 @@ def cmd_export(args, config, connections, fleet_data):
                 'pvid': pvid,
                 'tagged_vlans': ','.join(str(v) for v in sorted(tagged)),
                 'untagged_vlans': ','.join(str(v) for v in sorted(untagged)),
+                'qos_trust': trust,
+                'qos_pcp': pcp,
             })
 
     output_path = get_resource_path(output_file)
@@ -1388,7 +1409,7 @@ def cmd_import(args, config, connections, fleet_data):
         print("\n  ERROR: CSV file is empty\n", file=sys.stderr)
         sys.exit(1)
 
-    # Build desired state from CSV: {ip: {port: {pvid, tagged, untagged}}}
+    # Build desired state from CSV: {ip: {port: {pvid, tagged, untagged, qos_trust, qos_pcp}}}
     desired = {}
     for row in csv_rows:
         ip = row['device_ip']
@@ -1396,8 +1417,11 @@ def cmd_import(args, config, connections, fleet_data):
         pvid = int(row['pvid'])
         tagged = set(int(v) for v in row['tagged_vlans'].split(',') if v.strip())
         untagged = set(int(v) for v in row['untagged_vlans'].split(',') if v.strip())
+        qos_trust = row.get('qos_trust', '').strip()
+        qos_pcp = row.get('qos_pcp', '').strip()
         desired.setdefault(ip, {})[port] = {
             'pvid': pvid, 'tagged': tagged, 'untagged': untagged,
+            'qos_trust': qos_trust, 'qos_pcp': qos_pcp,
         }
 
     # Build current state from fleet_data
@@ -1405,6 +1429,7 @@ def cmd_import(args, config, connections, fleet_data):
     for ip, data in fleet_data.items():
         ingress = data['ingress']
         egress = data['egress']
+        qos_data = data.get('qos')
         for port in ingress:
             if port.startswith('cpu') or port.startswith('mgmt'):
                 continue
@@ -1417,8 +1442,15 @@ def cmd_import(args, config, connections, fleet_data):
                     tagged.add(vid)
                 elif mode == 'untagged':
                     untagged.add(vid)
+            if qos_data:
+                port_qos = qos_data.get('interfaces', {}).get(port, {})
+                trust = port_qos.get('trust_mode', '')
+                pcp = str(port_qos.get('default_priority', ''))
+            else:
+                trust, pcp = '', ''
             current.setdefault(ip, {})[port] = {
                 'pvid': pvid, 'tagged': tagged, 'untagged': untagged,
+                'qos_trust': trust, 'qos_pcp': pcp,
             }
 
     # Diff
@@ -1439,6 +1471,11 @@ def cmd_import(args, config, connections, fleet_data):
                 changes.append((ip, port, 'tagged', c_state['tagged'], d_state['tagged']))
             if d_state['untagged'] != c_state['untagged']:
                 changes.append((ip, port, 'untagged', c_state['untagged'], d_state['untagged']))
+            # QoS — empty CSV cell = no change
+            if d_state['qos_trust'] and d_state['qos_trust'] != c_state.get('qos_trust', ''):
+                changes.append((ip, port, 'qos_trust', c_state.get('qos_trust', ''), d_state['qos_trust']))
+            if d_state['qos_pcp'] and d_state['qos_pcp'] != c_state.get('qos_pcp', ''):
+                changes.append((ip, port, 'qos_pcp', c_state.get('qos_pcp', ''), d_state['qos_pcp']))
 
     if not changes:
         print("\n  No changes needed — fleet matches CSV.")
@@ -1511,6 +1548,13 @@ def cmd_import(args, config, connections, fleet_data):
             for port, field, cur, des in device_changes:
                 if field == 'pvid':
                     device.set_vlan_ingress(port, pvid=des)
+
+            # QoS changes (separate MIB table, like PVID)
+            for port, field, cur, des in device_changes:
+                if field == 'qos_trust':
+                    device.set_qos(port, trust_mode=des)
+                elif field == 'qos_pcp':
+                    device.set_qos(port, default_priority=int(des))
 
             ok_count += 1
             hostname = fleet_data.get(ip, {}).get('hostname', ip)

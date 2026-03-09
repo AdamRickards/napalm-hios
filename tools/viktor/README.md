@@ -138,7 +138,7 @@ python viktor.py --names --save              # apply and save to NVM
 
 ### `--export` / `--import`
 
-Dump fleet VLAN state to CSV, edit in Excel, apply changes back. One row per port per device.
+Dump fleet VLAN and QoS state to CSV, edit in Excel, apply changes back. One row per port per device.
 
 ```bash
 python viktor.py --export vlans.csv
@@ -147,7 +147,11 @@ python viktor.py --import vlans.csv --dry-run    # preview diff
 python viktor.py --import vlans.csv --save       # apply and save
 ```
 
-CSV columns: `device_ip`, `hostname`, `port`, `pvid`, `tagged_vlans`, `untagged_vlans`
+CSV columns: `device_ip`, `hostname`, `port`, `pvid`, `tagged_vlans`, `untagged_vlans`, `qos_trust`, `qos_pcp`
+
+- `qos_trust` — trust mode: `dot1p`, `ip-dscp`, `untrusted`, `ip-precedence`
+- `qos_pcp` — default priority 0–7 (PCP assigned to untagged ingress frames)
+- Empty QoS cells on import = no change (users who don't care about QoS leave them blank)
 
 ## Ring Selector (`-m`)
 

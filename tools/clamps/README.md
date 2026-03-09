@@ -229,6 +229,27 @@ python unclamp.py --dry-run              # show what would be cleaned
 python unclamp.py --verify               # re-gather state after undeploy
 ```
 
+### Export / Import Protection Config
+
+Dump per-port protection settings to CSV, edit in Excel, apply changes back. One row per port per device.
+
+```bash
+python clamp.py --export protect.csv
+# edit protect.csv...
+python clamp.py --import protect.csv --dry-run    # preview diff
+python clamp.py --import protect.csv              # apply changes
+python clamp.py --import protect.csv --save       # apply and save to NVM
+```
+
+CSV columns cover four protection domains:
+
+- **RSTP per-port** — `rstp_enabled`, `rstp_edge`, `rstp_auto_edge`, `rstp_priority`, `rstp_path_cost`, `rstp_root_guard`, `rstp_loop_guard`, `rstp_tcn_guard`, `rstp_bpdu_filter`, `rstp_bpdu_flood`
+- **Loop protection** — `loop_enabled`, `loop_mode`, `loop_action`
+- **Storm control** — `storm_unit`, `storm_bc_enabled`, `storm_bc_threshold`, `storm_mc_enabled`, `storm_mc_threshold`, `storm_uc_enabled`, `storm_uc_threshold`
+- **Auto-disable** — `auto_disable_timer`
+
+Empty cells on import = no change. Bools accept `true`/`false`. L2S devices export empty cells for loop protection and auto-disable (not available at that SW level).
+
 ### Migrate Edge Protection
 
 Live migration between edge strategies without tearing down MRP. The ring
