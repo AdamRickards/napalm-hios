@@ -90,6 +90,23 @@ from napalm_hios.snmp_hios import (
     OID_hm2FMConfigRemoteSaveUsername,
     OID_hm2FMConfigRemoteSavePassword,
     OID_hm2FMActionSourceData, OID_hm2FMActionDestinationData,
+    OID_hm2PwdMgmtMinLength, OID_hm2PwdMgmtLoginAttempts,
+    OID_hm2PwdMgmtLoginAttemptsTimePeriod,
+    OID_hm2PwdMgmtMinUpperCase, OID_hm2PwdMgmtMinLowerCase,
+    OID_hm2PwdMgmtMinNumericNumbers, OID_hm2PwdMgmtMinSpecialCharacters,
+    OID_hm2LogSyslogAdminStatus, OID_hm2LogSyslogServerIPAddr,
+    OID_hm2LogSyslogServerUdpPort, OID_hm2LogSyslogServerLevelUpto,
+    OID_hm2LogSyslogServerTransport,
+    OID_hm2SntpClientAdminState,
+    OID_hm2NtpServerAdminState, OID_hm2NtpServerLocalClockStratum,
+    OID_hm2WebHttpAdminStatus, OID_hm2WebHttpsAdminStatus,
+    OID_hm2WebHttpPortNumber, OID_hm2WebHttpsPortNumber,
+    OID_hm2SshAdminStatus, OID_hm2TelnetServerAdminStatus,
+    OID_hm2SnmpV1AdminStatus, OID_hm2SnmpV2AdminStatus,
+    OID_hm2SnmpV3AdminStatus, OID_hm2SnmpPortNumber,
+    OID_hm2Iec61850MmsServerAdminStatus, OID_hm2PNIOAdminStatus,
+    OID_hm2EtherNetIPAdminStatus, OID_hm2Iec62541OpcUaAdminStatus,
+    OID_hm2ModbusTcpServerAdminStatus,
 )
 from napalm.base.exceptions import ConnectionException
 
@@ -3039,6 +3056,244 @@ class TestEncodePortlist(unittest.TestCase):
         encoded = _encode_portlist(original, name_to_bp)
         decoded = _decode_portlist(encoded, bp_to_name)
         self.assertEqual(sorted(decoded), sorted(original))
+
+
+class TestSNMPWatchdog(unittest.TestCase):
+    """Test SNMP watchdog methods."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_watchdog_status_disabled(self):
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2ConfigWatchdogAdminStatus: 2,
+                OID_hm2ConfigWatchdogOperStatus: 2,
+                OID_hm2ConfigWatchdogTimeInterval: 0,
+                OID_hm2ConfigWatchdogTimerValue: 0,
+            }
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_watchdog_status()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['interval'], 0)
+
+    def test_get_watchdog_status_enabled(self):
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2ConfigWatchdogAdminStatus: 1,
+                OID_hm2ConfigWatchdogOperStatus: 1,
+                OID_hm2ConfigWatchdogTimeInterval: 60,
+                OID_hm2ConfigWatchdogTimerValue: 45,
+            }
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_watchdog_status()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['interval'], 60)
+        self.assertEqual(result['remaining'], 45)
+
+    def test_start_watchdog_invalid(self):
+        with self.assertRaises(ValueError):
+            self.snmp.start_watchdog(10)
+
+
+class TestSNMPLoginPolicy(unittest.TestCase):
+    """Test SNMP login policy methods."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_login_policy(self):
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2PwdMgmtMinLength: 8,
+                OID_hm2PwdMgmtLoginAttempts: 5,
+                OID_hm2PwdMgmtLoginAttemptsTimePeriod: 300,
+                OID_hm2PwdMgmtMinUpperCase: 2,
+                OID_hm2PwdMgmtMinLowerCase: 2,
+                OID_hm2PwdMgmtMinNumericNumbers: 1,
+                OID_hm2PwdMgmtMinSpecialCharacters: 1,
+            }
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_login_policy()
+        self.assertEqual(result['min_password_length'], 8)
+        self.assertEqual(result['max_login_attempts'], 5)
+        self.assertEqual(result['lockout_duration'], 300)
+        self.assertEqual(result['min_uppercase'], 2)
+
+    def test_set_login_policy(self):
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_login_policy(min_password_length=10)
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2PwdMgmtMinLength, set_calls[0][0])
+
+
+class TestSNMPSyslog(unittest.TestCase):
+    """Test SNMP syslog methods."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_syslog_disabled_no_servers(self):
+        async def mock_scalar(*oids):
+            return {OID_hm2LogSyslogAdminStatus: 2}
+        async def mock_walk(oid_map, engine=None):
+            return {}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_syslog()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['servers'], [])
+
+    def test_get_syslog_with_server(self):
+        async def mock_scalar(*oids):
+            return {OID_hm2LogSyslogAdminStatus: 1}
+        async def mock_walk(oid_map, engine=None):
+            return {
+                '1': {'ip': '10.2.1.4', 'port': 514,
+                       'severity': 6, 'transport': 1},
+            }
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_syslog()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(len(result['servers']), 1)
+        self.assertEqual(result['servers'][0]['ip'], '10.2.1.4')
+        self.assertEqual(result['servers'][0]['severity'], 'informational')
+
+
+class TestSNMPNtp(unittest.TestCase):
+    """Test SNMP NTP methods."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_ntp_disabled(self):
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2SntpClientAdminState: 2,
+                OID_hm2SntpRequestInterval: 30,
+                OID_hm2NtpServerAdminState: 2,
+                OID_hm2NtpServerLocalClockStratum: 1,
+            }
+        async def mock_walk(oid_map, engine=None):
+            return {}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_ntp()
+        self.assertFalse(result['client']['enabled'])
+        self.assertEqual(result['client']['mode'], 'sntp')
+        self.assertEqual(result['client']['servers'], [])
+        self.assertFalse(result['server']['enabled'])
+        self.assertEqual(result['server']['stratum'], 1)
+
+    def test_get_ntp_enabled_with_server(self):
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2SntpClientAdminState: 1,
+                OID_hm2SntpRequestInterval: 30,
+                OID_hm2NtpServerAdminState: 2,
+                OID_hm2NtpServerLocalClockStratum: 12,
+            }
+        async def mock_walk(oid_map, engine=None):
+            return {
+                '1': {'addr': '10.2.1.1', 'status': 2},
+            }
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_ntp()
+        self.assertTrue(result['client']['enabled'])
+        self.assertEqual(len(result['client']['servers']), 1)
+        self.assertEqual(result['client']['servers'][0]['address'], '10.2.1.1')
+        self.assertEqual(result['client']['servers'][0]['status'], 'success')
+        self.assertFalse(result['server']['enabled'])
+        self.assertEqual(result['server']['stratum'], 12)
+
+
+class TestSNMPServices(unittest.TestCase):
+    """Test SNMP services methods."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_services(self):
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2WebHttpAdminStatus: 1,
+                OID_hm2WebHttpsAdminStatus: 1,
+                OID_hm2WebHttpPortNumber: 80,
+                OID_hm2WebHttpsPortNumber: 443,
+                OID_hm2SshAdminStatus: 1,
+                OID_hm2TelnetServerAdminStatus: 2,
+                OID_hm2SnmpV1AdminStatus: 2,
+                OID_hm2SnmpV2AdminStatus: 2,
+                OID_hm2SnmpV3AdminStatus: 1,
+                OID_hm2SnmpPortNumber: 161,
+                OID_hm2Iec61850MmsServerAdminStatus: 2,
+                OID_hm2PNIOAdminStatus: 2,
+                OID_hm2EtherNetIPAdminStatus: 2,
+                OID_hm2Iec62541OpcUaAdminStatus: 2,
+                OID_hm2ModbusTcpServerAdminStatus: 2,
+            }
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_services()
+        self.assertTrue(result['http']['enabled'])
+        self.assertEqual(result['http']['port'], 80)
+        self.assertTrue(result['ssh']['enabled'])
+        self.assertFalse(result['telnet']['enabled'])
+        self.assertTrue(result['snmp']['v3'])
+        self.assertFalse(result['industrial']['modbus'])
+
+    def test_set_services_telnet(self):
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_services(telnet=True)
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2TelnetServerAdminStatus, set_calls[0][0])
+
+
+class TestSNMPSnmpConfig(unittest.TestCase):
+    """Test SNMP snmp_config methods."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_snmp_config(self):
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2SnmpV1AdminStatus: 2,
+                OID_hm2SnmpV2AdminStatus: 2,
+                OID_hm2SnmpV3AdminStatus: 1,
+                OID_hm2SnmpPortNumber: 161,
+            }
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_snmp_config()
+        self.assertFalse(result['versions']['v1'])
+        self.assertTrue(result['versions']['v3'])
+        self.assertEqual(result['port'], 161)
+        self.assertEqual(result['communities'], [])
+
+    def test_set_snmp_config_v1_enable(self):
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_snmp_config(v1=True)
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2SnmpV1AdminStatus, set_calls[0][0])
 
 
 if __name__ == '__main__':

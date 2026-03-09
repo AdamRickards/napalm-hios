@@ -363,6 +363,12 @@ class HIOSDriver(NetworkDriver):
                 vlan_id, port, mode)
         raise NotImplementedError("set_vlan_egress requires SSH, MOPS or SNMP")
 
+    def set_access_port(self, port, vlan_id):
+        if self.active_protocol in ('mops', 'snmp', 'offline'):
+            return self._get_active_connection().set_access_port(port, vlan_id)
+        raise NotImplementedError(
+            "set_access_port requires MOPS, SNMP, or Offline (no SSH — not atomic)")
+
     def create_vlan(self, vlan_id, name=''):
         if self.active_protocol in ('ssh', 'mops', 'snmp', 'offline'):
             return self._get_active_connection().create_vlan(vlan_id, name=name)
@@ -522,13 +528,16 @@ class HIOSDriver(NetworkDriver):
         except NotImplementedError:
             pass  # No config status available, proceed anyway
 
-        # Start watchdog if requested
+        # Start watchdog if requested (use any available protocol)
         watchdog_started = False
-        if revert_in and self.snmp:
+        if revert_in:
             try:
-                self.snmp.start_watchdog(revert_in)
+                conn = self._get_active_connection()
+                conn.start_watchdog(revert_in)
                 watchdog_started = True
                 logger.info(f"Config watchdog started: {revert_in}s auto-revert")
+            except NotImplementedError:
+                logger.warning("Config watchdog not available on this protocol")
             except Exception as e:
                 logger.warning(f"Failed to start config watchdog: {e}")
 
@@ -565,7 +574,8 @@ class HIOSDriver(NetworkDriver):
         # Stop watchdog on successful save
         if watchdog_started:
             try:
-                self.snmp.stop_watchdog()
+                conn = self._get_active_connection()
+                conn.stop_watchdog()
                 logger.info("Config watchdog stopped (save succeeded)")
             except Exception as e:
                 logger.warning(f"Failed to stop config watchdog: {e}")
@@ -911,6 +921,110 @@ class HIOSDriver(NetworkDriver):
                 dhcp_option_66_67=dhcp_option_66_67, ipv6_enabled=ipv6_enabled,
             )
         raise NotImplementedError("set_management is not implemented for this protocol")
+
+    # ------------------------------------------------------------------
+    # Login Policy
+    # ------------------------------------------------------------------
+
+    def get_login_policy(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_login_policy()
+        raise NotImplementedError("get_login_policy is not implemented for this protocol")
+
+    def set_login_policy(self, min_password_length=None,
+                         max_login_attempts=None, lockout_duration=None,
+                         min_uppercase=None, min_lowercase=None,
+                         min_numeric=None, min_special=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_login_policy(
+                min_password_length=min_password_length,
+                max_login_attempts=max_login_attempts,
+                lockout_duration=lockout_duration,
+                min_uppercase=min_uppercase,
+                min_lowercase=min_lowercase,
+                min_numeric=min_numeric,
+                min_special=min_special,
+            )
+        raise NotImplementedError("set_login_policy is not implemented for this protocol")
+
+    # ------------------------------------------------------------------
+    # Config Watchdog
+    # ------------------------------------------------------------------
+
+    def get_watchdog_status(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().get_watchdog_status()
+        raise NotImplementedError("get_watchdog_status is not implemented for this protocol")
+
+    def start_watchdog(self, seconds):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().start_watchdog(seconds)
+        raise NotImplementedError("start_watchdog is not implemented for this protocol")
+
+    def stop_watchdog(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().stop_watchdog()
+        raise NotImplementedError("stop_watchdog is not implemented for this protocol")
+
+    # ------------------------------------------------------------------
+    # Syslog
+    # ------------------------------------------------------------------
+
+    def get_syslog(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_syslog()
+        raise NotImplementedError("get_syslog is not implemented for this protocol")
+
+    def set_syslog(self, enabled=None, servers=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_syslog(
+                enabled=enabled, servers=servers,
+            )
+        raise NotImplementedError("set_syslog is not implemented for this protocol")
+
+    # ------------------------------------------------------------------
+    # NTP
+    # ------------------------------------------------------------------
+
+    def get_ntp(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_ntp()
+        raise NotImplementedError("get_ntp is not implemented for this protocol")
+
+    def set_ntp(self, enabled=None, servers=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_ntp(
+                enabled=enabled, servers=servers,
+            )
+        raise NotImplementedError("set_ntp is not implemented for this protocol")
+
+    # ------------------------------------------------------------------
+    # Services
+    # ------------------------------------------------------------------
+
+    def get_services(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_services()
+        raise NotImplementedError("get_services is not implemented for this protocol")
+
+    def set_services(self, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_services(**kwargs)
+        raise NotImplementedError("set_services is not implemented for this protocol")
+
+    # ------------------------------------------------------------------
+    # SNMP Config
+    # ------------------------------------------------------------------
+
+    def get_snmp_config(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_snmp_config()
+        raise NotImplementedError("get_snmp_config is not implemented for this protocol")
+
+    def set_snmp_config(self, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_snmp_config(**kwargs)
+        raise NotImplementedError("set_snmp_config is not implemented for this protocol")
 
     # ------------------------------------------------------------------
     # MOPS staging (atomic multi-setter batching)

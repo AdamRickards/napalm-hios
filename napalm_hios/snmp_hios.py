@@ -408,11 +408,53 @@ OID_hm2FMActionActivate_pull = '1.3.6.1.4.1.248.11.21.1.2.1.1.5.2.10.20.2'
 # copy(2).config(10).nvm(2).server(20) — push from NVM to server
 OID_hm2FMActionActivate_push = '1.3.6.1.4.1.248.11.21.1.2.1.1.5.2.10.2.20'
 
+# HM2-MGMTACCESS-MIB — management services  1.3.6.1.4.1.248.11.25.*
+OID_hm2WebHttpAdminStatus       = '1.3.6.1.4.1.248.11.25.1.2.1'
+OID_hm2WebHttpsAdminStatus      = '1.3.6.1.4.1.248.11.25.1.2.2'
+OID_hm2WebHttpPortNumber        = '1.3.6.1.4.1.248.11.25.1.2.3'
+OID_hm2WebHttpsPortNumber       = '1.3.6.1.4.1.248.11.25.1.2.4'
+OID_hm2TelnetServerAdminStatus  = '1.3.6.1.4.1.248.11.25.1.3.1'
+OID_hm2SshAdminStatus           = '1.3.6.1.4.1.248.11.25.1.4.1'
+OID_hm2SnmpV1AdminStatus        = '1.3.6.1.4.1.248.11.25.1.1.1'
+OID_hm2SnmpV2AdminStatus        = '1.3.6.1.4.1.248.11.25.1.1.2'
+OID_hm2SnmpV3AdminStatus        = '1.3.6.1.4.1.248.11.25.1.1.3'
+OID_hm2SnmpPortNumber           = '1.3.6.1.4.1.248.11.25.1.1.4'
+
+# HM2-LOGGING-MIB — syslog  1.3.6.1.4.1.248.11.23.*
+OID_hm2LogSyslogAdminStatus     = '1.3.6.1.4.1.248.11.23.1.5.1'
+OID_hm2LogSyslogServerIPAddr    = '1.3.6.1.4.1.248.11.23.1.5.10.1.3'
+OID_hm2LogSyslogServerUdpPort   = '1.3.6.1.4.1.248.11.23.1.5.10.1.4'
+OID_hm2LogSyslogServerLevelUpto = '1.3.6.1.4.1.248.11.23.1.5.10.1.5'
+OID_hm2LogSyslogServerTransport = '1.3.6.1.4.1.248.11.23.1.5.10.1.8'
+
+# HM2-INDUSTRIAL-PROTOCOLS-MIB  1.3.6.1.4.1.248.11.101.*
+OID_hm2Iec61850MmsServerAdminStatus = '1.3.6.1.4.1.248.11.101.1.1.1'
+OID_hm2PNIOAdminStatus              = '1.3.6.1.4.1.248.11.101.1.2.1.1'
+OID_hm2EtherNetIPAdminStatus        = '1.3.6.1.4.1.248.11.101.1.3.1.1'
+OID_hm2ModbusTcpServerAdminStatus   = '1.3.6.1.4.1.248.11.101.1.4.1.1'
+OID_hm2Iec62541OpcUaAdminStatus     = '1.3.6.1.4.1.248.11.101.1.5.1.1'
+
+# HM2-TIMESYNC-MIB — SNTP client admin  1.3.6.1.4.1.248.11.50.1.2.3.1
+OID_hm2SntpClientAdminState = '1.3.6.1.4.1.248.11.50.1.2.3.1'
+
+# HM2-USERMGMT-MIB — password management  1.3.6.1.4.1.248.11.24.1.2.*
+OID_hm2PwdMgmtMinLength             = '1.3.6.1.4.1.248.11.24.1.2.1'
+OID_hm2PwdMgmtLoginAttempts         = '1.3.6.1.4.1.248.11.24.1.2.2'
+OID_hm2PwdMgmtMinUpperCase          = '1.3.6.1.4.1.248.11.24.1.2.3'
+OID_hm2PwdMgmtMinLowerCase          = '1.3.6.1.4.1.248.11.24.1.2.4'
+OID_hm2PwdMgmtMinNumericNumbers     = '1.3.6.1.4.1.248.11.24.1.2.5'
+OID_hm2PwdMgmtMinSpecialCharacters  = '1.3.6.1.4.1.248.11.24.1.2.6'
+OID_hm2PwdMgmtLoginAttemptsTimePeriod = '1.3.6.1.4.1.248.11.24.1.2.7'
+
 # HM2-TIMESYNC-MIB — SNTP client  1.3.6.1.4.1.248.11.50.1.2.3.*
 OID_hm2SntpRequestInterval = '1.3.6.1.4.1.248.11.50.1.2.3.4'
 OID_hm2SntpClientStatus    = '1.3.6.1.4.1.248.11.50.1.2.3.5'
 OID_hm2SntpServerAddr      = '1.3.6.1.4.1.248.11.50.1.2.3.10.1.3'
 OID_hm2SntpServerStatus    = '1.3.6.1.4.1.248.11.50.1.2.3.10.1.6'
+
+# HM2-TIMESYNC-MIB — NTP server  1.3.6.1.4.1.248.11.50.1.3.2.1.*
+OID_hm2NtpServerAdminState        = '1.3.6.1.4.1.248.11.50.1.3.2.1.1'
+OID_hm2NtpServerLocalClockStratum = '1.3.6.1.4.1.248.11.50.1.3.2.1.3'
 
 # LLDP-EXT-DOT3-MIB  1.0.8802.1.1.2.1.5.4623.1.*
 OID_lldpXdot3RemPortAutoNegSupported = '1.0.8802.1.1.2.1.5.4623.1.3.1.1.1'
@@ -1570,6 +1612,92 @@ class SNMPHIOS:
             (f"{OID_dot1qVlanStaticForbiddenEgressPorts}.{vid}",
              OctetString(bytes(forbidden))),
         )
+
+    def set_access_port(self, port, vlan_id):
+        """Atomically configure port(s) as untagged access on a single VLAN.
+
+        Reads all VLAN bitmaps, removes port from every VLAN, adds port to
+        target VLAN as untagged, sets PVID — all in one SNMP SET PDU.
+
+        Args:
+            port: port name (str) or list of port names
+            vlan_id: target VLAN ID (must already exist)
+        """
+        return asyncio.run(self._set_access_port_async(port, vlan_id))
+
+    async def _set_access_port_async(self, port, vlan_id):
+        ports = [port] if isinstance(port, str) else list(port)
+        engine = SnmpEngine()
+        ifmap = await self._build_ifindex_map(engine)
+        name_to_bp = await self._build_name_to_bp(ifmap, engine)
+
+        bp_ints = []
+        for p in ports:
+            bp = name_to_bp.get(p)
+            if bp is None:
+                raise ValueError(f"Unknown interface '{p}'")
+            bp_ints.append(int(bp))
+
+        # Read all VLAN bitmaps
+        rows = await self._walk_columns({
+            'egress': OID_dot1qVlanStaticEgressPorts,
+            'untagged': OID_dot1qVlanStaticUntaggedPorts,
+        }, engine)
+
+        vid = str(vlan_id)
+        if vid not in rows:
+            raise ValueError(f"VLAN {vlan_id} does not exist")
+
+        def _to_bytearray(val):
+            if isinstance(val, (bytes, bytearray)):
+                return bytearray(val)
+            if hasattr(val, 'asOctets'):
+                return bytearray(val.asOctets())
+            return bytearray(bytes(val))
+
+        sets = []
+        for row_vid, cols in rows.items():
+            egress = _to_bytearray(cols.get('egress', b''))
+            untagged = _to_bytearray(cols.get('untagged', b''))
+            changed = False
+
+            for bp_int in bp_ints:
+                byte_idx = (bp_int - 1) // 8
+                bit_mask = 0x80 >> ((bp_int - 1) % 8)
+                for arr in (egress, untagged):
+                    while len(arr) <= byte_idx:
+                        arr.append(0)
+
+                if row_vid == vid:
+                    # Target VLAN: set untagged
+                    if not (egress[byte_idx] & bit_mask
+                            and untagged[byte_idx] & bit_mask):
+                        egress[byte_idx] |= bit_mask
+                        untagged[byte_idx] |= bit_mask
+                        changed = True
+                else:
+                    # Other VLANs: remove port
+                    if (egress[byte_idx] & bit_mask
+                            or untagged[byte_idx] & bit_mask):
+                        egress[byte_idx] &= ~bit_mask
+                        untagged[byte_idx] &= ~bit_mask
+                        changed = True
+
+            if changed:
+                sets.append((
+                    f"{OID_dot1qVlanStaticEgressPorts}.{row_vid}",
+                    OctetString(bytes(egress))))
+                sets.append((
+                    f"{OID_dot1qVlanStaticUntaggedPorts}.{row_vid}",
+                    OctetString(bytes(untagged))))
+
+        # Set PVID
+        for bp_int in bp_ints:
+            sets.append((f"{OID_dot1qPvid}.{bp_int}",
+                         Unsigned32(int(vlan_id))))
+
+        if sets:
+            await self._set_oids(*sets)
 
     def create_vlan(self, vlan_id, name=''):
         """Create a VLAN in the VLAN database via SNMP."""
@@ -3211,6 +3339,333 @@ class SNMPHIOS:
             'interval': _snmp_int(scalars.get(OID_hm2ConfigWatchdogTimeInterval, 0)),
             'remaining': _snmp_int(scalars.get(OID_hm2ConfigWatchdogTimerValue, 0)),
         }
+
+    # ------------------------------------------------------------------
+    # Login Policy (HM2-USERMGMT-MIB)
+    # ------------------------------------------------------------------
+
+    def get_login_policy(self):
+        """Read password and login lockout policy."""
+        return asyncio.run(self._get_login_policy_async())
+
+    async def _get_login_policy_async(self):
+        scalars = await self._get_scalar(
+            OID_hm2PwdMgmtMinLength,
+            OID_hm2PwdMgmtLoginAttempts,
+            OID_hm2PwdMgmtLoginAttemptsTimePeriod,
+            OID_hm2PwdMgmtMinUpperCase,
+            OID_hm2PwdMgmtMinLowerCase,
+            OID_hm2PwdMgmtMinNumericNumbers,
+            OID_hm2PwdMgmtMinSpecialCharacters,
+        )
+        return {
+            'min_password_length': _snmp_int(scalars.get(
+                OID_hm2PwdMgmtMinLength, 6)),
+            'max_login_attempts': _snmp_int(scalars.get(
+                OID_hm2PwdMgmtLoginAttempts, 0)),
+            'lockout_duration': _snmp_int(scalars.get(
+                OID_hm2PwdMgmtLoginAttemptsTimePeriod, 0)),
+            'min_uppercase': _snmp_int(scalars.get(
+                OID_hm2PwdMgmtMinUpperCase, 1)),
+            'min_lowercase': _snmp_int(scalars.get(
+                OID_hm2PwdMgmtMinLowerCase, 1)),
+            'min_numeric': _snmp_int(scalars.get(
+                OID_hm2PwdMgmtMinNumericNumbers, 1)),
+            'min_special': _snmp_int(scalars.get(
+                OID_hm2PwdMgmtMinSpecialCharacters, 1)),
+        }
+
+    def set_login_policy(self, min_password_length=None,
+                         max_login_attempts=None, lockout_duration=None,
+                         min_uppercase=None, min_lowercase=None,
+                         min_numeric=None, min_special=None):
+        """Set password and login lockout policy."""
+        return asyncio.run(self._set_login_policy_async(
+            min_password_length, max_login_attempts, lockout_duration,
+            min_uppercase, min_lowercase, min_numeric, min_special))
+
+    async def _set_login_policy_async(self, min_password_length,
+                                       max_login_attempts, lockout_duration,
+                                       min_uppercase, min_lowercase,
+                                       min_numeric, min_special):
+        sets = []
+        if min_password_length is not None:
+            sets.append((OID_hm2PwdMgmtMinLength + '.0',
+                         Integer32(int(min_password_length))))
+        if max_login_attempts is not None:
+            sets.append((OID_hm2PwdMgmtLoginAttempts + '.0',
+                         Integer32(int(max_login_attempts))))
+        if lockout_duration is not None:
+            sets.append((OID_hm2PwdMgmtLoginAttemptsTimePeriod + '.0',
+                         Integer32(int(lockout_duration))))
+        if min_uppercase is not None:
+            sets.append((OID_hm2PwdMgmtMinUpperCase + '.0',
+                         Integer32(int(min_uppercase))))
+        if min_lowercase is not None:
+            sets.append((OID_hm2PwdMgmtMinLowerCase + '.0',
+                         Integer32(int(min_lowercase))))
+        if min_numeric is not None:
+            sets.append((OID_hm2PwdMgmtMinNumericNumbers + '.0',
+                         Integer32(int(min_numeric))))
+        if min_special is not None:
+            sets.append((OID_hm2PwdMgmtMinSpecialCharacters + '.0',
+                         Integer32(int(min_special))))
+        if sets:
+            await self._set_oids(*sets)
+
+    # ------------------------------------------------------------------
+    # Syslog (HM2-LOGGING-MIB)
+    # ------------------------------------------------------------------
+
+    _SYSLOG_SEVERITY = {
+        0: 'emergency', 1: 'alert', 2: 'critical', 3: 'error',
+        4: 'warning', 5: 'notice', 6: 'informational', 7: 'debug',
+    }
+    _SYSLOG_TRANSPORT = {1: 'udp', 2: 'tls'}
+
+    def get_syslog(self):
+        """Read syslog configuration."""
+        return asyncio.run(self._get_syslog_async())
+
+    async def _get_syslog_async(self):
+        engine = SnmpEngine()
+        scalars_task = self._get_scalar(OID_hm2LogSyslogAdminStatus)
+        rows_task = self._walk_columns({
+            'ip': OID_hm2LogSyslogServerIPAddr,
+            'port': OID_hm2LogSyslogServerUdpPort,
+            'severity': OID_hm2LogSyslogServerLevelUpto,
+            'transport': OID_hm2LogSyslogServerTransport,
+        }, engine)
+        scalars, rows = await asyncio.gather(scalars_task, rows_task)
+        servers = []
+        for idx, cols in rows.items():
+            ip = _snmp_ip(cols.get('ip', ''))
+            if not ip:
+                continue
+            sev = _snmp_int(cols.get('severity', 7))
+            trans = _snmp_int(cols.get('transport', 1))
+            servers.append({
+                'index': int(idx),
+                'ip': ip,
+                'port': _snmp_int(cols.get('port', 514)),
+                'severity': self._SYSLOG_SEVERITY.get(sev, str(sev)),
+                'transport': self._SYSLOG_TRANSPORT.get(trans, str(trans)),
+            })
+        return {
+            'enabled': _snmp_int(scalars.get(
+                OID_hm2LogSyslogAdminStatus, 2)) == 1,
+            'servers': servers,
+        }
+
+    def set_syslog(self, enabled=None, servers=None):
+        """Set syslog configuration."""
+        return asyncio.run(self._set_syslog_async(enabled, servers))
+
+    async def _set_syslog_async(self, enabled, servers):
+        sets = []
+        if enabled is not None:
+            sets.append((OID_hm2LogSyslogAdminStatus + '.0',
+                         Integer32(1 if enabled else 2)))
+        if sets:
+            await self._set_oids(*sets)
+
+    # ------------------------------------------------------------------
+    # NTP / SNTP (HM2-TIMESYNC-MIB)
+    # ------------------------------------------------------------------
+
+    def get_ntp(self):
+        """Read SNTP client configuration."""
+        return asyncio.run(self._get_ntp_async())
+
+    async def _get_ntp_async(self):
+        engine = SnmpEngine()
+        scalars = await self._get_scalar(
+            OID_hm2SntpClientAdminState,
+            OID_hm2SntpRequestInterval,
+            OID_hm2NtpServerAdminState,
+            OID_hm2NtpServerLocalClockStratum,
+        )
+        rows = await self._walk_columns({
+            'addr': OID_hm2SntpServerAddr,
+            'status': OID_hm2SntpServerStatus,
+        }, engine)
+        servers = []
+        for idx, cols in rows.items():
+            addr = _snmp_ip(cols.get('addr', ''))
+            if not addr:
+                continue
+            status = _snmp_int(cols.get('status', 1))
+            _STATUS = {1: 'other', 2: 'success', 3: 'requestTimedOut',
+                       4: 'badDateEncoded', 5: 'versionNotSupported'}
+            servers.append({
+                'address': addr,
+                'port': 123,
+                'status': _STATUS.get(status, str(status)),
+            })
+        return {
+            'client': {
+                'enabled': _snmp_int(scalars.get(
+                    OID_hm2SntpClientAdminState, 2)) == 1,
+                'mode': 'sntp',
+                'servers': servers,
+            },
+            'server': {
+                'enabled': _snmp_int(scalars.get(
+                    OID_hm2NtpServerAdminState, 2)) == 1,
+                'stratum': _snmp_int(scalars.get(
+                    OID_hm2NtpServerLocalClockStratum, 1)),
+            },
+        }
+
+    def set_ntp(self, client_enabled=None, server_enabled=None):
+        """Set SNTP client enable/disable."""
+        return asyncio.run(self._set_ntp_async(
+            client_enabled, server_enabled))
+
+    async def _set_ntp_async(self, client_enabled, server_enabled):
+        sets = []
+        if client_enabled is not None:
+            sets.append((OID_hm2SntpClientAdminState + '.0',
+                         Integer32(1 if client_enabled else 2)))
+        if server_enabled is not None:
+            sets.append((OID_hm2NtpServerAdminState + '.0',
+                         Integer32(1 if server_enabled else 2)))
+        if sets:
+            await self._set_oids(*sets)
+
+    # ------------------------------------------------------------------
+    # Services (multi-MIB)
+    # ------------------------------------------------------------------
+
+    def get_services(self):
+        """Read service enable/disable state."""
+        return asyncio.run(self._get_services_async())
+
+    async def _get_services_async(self):
+        scalars = await self._get_scalar(
+            OID_hm2WebHttpAdminStatus,
+            OID_hm2WebHttpsAdminStatus,
+            OID_hm2WebHttpPortNumber,
+            OID_hm2WebHttpsPortNumber,
+            OID_hm2SshAdminStatus,
+            OID_hm2TelnetServerAdminStatus,
+            OID_hm2SnmpV1AdminStatus,
+            OID_hm2SnmpV2AdminStatus,
+            OID_hm2SnmpV3AdminStatus,
+            OID_hm2SnmpPortNumber,
+            OID_hm2Iec61850MmsServerAdminStatus,
+            OID_hm2PNIOAdminStatus,
+            OID_hm2EtherNetIPAdminStatus,
+            OID_hm2Iec62541OpcUaAdminStatus,
+            OID_hm2ModbusTcpServerAdminStatus,
+        )
+        def _en(oid):
+            return _snmp_int(scalars.get(oid, 2)) == 1
+        def _port(oid, default):
+            return _snmp_int(scalars.get(oid, default))
+        return {
+            'http': {'enabled': _en(OID_hm2WebHttpAdminStatus),
+                     'port': _port(OID_hm2WebHttpPortNumber, 80)},
+            'https': {'enabled': _en(OID_hm2WebHttpsAdminStatus),
+                      'port': _port(OID_hm2WebHttpsPortNumber, 443)},
+            'ssh': {'enabled': _en(OID_hm2SshAdminStatus)},
+            'telnet': {'enabled': _en(OID_hm2TelnetServerAdminStatus)},
+            'snmp': {
+                'v1': _en(OID_hm2SnmpV1AdminStatus),
+                'v2': _en(OID_hm2SnmpV2AdminStatus),
+                'v3': _en(OID_hm2SnmpV3AdminStatus),
+                'port': _port(OID_hm2SnmpPortNumber, 161),
+            },
+            'industrial': {
+                'iec61850': _en(OID_hm2Iec61850MmsServerAdminStatus),
+                'profinet': _en(OID_hm2PNIOAdminStatus),
+                'ethernet_ip': _en(OID_hm2EtherNetIPAdminStatus),
+                'opcua': _en(OID_hm2Iec62541OpcUaAdminStatus),
+                'modbus': _en(OID_hm2ModbusTcpServerAdminStatus),
+            },
+        }
+
+    def set_services(self, http=None, https=None, ssh=None,
+                     telnet=None, snmp_v1=None, snmp_v2=None,
+                     snmp_v3=None, iec61850=None, profinet=None,
+                     ethernet_ip=None, opcua=None, modbus=None):
+        """Set service enable/disable state."""
+        return asyncio.run(self._set_services_async(
+            http, https, ssh, telnet, snmp_v1, snmp_v2, snmp_v3,
+            iec61850, profinet, ethernet_ip, opcua, modbus))
+
+    async def _set_services_async(self, http, https, ssh, telnet,
+                                   snmp_v1, snmp_v2, snmp_v3,
+                                   iec61850, profinet, ethernet_ip,
+                                   opcua, modbus):
+        _map = [
+            (http, OID_hm2WebHttpAdminStatus),
+            (https, OID_hm2WebHttpsAdminStatus),
+            (ssh, OID_hm2SshAdminStatus),
+            (telnet, OID_hm2TelnetServerAdminStatus),
+            (snmp_v1, OID_hm2SnmpV1AdminStatus),
+            (snmp_v2, OID_hm2SnmpV2AdminStatus),
+            (snmp_v3, OID_hm2SnmpV3AdminStatus),
+            (iec61850, OID_hm2Iec61850MmsServerAdminStatus),
+            (profinet, OID_hm2PNIOAdminStatus),
+            (ethernet_ip, OID_hm2EtherNetIPAdminStatus),
+            (opcua, OID_hm2Iec62541OpcUaAdminStatus),
+            (modbus, OID_hm2ModbusTcpServerAdminStatus),
+        ]
+        sets = []
+        for val, oid in _map:
+            if val is not None:
+                sets.append((oid + '.0',
+                             Integer32(1 if val else 2)))
+        if sets:
+            await self._set_oids(*sets)
+
+    # ------------------------------------------------------------------
+    # SNMP Config (HM2-MGMTACCESS-MIB)
+    # ------------------------------------------------------------------
+
+    def get_snmp_config(self):
+        """Read SNMP version status and port."""
+        return asyncio.run(self._get_snmp_config_async())
+
+    async def _get_snmp_config_async(self):
+        scalars = await self._get_scalar(
+            OID_hm2SnmpV1AdminStatus,
+            OID_hm2SnmpV2AdminStatus,
+            OID_hm2SnmpV3AdminStatus,
+            OID_hm2SnmpPortNumber,
+        )
+        return {
+            'versions': {
+                'v1': _snmp_int(scalars.get(
+                    OID_hm2SnmpV1AdminStatus, 2)) == 1,
+                'v2': _snmp_int(scalars.get(
+                    OID_hm2SnmpV2AdminStatus, 2)) == 1,
+                'v3': _snmp_int(scalars.get(
+                    OID_hm2SnmpV3AdminStatus, 2)) == 1,
+            },
+            'port': _snmp_int(scalars.get(
+                OID_hm2SnmpPortNumber, 161)),
+            'communities': [],
+        }
+
+    def set_snmp_config(self, v1=None, v2=None, v3=None):
+        """Set SNMP version enable/disable."""
+        return asyncio.run(self._set_snmp_config_async(v1, v2, v3))
+
+    async def _set_snmp_config_async(self, v1, v2, v3):
+        sets = []
+        if v1 is not None:
+            sets.append((OID_hm2SnmpV1AdminStatus + '.0',
+                         Integer32(1 if v1 else 2)))
+        if v2 is not None:
+            sets.append((OID_hm2SnmpV2AdminStatus + '.0',
+                         Integer32(1 if v2 else 2)))
+        if v3 is not None:
+            sets.append((OID_hm2SnmpV3AdminStatus + '.0',
+                         Integer32(1 if v3 else 2)))
+        if sets:
+            await self._set_oids(*sets)
 
     # ------------------------------------------------------------------
     # Auto-Disable

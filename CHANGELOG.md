@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.16.0
+
+### Config Watchdog — Multi-protocol support
+
+- **`get_watchdog_status()`**, **`start_watchdog()`**, **`stop_watchdog()`** now supported on MOPS and SSH backends (previously SNMP-only). `commit_config()` watchdog integration now uses the active protocol instead of hardcoded SNMP
+
+### Atomic Access Port
+
+- **`set_access_port(port, vlan_id)`** — atomically configure port(s) as untagged access on a single VLAN. Removes port from all other VLANs, adds to target as untagged, sets PVID — all in one request. Supports MOPS, SNMP, and Offline (SSH raises `NotImplementedError`)
+
+### IEC 62443-4-2 SL1 — Security Getter/Setter Pairs
+
+Five new getter/setter pairs covering every SL1 security check in the IEC 62443-4-2 audit:
+
+- **`get_login_policy()` / `set_login_policy()`** — password complexity (min length, uppercase, lowercase, numeric, special) and login lockout (max attempts, lockout duration)
+- **`get_syslog()` / `set_syslog()`** — syslog global enable and server table (IP, port, severity, transport)
+- **`get_ntp()` / `set_ntp()`** — SNTP client config + NTP server status (admin state, stratum)
+- **`get_services()` / `set_services()`** — management protocols (HTTP, HTTPS, SSH, Telnet, SNMPv1/v2/v3) and industrial protocols (IEC 61850, PROFINET, EtherNet/IP, OPC UA, Modbus TCP)
+- **`get_snmp_config()` / `set_snmp_config()`** — SNMP version status, port, and community table (community list via MOPS only)
+
+All methods support MOPS, SNMP, SSH, and Offline backends. 75 new unit tests (585 total).
+
 ## 1.15.1
 
 ### Bugfix — upload_config Content-Type conflict

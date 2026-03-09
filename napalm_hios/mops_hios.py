@@ -1503,6 +1503,131 @@ class MOPSHIOS:
                     "dot1qVlanStaticForbiddenEgressPorts": _bytearray_to_hex(forbidden),
                 })
 
+    def set_access_port(self, port, vlan_id):
+        """Atomically configure port(s) as untagged access on a single VLAN.
+
+        For each target port:
+        1. Removes port from ALL current VLANs (egress bitmap → none)
+        2. Adds port to target VLAN as untagged
+        3. Sets PVID to target VLAN
+
+        All changes are sent in one atomic POST via set_multi.
+
+        Args:
+            port: port name (str) or list of port names
+            vlan_id: target VLAN ID (must already exist)
+        """
+        ports = [port] if isinstance(port, str) else list(port)
+        bridge_map = self._get_bridge_port_map()
+        name_to_bp = {name: int(bp) for bp, name in bridge_map.items()}
+
+        # Validate all ports
+        bps = []
+        for p in ports:
+            bp = name_to_bp.get(p)
+            if bp is None:
+                raise ValueError(f"Unknown interface '{p}'")
+            bps.append(bp)
+
+        # Read current egress bitmaps for all VLANs
+        try:
+            entries = self.client.get("IEEE8021-Q-BRIDGE-MIB",
+                                      "ieee8021QBridgeVlanStaticEntry",
+                                      ["ieee8021QBridgeVlanStaticVlanIndex",
+                                       "ieee8021QBridgeVlanStaticEgressPorts",
+                                       "ieee8021QBridgeVlanStaticUntaggedPorts",
+                                       "ieee8021QBridgeVlanStaticForbiddenEgressPorts"],
+                                      decode_strings=False)
+            vid_key = "ieee8021QBridgeVlanStaticVlanIndex"
+            egress_key = "ieee8021QBridgeVlanStaticEgressPorts"
+            untagged_key = "ieee8021QBridgeVlanStaticUntaggedPorts"
+            forbidden_key = "ieee8021QBridgeVlanStaticForbiddenEgressPorts"
+        except MOPSError:
+            entries = self.client.get_multi([
+                ("Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+                 ["dot1qVlanIndex",
+                  "dot1qVlanStaticEgressPorts",
+                  "dot1qVlanStaticUntaggedPorts",
+                  "dot1qVlanStaticForbiddenEgressPorts"]),
+            ], decode_strings=False)
+            entries = entries["mibs"].get("Q-BRIDGE-MIB", {}).get(
+                "dot1qVlanStaticEntry", [])
+            vid_key = "dot1qVlanIndex"
+            egress_key = "dot1qVlanStaticEgressPorts"
+            untagged_key = "dot1qVlanStaticUntaggedPorts"
+            forbidden_key = "dot1qVlanStaticForbiddenEgressPorts"
+
+        def _hex_to_bytearray(h):
+            h = (h or "").strip()
+            if not h:
+                return bytearray(4)
+            try:
+                return bytearray(bytes.fromhex(h.replace(" ", "")))
+            except ValueError:
+                return bytearray(4)
+
+        def _bytearray_to_hex(ba):
+            return " ".join(f"{b:02x}" for b in ba)
+
+        # Build mutations: for each VLAN, remove port bits; for target, add
+        mutations = []
+        target_found = False
+        for entry in entries:
+            vid = _safe_int(entry.get(vid_key, ""), 0)
+            if vid <= 0:
+                continue
+
+            egress = _hex_to_bytearray(entry.get(egress_key, ""))
+            untagged = _hex_to_bytearray(entry.get(untagged_key, ""))
+            forbidden = _hex_to_bytearray(entry.get(forbidden_key, ""))
+            changed = False
+
+            for bp in bps:
+                byte_idx = (bp - 1) // 8
+                bit_mask = 0x80 >> ((bp - 1) % 8)
+                for arr in (egress, untagged, forbidden):
+                    while len(arr) <= byte_idx:
+                        arr.append(0)
+
+                if vid == vlan_id:
+                    # Target VLAN: set untagged
+                    target_found = True
+                    if not (egress[byte_idx] & bit_mask
+                            and untagged[byte_idx] & bit_mask):
+                        egress[byte_idx] |= bit_mask
+                        untagged[byte_idx] |= bit_mask
+                        forbidden[byte_idx] &= ~bit_mask
+                        changed = True
+                else:
+                    # Other VLANs: remove port entirely
+                    if (egress[byte_idx] & bit_mask
+                            or untagged[byte_idx] & bit_mask
+                            or forbidden[byte_idx] & bit_mask):
+                        egress[byte_idx] &= ~bit_mask
+                        untagged[byte_idx] &= ~bit_mask
+                        forbidden[byte_idx] &= ~bit_mask
+                        changed = True
+
+            if changed:
+                mutations.append((
+                    "Q-BRIDGE-MIB", "dot1qVlanStaticEntry",
+                    {"dot1qVlanStaticEgressPorts": _bytearray_to_hex(egress),
+                     "dot1qVlanStaticUntaggedPorts": _bytearray_to_hex(untagged)},
+                    {"dot1qVlanIndex": str(vid)}))
+
+        if not target_found:
+            raise ValueError(f"VLAN {vlan_id} does not exist")
+
+        # Set PVID for all target ports
+        for p in ports:
+            bp = name_to_bp[p]
+            mutations.append((
+                "Q-BRIDGE-MIB", "dot1qPortVlanEntry",
+                {"dot1qPvid": str(vlan_id)},
+                {"dot1dBasePort": str(bp)}))
+
+        self._apply_mutations(mutations)
+
     def create_vlan(self, vlan_id, name=''):
         """Create a VLAN in the VLAN database via MOPS.
 
@@ -4174,3 +4299,602 @@ class MOPSHIOS:
         if self._staging:
             return None
         return self.get_management()
+
+    # ------------------------------------------------------------------
+    # Config Watchdog (HM2-FILEMGMT-MIB)
+    # ------------------------------------------------------------------
+
+    def get_watchdog_status(self):
+        """Read config watchdog state.
+
+        Returns::
+
+            {
+                'enabled': True,
+                'oper_status': 1,
+                'interval': 60,
+                'remaining': 45,
+            }
+        """
+        entries = self.client.get(
+            "HM2-FILEMGMT-MIB", "hm2FileMgmtConfigWatchdogControl",
+            ["hm2ConfigWatchdogAdminStatus",
+             "hm2ConfigWatchdogOperStatus",
+             "hm2ConfigWatchdogTimeInterval",
+             "hm2ConfigWatchdogTimerValue"],
+            decode_strings=False)
+        data = entries[0] if entries else {}
+        return {
+            'enabled': _safe_int(data.get(
+                "hm2ConfigWatchdogAdminStatus", "2")) == 1,
+            'oper_status': _safe_int(data.get(
+                "hm2ConfigWatchdogOperStatus", "2")),
+            'interval': _safe_int(data.get(
+                "hm2ConfigWatchdogTimeInterval", "0")),
+            'remaining': _safe_int(data.get(
+                "hm2ConfigWatchdogTimerValue", "0")),
+        }
+
+    def start_watchdog(self, seconds):
+        """Start the config watchdog timer.
+
+        If the timer expires before stop_watchdog() is called, the device
+        reverts to the saved config (NVM) automatically.
+
+        Args:
+            seconds: timer interval (30-600)
+        """
+        if not (30 <= seconds <= 600):
+            raise ValueError(
+                f"Watchdog interval must be 30-600, got {seconds}")
+        self._apply_set(
+            "HM2-FILEMGMT-MIB", "hm2FileMgmtConfigWatchdogControl",
+            {"hm2ConfigWatchdogTimeInterval": str(seconds),
+             "hm2ConfigWatchdogAdminStatus": "1"})
+
+    def stop_watchdog(self):
+        """Stop (disable) the config watchdog timer."""
+        self._apply_set(
+            "HM2-FILEMGMT-MIB", "hm2FileMgmtConfigWatchdogControl",
+            {"hm2ConfigWatchdogAdminStatus": "2"})
+
+    # ------------------------------------------------------------------
+    # Login Policy (HM2-USERMGMT-MIB / hm2PwdMgmtGroup)
+    # ------------------------------------------------------------------
+
+    def get_login_policy(self):
+        """Read password and login lockout policy.
+
+        Returns::
+
+            {
+                'min_password_length': 6,
+                'max_login_attempts': 0,
+                'lockout_duration': 0,
+                'min_uppercase': 1,
+                'min_lowercase': 1,
+                'min_numeric': 1,
+                'min_special': 1,
+            }
+        """
+        entries = self.client.get(
+            "HM2-USERMGMT-MIB", "hm2PwdMgmtGroup",
+            ["hm2PwdMgmtMinLength", "hm2PwdMgmtLoginAttempts",
+             "hm2PwdMgmtLoginAttemptsTimePeriod",
+             "hm2PwdMgmtMinUpperCase", "hm2PwdMgmtMinLowerCase",
+             "hm2PwdMgmtMinNumericNumbers",
+             "hm2PwdMgmtMinSpecialCharacters"],
+            decode_strings=False)
+        data = entries[0] if entries else {}
+        return {
+            'min_password_length': _safe_int(data.get(
+                "hm2PwdMgmtMinLength", "6")),
+            'max_login_attempts': _safe_int(data.get(
+                "hm2PwdMgmtLoginAttempts", "0")),
+            'lockout_duration': _safe_int(data.get(
+                "hm2PwdMgmtLoginAttemptsTimePeriod", "0")),
+            'min_uppercase': _safe_int(data.get(
+                "hm2PwdMgmtMinUpperCase", "1")),
+            'min_lowercase': _safe_int(data.get(
+                "hm2PwdMgmtMinLowerCase", "1")),
+            'min_numeric': _safe_int(data.get(
+                "hm2PwdMgmtMinNumericNumbers", "1")),
+            'min_special': _safe_int(data.get(
+                "hm2PwdMgmtMinSpecialCharacters", "1")),
+        }
+
+    def set_login_policy(self, min_password_length=None,
+                         max_login_attempts=None, lockout_duration=None,
+                         min_uppercase=None, min_lowercase=None,
+                         min_numeric=None, min_special=None):
+        """Set password and login lockout policy.
+
+        Args:
+            min_password_length: 1-64
+            max_login_attempts: 0=disabled, 1-5
+            lockout_duration: 0=disabled, 1-60 seconds
+            min_uppercase: 0-16
+            min_lowercase: 0-16
+            min_numeric: 0-16
+            min_special: 0-16
+        """
+        values = {}
+        if min_password_length is not None:
+            values["hm2PwdMgmtMinLength"] = str(int(min_password_length))
+        if max_login_attempts is not None:
+            values["hm2PwdMgmtLoginAttempts"] = str(int(max_login_attempts))
+        if lockout_duration is not None:
+            values["hm2PwdMgmtLoginAttemptsTimePeriod"] = str(
+                int(lockout_duration))
+        if min_uppercase is not None:
+            values["hm2PwdMgmtMinUpperCase"] = str(int(min_uppercase))
+        if min_lowercase is not None:
+            values["hm2PwdMgmtMinLowerCase"] = str(int(min_lowercase))
+        if min_numeric is not None:
+            values["hm2PwdMgmtMinNumericNumbers"] = str(int(min_numeric))
+        if min_special is not None:
+            values["hm2PwdMgmtMinSpecialCharacters"] = str(int(min_special))
+        if not values:
+            return
+        self._apply_set("HM2-USERMGMT-MIB", "hm2PwdMgmtGroup", values)
+
+    # ------------------------------------------------------------------
+    # Syslog (HM2-LOGGING-MIB)
+    # ------------------------------------------------------------------
+
+    def get_syslog(self):
+        """Read syslog configuration.
+
+        Returns::
+
+            {
+                'enabled': bool,
+                'servers': [
+                    {'index': int, 'ip': str, 'port': int,
+                     'severity': str, 'transport': str},
+                ]
+            }
+        """
+        _SEVERITY = {
+            '0': 'emergency', '1': 'alert', '2': 'critical',
+            '3': 'error', '4': 'warning', '5': 'notice',
+            '6': 'informational', '7': 'debug',
+        }
+        _TRANSPORT = {'1': 'udp', '2': 'tls'}
+
+        global_data = self.client.get(
+            "HM2-LOGGING-MIB", "hm2LogSyslogGroup",
+            ["hm2LogSyslogAdminStatus"], decode_strings=False)
+        g = global_data[0] if global_data else {}
+
+        try:
+            entries = self.client.get(
+                "HM2-LOGGING-MIB", "hm2LogSyslogServerEntry",
+                ["hm2LogSyslogServerIndex",
+                 "hm2LogSyslogServerIPAddr",
+                 "hm2LogSyslogServerUdpPort",
+                 "hm2LogSyslogServerLevelUpto",
+                 "hm2LogSyslogServerTransportType"],
+                decode_strings=False)
+        except MOPSError:
+            entries = []
+
+        servers = []
+        for entry in entries:
+            idx = _safe_int(entry.get("hm2LogSyslogServerIndex", "0"))
+            if idx < 1:
+                continue
+            sev_code = entry.get("hm2LogSyslogServerLevelUpto", "7")
+            trans_code = entry.get("hm2LogSyslogServerTransportType", "1")
+            ip_raw = entry.get("hm2LogSyslogServerIPAddr", "")
+            servers.append({
+                'index': idx,
+                'ip': _decode_hex_string(ip_raw) if ip_raw else '',
+                'port': _safe_int(entry.get(
+                    "hm2LogSyslogServerUdpPort", "514")),
+                'severity': _SEVERITY.get(str(sev_code), str(sev_code)),
+                'transport': _TRANSPORT.get(str(trans_code), str(trans_code)),
+            })
+        return {
+            'enabled': _safe_int(g.get(
+                "hm2LogSyslogAdminStatus", "2")) == 1,
+            'servers': servers,
+        }
+
+    def set_syslog(self, enabled=None, servers=None):
+        """Set syslog configuration.
+
+        Args:
+            enabled: True/False — global syslog enable
+            servers: list of dicts with optional keys:
+                index (1-8), ip, port, severity, transport
+        """
+        _SEVERITY_REV = {
+            'emergency': '0', 'alert': '1', 'critical': '2',
+            'error': '3', 'warning': '4', 'notice': '5',
+            'informational': '6', 'debug': '7',
+        }
+        _TRANSPORT_REV = {'udp': '1', 'tls': '2'}
+
+        mutations = []
+        if enabled is not None:
+            mutations.append((
+                "HM2-LOGGING-MIB", "hm2LogSyslogGroup",
+                {"hm2LogSyslogAdminStatus": "1" if enabled else "2"}))
+
+        if servers:
+            for srv in servers:
+                values = {}
+                if 'ip' in srv:
+                    values["hm2LogSyslogServerIPAddr"] = encode_string(
+                        srv['ip'])
+                if 'port' in srv:
+                    values["hm2LogSyslogServerUdpPort"] = str(
+                        int(srv['port']))
+                if 'severity' in srv:
+                    sev = _SEVERITY_REV.get(srv['severity'])
+                    if sev is not None:
+                        values["hm2LogSyslogServerLevelUpto"] = sev
+                if 'transport' in srv:
+                    trans = _TRANSPORT_REV.get(srv['transport'])
+                    if trans is not None:
+                        values["hm2LogSyslogServerTransportType"] = trans
+                if values:
+                    idx = {"hm2LogSyslogServerIndex": str(
+                        srv.get('index', 1))}
+                    mutations.append((
+                        "HM2-LOGGING-MIB", "hm2LogSyslogServerEntry",
+                        values, idx))
+
+        self._apply_mutations(mutations)
+
+    # ------------------------------------------------------------------
+    # NTP / SNTP (HM2-TIMESYNC-MIB)
+    # ------------------------------------------------------------------
+
+    def get_ntp(self):
+        """Read NTP/SNTP client and server configuration.
+
+        Returns::
+
+            {
+                'client': {
+                    'enabled': bool,
+                    'mode': str,
+                    'servers': [{'address': str, 'port': int,
+                                 'status': str}]
+                },
+                'server': {'enabled': bool, 'stratum': int},
+            }
+        """
+        # SNTP client status
+        client_data = self.client.get(
+            "HM2-TIMESYNC-MIB", "hm2SntpClientGroup",
+            ["hm2SntpClientAdminState", "hm2SntpClientOperStatus",
+             "hm2SntpClientRequestInterval"],
+            decode_strings=False)
+        c = client_data[0] if client_data else {}
+
+        # SNTP server table
+        try:
+            server_entries = self.client.get(
+                "HM2-TIMESYNC-MIB", "hm2SntpClientServerAddrEntry",
+                ["hm2SntpClientServerIndex",
+                 "hm2SntpClientServerAddr",
+                 "hm2SntpClientServerPort",
+                 "hm2SntpClientServerOperStatus",
+                 "hm2SntpClientServerDescription"],
+                decode_strings=False)
+        except MOPSError:
+            server_entries = []
+
+        _STATUS = {'1': 'other', '2': 'success', '3': 'requestTimedOut',
+                   '4': 'badDateEncoded', '5': 'versionNotSupported'}
+
+        servers = []
+        for entry in server_entries:
+            idx = _safe_int(entry.get("hm2SntpClientServerIndex", "0"))
+            if idx < 1:
+                continue
+            addr_raw = entry.get("hm2SntpClientServerAddr", "")
+            status_code = entry.get(
+                "hm2SntpClientServerOperStatus", "1")
+            servers.append({
+                'address': _decode_hex_string(addr_raw) if addr_raw else '',
+                'port': _safe_int(entry.get(
+                    "hm2SntpClientServerPort", "123")),
+                'status': _STATUS.get(
+                    str(status_code), str(status_code)),
+            })
+
+        # NTP server config (may not be available on L2S)
+        try:
+            srv_data = self.client.get(
+                "HM2-TIMESYNC-MIB", "hm2NtpServerConfigGroup",
+                ["hm2NtpServerAdminState", "hm2NtpServerStratum"],
+                decode_strings=False)
+            s = srv_data[0] if srv_data else {}
+        except MOPSError:
+            s = {}
+
+        return {
+            'client': {
+                'enabled': _safe_int(c.get(
+                    "hm2SntpClientAdminState", "2")) == 1,
+                'mode': 'sntp',
+                'servers': servers,
+            },
+            'server': {
+                'enabled': _safe_int(s.get(
+                    "hm2NtpServerAdminState", "2")) == 1,
+                'stratum': _safe_int(s.get(
+                    "hm2NtpServerStratum", "1")),
+            },
+        }
+
+    def set_ntp(self, client_enabled=None, server_enabled=None):
+        """Set NTP/SNTP configuration.
+
+        Args:
+            client_enabled: True/False — SNTP client admin state
+            server_enabled: True/False — NTP server admin state
+        """
+        mutations = []
+        if client_enabled is not None:
+            mutations.append((
+                "HM2-TIMESYNC-MIB", "hm2SntpClientGroup",
+                {"hm2SntpClientAdminState":
+                 "1" if client_enabled else "2"}))
+        if server_enabled is not None:
+            mutations.append((
+                "HM2-TIMESYNC-MIB", "hm2NtpServerConfigGroup",
+                {"hm2NtpServerAdminState":
+                 "1" if server_enabled else "2"}))
+        self._apply_mutations(mutations)
+
+    # ------------------------------------------------------------------
+    # Services (multi-MIB)
+    # ------------------------------------------------------------------
+
+    def get_services(self):
+        """Read service enable/disable state across management + industrial.
+
+        Returns::
+
+            {
+                'http': {'enabled': bool, 'port': int},
+                'https': {'enabled': bool, 'port': int},
+                'ssh': {'enabled': bool},
+                'telnet': {'enabled': bool},
+                'snmp': {'v1': bool, 'v2': bool, 'v3': bool, 'port': int},
+                'industrial': {
+                    'iec61850': bool, 'profinet': bool,
+                    'ethernet_ip': bool, 'opcua': bool, 'modbus': bool,
+                },
+            }
+        """
+        result = self.client.get_multi([
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessWebGroup", [
+                "hm2WebHttpAdminStatus", "hm2WebHttpsAdminStatus",
+                "hm2WebHttpPortNumber", "hm2WebHttpsPortNumber"]),
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessSshGroup", [
+                "hm2SshAdminStatus"]),
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessTelnetGroup", [
+                "hm2TelnetServerAdminStatus"]),
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessSnmpGroup", [
+                "hm2SnmpV1AdminStatus", "hm2SnmpV2AdminStatus",
+                "hm2SnmpV3AdminStatus", "hm2SnmpPortNumber"]),
+        ], decode_strings=False)
+        mibs = result["mibs"].get("HM2-MGMTACCESS-MIB", {})
+        web = (mibs.get("hm2MgmtAccessWebGroup", [{}])[0])
+        ssh = (mibs.get("hm2MgmtAccessSshGroup", [{}])[0])
+        tel = (mibs.get("hm2MgmtAccessTelnetGroup", [{}])[0])
+        snmp = (mibs.get("hm2MgmtAccessSnmpGroup", [{}])[0])
+
+        # Industrial protocols (separate MIB)
+        ind_result = self.client.get_multi([
+            ("HM2-INDUSTRIAL-PROTOCOLS-MIB", "hm2Iec61850ConfigGroup",
+             ["hm2Iec61850MmsServerAdminStatus"]),
+            ("HM2-INDUSTRIAL-PROTOCOLS-MIB", "hm2ProfinetIOConfigGroup",
+             ["hm2PNIOAdminStatus"]),
+            ("HM2-INDUSTRIAL-PROTOCOLS-MIB", "hm2EthernetIPConfigGroup",
+             ["hm2EtherNetIPAdminStatus"]),
+            ("HM2-INDUSTRIAL-PROTOCOLS-MIB", "hm2Iec62541ConfigGroup",
+             ["hm2Iec62541OpcUaServerAdminStatus"]),
+            ("HM2-INDUSTRIAL-PROTOCOLS-MIB", "hm2ModbusConfigGroup",
+             ["hm2ModbusTcpServerAdminStatus"]),
+        ], decode_strings=False)
+        ind_mibs = ind_result["mibs"].get(
+            "HM2-INDUSTRIAL-PROTOCOLS-MIB", {})
+        iec = (ind_mibs.get("hm2Iec61850ConfigGroup", [{}])[0])
+        pn = (ind_mibs.get("hm2ProfinetIOConfigGroup", [{}])[0])
+        eip = (ind_mibs.get("hm2EthernetIPConfigGroup", [{}])[0])
+        opc = (ind_mibs.get("hm2Iec62541ConfigGroup", [{}])[0])
+        mb = (ind_mibs.get("hm2ModbusConfigGroup", [{}])[0])
+
+        return {
+            'http': {
+                'enabled': _safe_int(web.get(
+                    "hm2WebHttpAdminStatus", "2")) == 1,
+                'port': _safe_int(web.get(
+                    "hm2WebHttpPortNumber", "80")),
+            },
+            'https': {
+                'enabled': _safe_int(web.get(
+                    "hm2WebHttpsAdminStatus", "2")) == 1,
+                'port': _safe_int(web.get(
+                    "hm2WebHttpsPortNumber", "443")),
+            },
+            'ssh': {
+                'enabled': _safe_int(ssh.get(
+                    "hm2SshAdminStatus", "2")) == 1,
+            },
+            'telnet': {
+                'enabled': _safe_int(tel.get(
+                    "hm2TelnetServerAdminStatus", "2")) == 1,
+            },
+            'snmp': {
+                'v1': _safe_int(snmp.get(
+                    "hm2SnmpV1AdminStatus", "2")) == 1,
+                'v2': _safe_int(snmp.get(
+                    "hm2SnmpV2AdminStatus", "2")) == 1,
+                'v3': _safe_int(snmp.get(
+                    "hm2SnmpV3AdminStatus", "2")) == 1,
+                'port': _safe_int(snmp.get(
+                    "hm2SnmpPortNumber", "161")),
+            },
+            'industrial': {
+                'iec61850': _safe_int(iec.get(
+                    "hm2Iec61850MmsServerAdminStatus", "2")) == 1,
+                'profinet': _safe_int(pn.get(
+                    "hm2PNIOAdminStatus", "2")) == 1,
+                'ethernet_ip': _safe_int(eip.get(
+                    "hm2EtherNetIPAdminStatus", "2")) == 1,
+                'opcua': _safe_int(opc.get(
+                    "hm2Iec62541OpcUaServerAdminStatus", "2")) == 1,
+                'modbus': _safe_int(mb.get(
+                    "hm2ModbusTcpServerAdminStatus", "2")) == 1,
+            },
+        }
+
+    def set_services(self, http=None, https=None, ssh=None,
+                     telnet=None, snmp_v1=None, snmp_v2=None,
+                     snmp_v3=None, iec61850=None, profinet=None,
+                     ethernet_ip=None, opcua=None, modbus=None):
+        """Set service enable/disable state.
+
+        Each arg is bool (True=enable, False=disable) or None (no change).
+        """
+        mutations = []
+
+        def _en(v):
+            return "1" if v else "2"
+
+        if http is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessWebGroup",
+                {"hm2WebHttpAdminStatus": _en(http)}))
+        if https is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessWebGroup",
+                {"hm2WebHttpsAdminStatus": _en(https)}))
+        if ssh is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSshGroup",
+                {"hm2SshAdminStatus": _en(ssh)}))
+        if telnet is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessTelnetGroup",
+                {"hm2TelnetServerAdminStatus": _en(telnet)}))
+        if any(v is not None for v in (snmp_v1, snmp_v2, snmp_v3)):
+            snmp_vals = {}
+            if snmp_v1 is not None:
+                snmp_vals["hm2SnmpV1AdminStatus"] = _en(snmp_v1)
+            if snmp_v2 is not None:
+                snmp_vals["hm2SnmpV2AdminStatus"] = _en(snmp_v2)
+            if snmp_v3 is not None:
+                snmp_vals["hm2SnmpV3AdminStatus"] = _en(snmp_v3)
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSnmpGroup",
+                snmp_vals))
+        if iec61850 is not None:
+            mutations.append((
+                "HM2-INDUSTRIAL-PROTOCOLS-MIB",
+                "hm2Iec61850ConfigGroup",
+                {"hm2Iec61850MmsServerAdminStatus": _en(iec61850)}))
+        if profinet is not None:
+            mutations.append((
+                "HM2-INDUSTRIAL-PROTOCOLS-MIB",
+                "hm2ProfinetIOConfigGroup",
+                {"hm2PNIOAdminStatus": _en(profinet)}))
+        if ethernet_ip is not None:
+            mutations.append((
+                "HM2-INDUSTRIAL-PROTOCOLS-MIB",
+                "hm2EthernetIPConfigGroup",
+                {"hm2EtherNetIPAdminStatus": _en(ethernet_ip)}))
+        if opcua is not None:
+            mutations.append((
+                "HM2-INDUSTRIAL-PROTOCOLS-MIB",
+                "hm2Iec62541ConfigGroup",
+                {"hm2Iec62541OpcUaServerAdminStatus": _en(opcua)}))
+        if modbus is not None:
+            mutations.append((
+                "HM2-INDUSTRIAL-PROTOCOLS-MIB",
+                "hm2ModbusConfigGroup",
+                {"hm2ModbusTcpServerAdminStatus": _en(modbus)}))
+
+        self._apply_mutations(mutations)
+
+    # ------------------------------------------------------------------
+    # SNMP Config (HM2-MGMTACCESS-MIB + SNMP-COMMUNITY-MIB)
+    # ------------------------------------------------------------------
+
+    def get_snmp_config(self):
+        """Read SNMP configuration: versions, port, communities.
+
+        Returns::
+
+            {
+                'versions': {'v1': bool, 'v2': bool, 'v3': bool},
+                'port': int,
+                'communities': [{'name': str, 'access': str}],
+            }
+        """
+        snmp_data = self.client.get(
+            "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSnmpGroup",
+            ["hm2SnmpV1AdminStatus", "hm2SnmpV2AdminStatus",
+             "hm2SnmpV3AdminStatus", "hm2SnmpPortNumber"],
+            decode_strings=False)
+        s = snmp_data[0] if snmp_data else {}
+
+        # Community table
+        try:
+            comm_entries = self.client.get(
+                "SNMP-COMMUNITY-MIB", "snmpCommunityEntry",
+                ["snmpCommunityIndex", "snmpCommunityName",
+                 "snmpCommunitySecurityName"],
+                decode_strings=False)
+        except MOPSError:
+            comm_entries = []
+
+        communities = []
+        for entry in comm_entries:
+            name = _decode_hex_string(
+                entry.get("snmpCommunityName", ""))
+            sec_name = _decode_hex_string(
+                entry.get("snmpCommunitySecurityName", ""))
+            if not name:
+                continue
+            access = 'rw' if 'rw' in sec_name.lower() else 'ro'
+            communities.append({'name': name, 'access': access})
+
+        return {
+            'versions': {
+                'v1': _safe_int(s.get(
+                    "hm2SnmpV1AdminStatus", "2")) == 1,
+                'v2': _safe_int(s.get(
+                    "hm2SnmpV2AdminStatus", "2")) == 1,
+                'v3': _safe_int(s.get(
+                    "hm2SnmpV3AdminStatus", "2")) == 1,
+            },
+            'port': _safe_int(s.get("hm2SnmpPortNumber", "161")),
+            'communities': communities,
+        }
+
+    def set_snmp_config(self, v1=None, v2=None, v3=None):
+        """Set SNMP version enable/disable.
+
+        Args:
+            v1, v2, v3: bool or None
+        """
+        values = {}
+        if v1 is not None:
+            values["hm2SnmpV1AdminStatus"] = "1" if v1 else "2"
+        if v2 is not None:
+            values["hm2SnmpV2AdminStatus"] = "1" if v2 else "2"
+        if v3 is not None:
+            values["hm2SnmpV3AdminStatus"] = "1" if v3 else "2"
+        if values:
+            self._apply_set(
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSnmpGroup",
+                values)

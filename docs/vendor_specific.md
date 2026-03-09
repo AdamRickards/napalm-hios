@@ -154,7 +154,24 @@ config = device.get_config(profile='backup', source='envm')
 | Parameter | Values | Default | Description |
 |-----------|--------|---------|-------------|
 | `profile` | profile name | `None` (active) | Target profile (from `get_profiles()`) |
-| `source` | `'nvm'`, `'envm'` | `'nvm'` | Which storage to download from |
+| `source` | `'nvm'`, `'envm'`, `'running-config'` | `'nvm'` | Which storage to download from |
+
+Use `source='running-config', profile='running-config'` to download
+the **live running config** (including unsaved changes). Compare it
+against the saved NVM profile to see exactly what's unsaved:
+
+```python
+saved = device.get_config(profile='config', source='nvm')
+running = device.get_config(profile='running-config', source='running-config')
+
+import difflib
+diff = difflib.unified_diff(
+    saved['running'].splitlines(),
+    running['running'].splitlines(),
+    fromfile='nvm', tofile='running', lineterm='',
+)
+print('\n'.join(diff))
+```
 
 **Note**: The standard NAPALM `retrieve`, `full`, `sanitized`, and
 `format` parameters are accepted but ignored — MOPS always returns
@@ -1615,7 +1632,7 @@ device.discard_staging()
 
 ---
 
-## Config Watchdog (SNMP-only)
+## Config Watchdog
 
 The config watchdog provides an automatic rollback safety net. If the
 timer expires before `stop_watchdog()` is called, the device reverts
@@ -1656,6 +1673,227 @@ status = device.get_watchdog_status()
     'interval': 60,
     'remaining': 45,
 }
+```
+
+---
+
+## Access Port
+
+### set_access_port(port, vlan_id)
+
+Atomically configure port(s) as untagged access on a single VLAN. Removes the port
+from all other VLANs (egress + untagged), adds it to the target VLAN as untagged, and
+sets the PVID — all in one atomic request. The target VLAN must already exist.
+
+```python
+device.set_access_port('1/3', 5)         # single port
+device.set_access_port(['1/1', '1/2'], 5) # multiple ports
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `port` | port name or list | required | Port(s) to configure |
+| `vlan_id` | `1`–`4094` | required | Target VLAN (must exist) |
+
+**Protocol support:** MOPS, SNMP, Offline. SSH raises `NotImplementedError` (not atomic).
+
+---
+
+## Login Policy
+
+### get_login_policy()
+
+Read password complexity and login lockout settings.
+
+```python
+policy = device.get_login_policy()
+```
+
+```python
+{
+    'min_password_length': 8,
+    'max_login_attempts': 5,
+    'lockout_duration': 300,
+    'min_uppercase': 1,
+    'min_lowercase': 1,
+    'min_numeric': 1,
+    'min_special': 1,
+}
+```
+
+### set_login_policy(...)
+
+Set password complexity and login lockout policy. Only provided kwargs are changed.
+
+```python
+device.set_login_policy(min_password_length=10, max_login_attempts=3)
+```
+
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `min_password_length` | `1`–`64` | `None` | Minimum password length |
+| `max_login_attempts` | `0`–`5` | `None` | Max failed logins (0 = disabled) |
+| `lockout_duration` | `0`–`60` | `None` | Lockout period in seconds |
+| `min_uppercase` | `0`–`16` | `None` | Minimum uppercase characters |
+| `min_lowercase` | `0`–`16` | `None` | Minimum lowercase characters |
+| `min_numeric` | `0`–`16` | `None` | Minimum numeric characters |
+| `min_special` | `0`–`16` | `None` | Minimum special characters |
+
+---
+
+## Syslog
+
+### get_syslog()
+
+Read syslog configuration — global enable state and server list.
+
+```python
+syslog = device.get_syslog()
+```
+
+```python
+{
+    'enabled': True,
+    'servers': [
+        {
+            'index': 1,
+            'ip': '10.2.1.4',
+            'port': 514,
+            'severity': 'informational',
+            'transport': 'udp',
+        },
+    ],
+}
+```
+
+### set_syslog(enabled=None, servers=None)
+
+Set syslog configuration. Only provided args are changed.
+
+```python
+device.set_syslog(enabled=True)
+```
+
+---
+
+## NTP
+
+### get_ntp()
+
+Read SNTP client and NTP server configuration.
+
+```python
+ntp = device.get_ntp()
+```
+
+```python
+{
+    'client': {
+        'enabled': True,
+        'mode': 'sntp',
+        'servers': [
+            {'address': '10.2.1.1', 'port': 123, 'status': 'success'},
+        ],
+    },
+    'server': {
+        'enabled': False,
+        'stratum': 1,
+    },
+}
+```
+
+### set_ntp(client_enabled=None, server_enabled=None)
+
+Set SNTP client and NTP server enable/disable.
+
+```python
+device.set_ntp(client_enabled=True)
+device.set_ntp(server_enabled=False)
+```
+
+---
+
+## Services
+
+### get_services()
+
+Read service enable/disable state — management protocols and industrial protocols.
+
+```python
+services = device.get_services()
+```
+
+```python
+{
+    'http': {'enabled': True, 'port': 80},
+    'https': {'enabled': True, 'port': 443},
+    'ssh': {'enabled': True},
+    'telnet': {'enabled': False},
+    'snmp': {'v1': False, 'v2': False, 'v3': True, 'port': 161},
+    'industrial': {
+        'iec61850': False,
+        'profinet': False,
+        'ethernet_ip': False,
+        'opcua': False,
+        'modbus': False,
+    },
+}
+```
+
+### set_services(...)
+
+Set service enable/disable state. Only provided kwargs are changed.
+
+```python
+device.set_services(telnet=False, snmp_v1=False)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `http` | bool | HTTP web server |
+| `https` | bool | HTTPS web server |
+| `ssh` | bool | SSH server |
+| `telnet` | bool | Telnet server |
+| `snmp_v1` | bool | SNMPv1 access |
+| `snmp_v2` | bool | SNMPv2c access |
+| `snmp_v3` | bool | SNMPv3 access |
+| `iec61850` | bool | IEC 61850 MMS |
+| `profinet` | bool | PROFINET I/O |
+| `ethernet_ip` | bool | EtherNet/IP |
+| `opcua` | bool | OPC UA |
+| `modbus` | bool | Modbus TCP |
+
+---
+
+## SNMP Config
+
+### get_snmp_config()
+
+Read SNMP version status, port, and community table.
+
+```python
+snmp = device.get_snmp_config()
+```
+
+```python
+{
+    'versions': {'v1': False, 'v2': False, 'v3': True},
+    'port': 161,
+    'communities': [
+        {'name': 'public', 'access': 'ro'},
+        {'name': 'private', 'access': 'rw'},
+    ],
+}
+```
+
+Community table is only available via MOPS. SNMP and SSH return an empty list.
+
+### set_snmp_config(v1=None, v2=None, v3=None)
+
+Set SNMP version enable/disable.
+
+```python
+device.set_snmp_config(v1=False, v2=False, v3=True)
 ```
 
 ---

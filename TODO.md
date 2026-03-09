@@ -19,29 +19,11 @@
 15. Test PyPI-deployed version against local test environment
 16. Done
 
-## Next Release (v1.16.0)
-
-- [ ] Config watchdog — MOPS + SSH backends for `start_watchdog()`, `stop_watchdog()`, `get_watchdog_status()`. Currently SNMP-only. MIB: `HM2-FILEMGMT-MIB` (`hm2FileMgmtConfigWatchdogControl`). MOPS schema confirms all OIDs present (`mops_hios.xml`). SSH CLI: `config watchdog admin-state`, `config watchdog timeout`, `show config watchdog`
-  - `hm2ConfigWatchdogAdminStatus` — enable/disable (read-write), OID `.1.3.6.1.4.1.248.11.21.1.4.1.1`
-  - `hm2ConfigWatchdogTimeInterval` — 30-600 seconds (read-write), OID `.1.3.6.1.4.1.248.11.21.1.4.1.3`
-  - `hm2ConfigWatchdogOperStatus` — running state (read-only), OID `.1.3.6.1.4.1.248.11.21.1.4.1.2`
-  - `hm2ConfigWatchdogTimerValue` — countdown remaining (read-only), OID `.1.3.6.1.4.1.248.11.21.1.4.1.4`
-  - `hm2ConfigWatchdogIPAddressType` + `hm2ConfigWatchdogIPAddress` — read-only, auto-set from source IP of enabling station (no config needed)
-- [ ] `set_access_port(port(s), vlan_id)` — atomic access mode change via MOPS `set_multi`. Reads VLAN table + ifIndex, then in a single POST: add untagged on new VLAN, remove from old VLAN(s), set PVID. Currently VIKTOR does this as staged egress + separate PVID call (two round-trips, measurable blip). Same function design should accommodate management VLAN migration: egress + PVID + management VLAN ID all in one atomic set. MOPS-only (SSH/SNMP fall back to current multi-call approach). Benchmark improvement with [BLIP](tools/blip/TODO.md). **Mirror**: VIKTOR TODO in `tools/viktor/TODO.md` — update both when complete
-
-## JUSTIN driver methods — IEC 62443-4-2 SL1/SL2
+## JUSTIN driver methods — IEC 62443-4-2 SL2+
 
 Each getter/setter pair unlocks audit (gather) + remediation (harden) for the corresponding JUSTIN checks. Grouped by security level so they can ship incrementally. See [JUSTIN TODO](tools/justin/TODO.md) for check→fix mapping.
 
-### SL1 — baseline hardening (v1.16.0)
-
-These cover the most common audit findings. `set_hidiscovery()` already exists.
-
-- [ ] `get_services()` / `set_services()` — service enable/disable (HTTP, HTTPS, SSH, Telnet, SNMP, industrial protocols, ACA, GVRP/MVRP/GMRP/MMRP, DoS). **Unlocks**: sec-insecure-protocols, sec-unsigned-sw, sec-aca-auto-update, sec-aca-config-write, sec-aca-config-load, sec-devsec-monitors, ns-gvrp-mvrp, ns-gmrp-mmrp, ns-dos-protection
-- [ ] `get_syslog()` / `set_syslog()` — syslog server config (destination IP/port, severity filter, facility). **Unlocks**: sec-logging, [SNOOP](tools/snoop/TODO.md) syslog listener
-- [ ] `get_ntp()` / `set_ntp()` — NTP server config + status. **Unlocks**: sec-time-sync
-- [ ] `get_login_policy()` / `set_login_policy()` — lockout threshold/duration, min password length. **Unlocks**: sec-login-policy
-- [ ] `get_snmp_config()` / `set_snmp_config()` — communities, v3 users, trap destinations, auth/encrypt mode. **Unlocks**: sec-snmpv1-traps, sec-snmpv1v2-write
+SL1 shipped in v1.16.0: `get/set_services`, `get/set_syslog`, `get/set_ntp`, `get/set_login_policy`, `get/set_snmp_config`, `set_access_port`, multi-protocol watchdog.
 
 ### SL2 — advanced hardening (v1.17.0)
 

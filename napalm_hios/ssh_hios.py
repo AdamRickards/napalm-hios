@@ -2966,6 +2966,65 @@ class SSHHIOS:
         finally:
             self._disable()
 
+    # ── Config Watchdog ───────────────────────────────────────────
+
+    def get_watchdog_status(self):
+        """Read config watchdog state via CLI.
+
+        Returns::
+
+            {
+                'enabled': True,
+                'oper_status': 1,
+                'interval': 60,
+                'remaining': 45,
+            }
+        """
+        output = self.cli('show config watchdog')['show config watchdog']
+        d = parse_dot_keys(output)
+        admin_raw = d.get('Admin State', '').strip().lower()
+        oper_raw = d.get('Operating State', '').strip().lower()
+        try:
+            interval = int(d.get('Timeout Interval (seconds)', '0').strip())
+        except ValueError:
+            interval = 0
+        try:
+            remaining = int(
+                d.get('Current Timer Value (seconds)', '0').strip())
+        except ValueError:
+            remaining = 0
+        oper_map = {'disabled': 2, 'enabled': 1, 'active': 1}
+        return {
+            'enabled': admin_raw in ('enable', 'enabled', 'active'),
+            'oper_status': oper_map.get(oper_raw, 2),
+            'interval': interval,
+            'remaining': remaining,
+        }
+
+    def start_watchdog(self, seconds):
+        """Start the config watchdog timer via CLI.
+
+        Args:
+            seconds: timer interval (30-600)
+        """
+        if not (30 <= seconds <= 600):
+            raise ValueError(
+                f"Watchdog interval must be 30-600, got {seconds}")
+        self._config_mode()
+        try:
+            self.cli(f'config watchdog timeout {seconds}')
+            self.cli('config watchdog admin-state')
+        finally:
+            self._exit_config_mode()
+
+    def stop_watchdog(self):
+        """Stop (disable) the config watchdog timer via CLI."""
+        self._config_mode()
+        try:
+            self.cli('no config watchdog admin-state')
+        finally:
+            self._exit_config_mode()
+
     # ── RSTP ──────────────────────────────────────────────────────
 
     def get_rstp(self):
@@ -3357,6 +3416,308 @@ class SSHHIOS:
             self.cli(f'vlan delete {vlan_id}')
         finally:
             self._exit_vlan_database()
+
+    def set_access_port(self, port, vlan_id):
+        """Not available via SSH — no atomic multi-command."""
+        raise NotImplementedError(
+            "SSH has no atomic multi-command — use MOPS, SNMP, or Offline")
+
+    # ── Syslog ───────────────────────────────────────────────────
+
+    def get_syslog(self):
+        """Read syslog configuration via CLI."""
+        output = self.cli('show logging syslog')['show logging syslog']
+        d = parse_dot_keys(output)
+        enabled = d.get('Syslog logging settings', '').strip().lower()
+        return {
+            'enabled': enabled in ('enable', 'enabled'),
+            'servers': [],
+        }
+
+    def set_syslog(self, enabled=None, servers=None):
+        """Set syslog configuration via CLI."""
+        self._config_mode()
+        try:
+            if enabled is not None:
+                if enabled:
+                    self.cli('logging syslog operation')
+                else:
+                    self.cli('no logging syslog operation')
+        finally:
+            self._exit_config_mode()
+
+    # ── NTP / SNTP ───────────────────────────────────────────────
+
+    def get_ntp(self):
+        """Read SNTP client configuration via CLI."""
+        output = self.cli('show sntp client status')[
+            'show sntp client status']
+        d = parse_dot_keys(output)
+        enabled = d.get('Operation', '').strip().lower()
+        server_output = self.cli('show sntp client server')[
+            'show sntp client server']
+        rows = parse_table(server_output, min_fields=4)
+        servers = []
+        i = 0
+        while i < len(rows):
+            fields = rows[i]
+            if fields and fields[0].isdigit() and len(fields) >= 4:
+                addr = fields[3]
+                status = ''
+                if i + 1 < len(rows):
+                    status = rows[i + 1][0] if rows[i + 1] else ''
+                    i += 2
+                else:
+                    i += 1
+                servers.append({
+                    'address': addr,
+                    'port': 123,
+                    'status': status,
+                })
+            else:
+                i += 1
+        return {
+            'client': {
+                'enabled': enabled in ('enable', 'enabled'),
+                'mode': 'sntp',
+                'servers': servers,
+            },
+            'server': {'enabled': False, 'stratum': 1},
+        }
+
+    def set_ntp(self, client_enabled=None, server_enabled=None):
+        """Set SNTP client enable/disable via CLI."""
+        self._config_mode()
+        try:
+            if client_enabled is not None:
+                if client_enabled:
+                    self.cli('sntp client operation')
+                else:
+                    self.cli('no sntp client operation')
+        finally:
+            self._exit_config_mode()
+
+    # ── Services ─────────────────────────────────────────────────
+
+    def get_services(self):
+        """Read service enable/disable state via CLI."""
+        results = self.cli([
+            'show http', 'show https', 'show ssh server',
+            'show telnet', 'show snmp access',
+            'show iec61850-mms', 'show profinet global',
+            'show ethernet-ip', 'show modbus-tcp',
+        ])
+
+        def _parse_enabled(key, text):
+            d = parse_dot_keys(text)
+            for k, v in d.items():
+                if key.lower() in k.lower():
+                    return v.strip().lower() in (
+                        'enable', 'enabled')
+            return False
+
+        def _parse_port(key, text, default):
+            d = parse_dot_keys(text)
+            for k, v in d.items():
+                if key.lower() in k.lower() and 'port' in k.lower():
+                    try:
+                        return int(v.strip())
+                    except ValueError:
+                        pass
+            return default
+
+        http_out = results.get('show http', '')
+        https_out = results.get('show https', '')
+        ssh_out = results.get('show ssh server', '')
+        tel_out = results.get('show telnet', '')
+        snmp_out = results.get('show snmp access', '')
+        iec_out = results.get('show iec61850-mms', '')
+        pn_out = results.get('show profinet global', '')
+        eip_out = results.get('show ethernet-ip', '')
+        mb_out = results.get('show modbus-tcp', '')
+
+        snmp_d = parse_dot_keys(snmp_out)
+
+        return {
+            'http': {
+                'enabled': _parse_enabled('HTTP status', http_out),
+                'port': _parse_port('HTTP', http_out, 80),
+            },
+            'https': {
+                'enabled': _parse_enabled('HTTPS status', https_out),
+                'port': _parse_port('HTTPS', https_out, 443),
+            },
+            'ssh': {
+                'enabled': _parse_enabled('SSH server status', ssh_out),
+            },
+            'telnet': {
+                'enabled': _parse_enabled(
+                    'Telnet server status', tel_out),
+            },
+            'snmp': {
+                'v1': snmp_d.get(
+                    'Access by SNMP v1', '').strip().lower() == 'enabled',
+                'v2': snmp_d.get(
+                    'Access by SNMP v2', '').strip().lower() == 'enabled',
+                'v3': snmp_d.get(
+                    'Access by SNMP v3', '').strip().lower() == 'enabled',
+                'port': int(snmp_d.get(
+                    'SNMP port number', '161').strip()),
+            },
+            'industrial': {
+                'iec61850': _parse_enabled(
+                    'MMS server operation', iec_out),
+                'profinet': _parse_enabled(
+                    'PROFINET operation', pn_out),
+                'ethernet_ip': _parse_enabled(
+                    'EtherNet/IP operation', eip_out),
+                'opcua': False,  # no CLI show command discovered
+                'modbus': _parse_enabled(
+                    'Modbus TCP/IP server operation', mb_out),
+            },
+        }
+
+    def set_services(self, http=None, https=None, ssh=None,
+                     telnet=None, snmp_v1=None, snmp_v2=None,
+                     snmp_v3=None, iec61850=None, profinet=None,
+                     ethernet_ip=None, opcua=None, modbus=None):
+        """Set service enable/disable via CLI."""
+        self._config_mode()
+        try:
+            if http is not None:
+                self.cli('http server' if http
+                         else 'no http server')
+            if https is not None:
+                self.cli('https server' if https
+                         else 'no https server')
+            if ssh is not None:
+                self.cli('ssh server' if ssh
+                         else 'no ssh server')
+            if telnet is not None:
+                self.cli('telnet server' if telnet
+                         else 'no telnet server')
+            if snmp_v1 is not None:
+                self.cli('snmp access version v1'
+                         if snmp_v1 else 'no snmp access version v1')
+            if snmp_v2 is not None:
+                self.cli('snmp access version v2'
+                         if snmp_v2 else 'no snmp access version v2')
+            if snmp_v3 is not None:
+                self.cli('snmp access version v3'
+                         if snmp_v3 else 'no snmp access version v3')
+            if iec61850 is not None:
+                self.cli('iec61850-mms operation'
+                         if iec61850
+                         else 'no iec61850-mms operation')
+            if profinet is not None:
+                self.cli('profinet operation'
+                         if profinet else 'no profinet operation')
+            if ethernet_ip is not None:
+                self.cli('ethernet-ip operation'
+                         if ethernet_ip
+                         else 'no ethernet-ip operation')
+            if modbus is not None:
+                self.cli('modbus-tcp operation'
+                         if modbus else 'no modbus-tcp operation')
+        finally:
+            self._exit_config_mode()
+
+    # ── SNMP Config ──────────────────────────────────────────────
+
+    def get_snmp_config(self):
+        """Read SNMP configuration via CLI."""
+        output = self.cli('show snmp access')['show snmp access']
+        d = parse_dot_keys(output)
+        return {
+            'versions': {
+                'v1': d.get(
+                    'Access by SNMP v1', '').strip().lower() == 'enabled',
+                'v2': d.get(
+                    'Access by SNMP v2', '').strip().lower() == 'enabled',
+                'v3': d.get(
+                    'Access by SNMP v3', '').strip().lower() == 'enabled',
+            },
+            'port': int(d.get('SNMP port number', '161').strip()),
+            'communities': [],
+        }
+
+    def set_snmp_config(self, v1=None, v2=None, v3=None):
+        """Set SNMP version enable/disable via CLI."""
+        self._config_mode()
+        try:
+            if v1 is not None:
+                self.cli('snmp access version v1'
+                         if v1 else 'no snmp access version v1')
+            if v2 is not None:
+                self.cli('snmp access version v2'
+                         if v2 else 'no snmp access version v2')
+            if v3 is not None:
+                self.cli('snmp access version v3'
+                         if v3 else 'no snmp access version v3')
+        finally:
+            self._exit_config_mode()
+
+    # ── Login Policy ─────────────────────────────────────────────
+
+    def get_login_policy(self):
+        """Read password and login lockout policy via CLI."""
+        output = self.cli('show passwords')['show passwords']
+        d = parse_dot_keys(output)
+        # CLI shows lockout period in minutes; convert to seconds
+        try:
+            lockout_min = int(d.get(
+                'Login attempts period [min]', '0').strip())
+        except ValueError:
+            lockout_min = 0
+        return {
+            'min_password_length': int(d.get(
+                'Minimum password length', '6').strip()),
+            'max_login_attempts': int(d.get(
+                'Maximum login attempts', '0').strip()),
+            'lockout_duration': lockout_min * 60,
+            'min_uppercase': int(d.get(
+                'Minimum upper case characters', '1').strip()),
+            'min_lowercase': int(d.get(
+                'Minimum lower case characters', '1').strip()),
+            'min_numeric': int(d.get(
+                'Minimum numeric characters', '1').strip()),
+            'min_special': int(d.get(
+                'Minimum special characters', '1').strip()),
+        }
+
+    def set_login_policy(self, min_password_length=None,
+                         max_login_attempts=None, lockout_duration=None,
+                         min_uppercase=None, min_lowercase=None,
+                         min_numeric=None, min_special=None):
+        """Set password and login lockout policy via CLI."""
+        self._config_mode()
+        try:
+            if min_password_length is not None:
+                self.cli(
+                    f'passwords min-length {int(min_password_length)}')
+            if max_login_attempts is not None:
+                self.cli(
+                    f'passwords max-login-attempts '
+                    f'{int(max_login_attempts)}')
+            if lockout_duration is not None:
+                # CLI takes minutes; API takes seconds
+                minutes = int(lockout_duration) // 60
+                self.cli(
+                    f'passwords login-attempt-period {minutes}')
+            if min_uppercase is not None:
+                self.cli(
+                    f'passwords min-uppercase-chars {int(min_uppercase)}')
+            if min_lowercase is not None:
+                self.cli(
+                    f'passwords min-lowercase-chars {int(min_lowercase)}')
+            if min_numeric is not None:
+                self.cli(
+                    f'passwords min-numeric-chars {int(min_numeric)}')
+            if min_special is not None:
+                self.cli(
+                    f'passwords min-special-chars {int(min_special)}')
+        finally:
+            self._exit_config_mode()
 
     def _parse_speed(self, speed_str):
         speed_map = {

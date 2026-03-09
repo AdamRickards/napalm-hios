@@ -140,7 +140,7 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `save_config` | Yes | Yes | Yes | Yes | Offline: writes XML to disk |
 | `clear_config` | Yes | Yes | Yes | No | Raises NotImplementedError |
 | `clear_factory` | Yes | Yes | Yes | No | Raises NotImplementedError |
-| `get_config` | Yes | Yes | No | No | MOPS: HTTPS download; SSH: CLI |
+| `get_config` | Yes | Yes | No | No | MOPS: HTTPS download (nvm/envm/running-config); SSH: CLI |
 | `load_config` | Yes | No | No | No | MOPS: HTTPS upload |
 | `ping` | No | Yes | No | No | SSH-only (lazy-connects) |
 | `cli` | No | Yes | No | No | SSH-only (lazy-connects) |
@@ -198,6 +198,20 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `commit_staging` | Yes | No | No | Yes | MOPS + Offline only |
 | `discard_staging` | Yes | No | No | Yes | MOPS + Offline only |
 | `get_staged_mutations` | Yes | No | No | Yes | MOPS + Offline only |
+| `get_watchdog_status` | Yes | Yes | Yes | No | Vendor |
+| `start_watchdog` | Yes | Yes | Yes | No | Vendor write |
+| `stop_watchdog` | Yes | Yes | Yes | No | Vendor write |
+| `set_access_port` | Yes | Yes | No | Yes | Vendor write |
+| `get_login_policy` | Yes | Yes | Yes | Yes | Vendor |
+| `set_login_policy` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_syslog` | Yes | Yes | Yes | Yes | Vendor |
+| `set_syslog` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_ntp` | Yes | Yes | Yes | Yes | Vendor |
+| `set_ntp` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_services` | Yes | Yes | Yes | Yes | Vendor |
+| `set_services` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_snmp_config` | Yes | Yes | Yes | Yes | Vendor |
+| `set_snmp_config` | Yes | Yes | Yes | Yes | Vendor write |
 
 ---
 

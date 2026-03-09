@@ -86,7 +86,7 @@ device.close()
 
 ### Config download/upload (MOPS + SSH)
 
-- `get_config()` — MOPS: HTTPS config XML download; SSH: CLI scraping
+- `get_config()` — MOPS: HTTPS config XML download (nvm/envm/running-config); SSH: CLI scraping
 - `load_config()` — MOPS: HTTPS config XML upload to a profile
 
 ### SSH-only standard methods
@@ -124,6 +124,12 @@ device.close()
 - `get_profiles()` — list NVM/ENVM config profiles
 - `get_config_fingerprint()` — SHA1 fingerprint of active config
 - `get_config_remote()` — remote config backup settings and auto-backup state
+- `get_watchdog_status()` — config watchdog timer state
+- `get_login_policy()` — password complexity and login lockout settings
+- `get_syslog()` — syslog global state and server list
+- `get_ntp()` — SNTP client and NTP server config
+- `get_services()` — management and industrial protocol enable/disable state
+- `get_snmp_config()` — SNMP version status, port, and community table
 - `is_factory_default()` — detect factory-fresh HiOS 10.3+ devices
 
 ### Vendor-specific write methods
@@ -153,6 +159,14 @@ device.close()
 - `delete_vlan()` — delete VLAN from database
 - `set_snmp_information()` — set sysName, sysContact, sysLocation
 - `set_config_remote()` — TFTP push/pull and auto-backup configuration
+- `start_watchdog()` — start config watchdog rollback timer
+- `stop_watchdog()` — stop config watchdog timer
+- `set_access_port()` — atomically configure port as untagged access on a VLAN
+- `set_login_policy()` — set password complexity and login lockout policy
+- `set_syslog()` — set syslog global state and server config
+- `set_ntp()` — set SNTP client and NTP server enable/disable
+- `set_services()` — set management and industrial protocol enable/disable
+- `set_snmp_config()` — set SNMP version enable/disable
 - `save_config()` — save running config to NVM
 - `clear_config()` — clear running config (warm restart)
 - `clear_factory()` — full factory reset (reboot)

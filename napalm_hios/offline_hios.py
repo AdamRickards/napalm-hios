@@ -105,6 +105,19 @@ class OfflineHIOS(MOPSHIOS):
         raise NotImplementedError("clear_factory not available offline")
 
     # ------------------------------------------------------------------
+    # Config watchdog — not available offline
+    # ------------------------------------------------------------------
+
+    def get_watchdog_status(self):
+        raise NotImplementedError("watchdog is a live session concept")
+
+    def start_watchdog(self, seconds):
+        raise NotImplementedError("watchdog is a live session concept")
+
+    def stop_watchdog(self):
+        raise NotImplementedError("watchdog is a live session concept")
+
+    # ------------------------------------------------------------------
     # save_config — write XML to disk
     # ------------------------------------------------------------------
 

@@ -3123,5 +3123,360 @@ class TestConfigMOPS(unittest.TestCase):
         self.assertEqual(params["hm2MrpMRMReactOnLinkChange"], "2")
 
 
+class TestMOPSWatchdog(unittest.TestCase):
+    """Test MOPS watchdog methods."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_watchdog_status_disabled(self):
+        """Watchdog disabled returns correct shape."""
+        self.backend.client.get.return_value = [{
+            "hm2ConfigWatchdogAdminStatus": "2",
+            "hm2ConfigWatchdogOperStatus": "2",
+            "hm2ConfigWatchdogTimeInterval": "0",
+            "hm2ConfigWatchdogTimerValue": "0",
+        }]
+        result = self.backend.get_watchdog_status()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['oper_status'], 2)
+        self.assertEqual(result['interval'], 0)
+        self.assertEqual(result['remaining'], 0)
+
+    def test_get_watchdog_status_enabled(self):
+        """Watchdog enabled with timer running."""
+        self.backend.client.get.return_value = [{
+            "hm2ConfigWatchdogAdminStatus": "1",
+            "hm2ConfigWatchdogOperStatus": "1",
+            "hm2ConfigWatchdogTimeInterval": "30",
+            "hm2ConfigWatchdogTimerValue": "25",
+        }]
+        result = self.backend.get_watchdog_status()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['oper_status'], 1)
+        self.assertEqual(result['interval'], 30)
+        self.assertEqual(result['remaining'], 25)
+
+    def test_start_watchdog(self):
+        """start_watchdog calls _apply_set with correct args."""
+        self.backend.client.set.return_value = True
+        self.backend.start_watchdog(30)
+        self.backend.client.set.assert_called_once_with(
+            "HM2-FILEMGMT-MIB", "hm2FileMgmtConfigWatchdogControl",
+            {"hm2ConfigWatchdogTimeInterval": "30",
+             "hm2ConfigWatchdogAdminStatus": "1"})
+
+    def test_start_watchdog_invalid_range(self):
+        """start_watchdog rejects values outside 30-600."""
+        with self.assertRaises(ValueError):
+            self.backend.start_watchdog(10)
+        with self.assertRaises(ValueError):
+            self.backend.start_watchdog(700)
+
+    def test_stop_watchdog(self):
+        """stop_watchdog disables admin status."""
+        self.backend.client.set.return_value = True
+        self.backend.stop_watchdog()
+        self.backend.client.set.assert_called_once_with(
+            "HM2-FILEMGMT-MIB", "hm2FileMgmtConfigWatchdogControl",
+            {"hm2ConfigWatchdogAdminStatus": "2"})
+
+
+class TestMOPSLoginPolicy(unittest.TestCase):
+    """Test MOPS login policy getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_login_policy(self):
+        """get_login_policy returns correct shape."""
+        self.backend.client.get.return_value = [{
+            "hm2PwdMgmtMinLength": "8",
+            "hm2PwdMgmtLoginAttempts": "5",
+            "hm2PwdMgmtLoginAttemptsTimePeriod": "300",
+            "hm2PwdMgmtMinUpperCase": "2",
+            "hm2PwdMgmtMinLowerCase": "2",
+            "hm2PwdMgmtMinNumericNumbers": "1",
+            "hm2PwdMgmtMinSpecialCharacters": "1",
+        }]
+        result = self.backend.get_login_policy()
+        self.assertEqual(result['min_password_length'], 8)
+        self.assertEqual(result['max_login_attempts'], 5)
+        self.assertEqual(result['lockout_duration'], 300)
+        self.assertEqual(result['min_uppercase'], 2)
+        self.assertEqual(result['min_lowercase'], 2)
+        self.assertEqual(result['min_numeric'], 1)
+        self.assertEqual(result['min_special'], 1)
+
+    def test_get_login_policy_defaults(self):
+        """Missing attributes use factory defaults."""
+        self.backend.client.get.return_value = [{}]
+        result = self.backend.get_login_policy()
+        self.assertEqual(result['min_password_length'], 6)
+        self.assertEqual(result['max_login_attempts'], 0)
+        self.assertEqual(result['lockout_duration'], 0)
+
+    def test_set_login_policy_partial(self):
+        """set_login_policy only sets provided kwargs."""
+        self.backend.client.set.return_value = True
+        self.backend.set_login_policy(min_password_length=10)
+        call_args = self.backend.client.set.call_args
+        values = call_args[0][2]
+        self.assertEqual(values["hm2PwdMgmtMinLength"], "10")
+        self.assertEqual(len(values), 1)
+
+    def test_set_login_policy_noop(self):
+        """set_login_policy with no args is a no-op."""
+        self.backend.set_login_policy()
+        self.backend.client.set.assert_not_called()
+
+
+class TestMOPSSyslog(unittest.TestCase):
+    """Test MOPS syslog getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_syslog_disabled_no_servers(self):
+        """Syslog disabled, no server entries."""
+        from napalm_hios.mops_hios import MOPSError
+        self.backend.client.get.side_effect = [
+            [{"hm2LogSyslogAdminStatus": "2"}],
+            MOPSError("no entries"),
+        ]
+        result = self.backend.get_syslog()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['servers'], [])
+
+    def test_get_syslog_with_servers(self):
+        """Syslog enabled with server entries."""
+        self.backend.client.get.side_effect = [
+            [{"hm2LogSyslogAdminStatus": "1"}],
+            [
+                {
+                    "hm2LogSyslogServerIndex": "1",
+                    "hm2LogSyslogServerIPAddr": "31 30 2e 32 2e 31 2e 34",
+                    "hm2LogSyslogServerUdpPort": "514",
+                    "hm2LogSyslogServerLevelUpto": "6",
+                    "hm2LogSyslogServerTransportType": "1",
+                },
+            ],
+        ]
+        result = self.backend.get_syslog()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(len(result['servers']), 1)
+        srv = result['servers'][0]
+        self.assertEqual(srv['index'], 1)
+        self.assertEqual(srv['ip'], '10.2.1.4')
+        self.assertEqual(srv['port'], 514)
+        self.assertEqual(srv['severity'], 'informational')
+        self.assertEqual(srv['transport'], 'udp')
+
+    def test_set_syslog_enable(self):
+        """set_syslog enables global syslog."""
+        self.backend.client.set.return_value = True
+        self.backend.client.set_multi = Mock()
+        self.backend.set_syslog(enabled=True)
+
+
+class TestMOPSNtp(unittest.TestCase):
+    """Test MOPS NTP getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_ntp_disabled_no_servers(self):
+        """NTP client disabled, no servers."""
+        from napalm_hios.mops_hios import MOPSError
+        self.backend.client.get.side_effect = [
+            [{"hm2SntpClientAdminState": "2"}],
+            MOPSError("no entries"),
+            MOPSError("no NTP server"),
+        ]
+        result = self.backend.get_ntp()
+        self.assertFalse(result['client']['enabled'])
+        self.assertEqual(result['client']['mode'], 'sntp')
+        self.assertEqual(result['client']['servers'], [])
+        self.assertFalse(result['server']['enabled'])
+
+    def test_get_ntp_enabled_with_server(self):
+        """NTP client enabled with servers."""
+        self.backend.client.get.side_effect = [
+            [{"hm2SntpClientAdminState": "1"}],
+            [{
+                "hm2SntpClientServerIndex": "1",
+                "hm2SntpClientServerAddr": "31 30 2e 32 2e 31 2e 31",
+                "hm2SntpClientServerPort": "123",
+                "hm2SntpClientServerOperStatus": "2",
+                "hm2SntpClientServerDescription": "",
+            }],
+            [{"hm2NtpServerAdminState": "2", "hm2NtpServerStratum": "1"}],
+        ]
+        result = self.backend.get_ntp()
+        self.assertTrue(result['client']['enabled'])
+        self.assertEqual(len(result['client']['servers']), 1)
+        self.assertEqual(result['client']['servers'][0]['address'], '10.2.1.1')
+
+    def test_set_ntp_client_enable(self):
+        """set_ntp enables client."""
+        self.backend.client.set.return_value = True
+        self.backend.client.set_multi = Mock()
+        self.backend.set_ntp(client_enabled=True)
+
+
+class TestMOPSServices(unittest.TestCase):
+    """Test MOPS services getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_services(self):
+        """get_services returns correct shape."""
+        self.backend.client.get_multi.side_effect = [
+            {"mibs": {
+                "HM2-MGMTACCESS-MIB": {
+                    "hm2MgmtAccessWebGroup": [{
+                        "hm2WebHttpAdminStatus": "1",
+                        "hm2WebHttpsAdminStatus": "1",
+                        "hm2WebHttpPortNumber": "80",
+                        "hm2WebHttpsPortNumber": "443",
+                    }],
+                    "hm2MgmtAccessSshGroup": [{
+                        "hm2SshAdminStatus": "1",
+                    }],
+                    "hm2MgmtAccessTelnetGroup": [{
+                        "hm2TelnetServerAdminStatus": "2",
+                    }],
+                    "hm2MgmtAccessSnmpGroup": [{
+                        "hm2SnmpV1AdminStatus": "2",
+                        "hm2SnmpV2AdminStatus": "2",
+                        "hm2SnmpV3AdminStatus": "1",
+                        "hm2SnmpPortNumber": "161",
+                    }],
+                },
+            }, "errors": []},
+            {"mibs": {
+                "HM2-INDUSTRIAL-PROTOCOLS-MIB": {
+                    "hm2Iec61850ConfigGroup": [{
+                        "hm2Iec61850MmsServerAdminStatus": "2",
+                    }],
+                    "hm2ProfinetIOConfigGroup": [{
+                        "hm2PNIOAdminStatus": "2",
+                    }],
+                    "hm2EthernetIPConfigGroup": [{
+                        "hm2EtherNetIPAdminStatus": "2",
+                    }],
+                    "hm2Iec62541ConfigGroup": [{
+                        "hm2Iec62541OpcUaServerAdminStatus": "2",
+                    }],
+                    "hm2ModbusConfigGroup": [{
+                        "hm2ModbusTcpServerAdminStatus": "2",
+                    }],
+                },
+            }, "errors": []},
+        ]
+        result = self.backend.get_services()
+        self.assertTrue(result['http']['enabled'])
+        self.assertEqual(result['http']['port'], 80)
+        self.assertTrue(result['https']['enabled'])
+        self.assertTrue(result['ssh']['enabled'])
+        self.assertFalse(result['telnet']['enabled'])
+        self.assertFalse(result['snmp']['v1'])
+        self.assertFalse(result['snmp']['v2'])
+        self.assertTrue(result['snmp']['v3'])
+        self.assertEqual(result['snmp']['port'], 161)
+        self.assertFalse(result['industrial']['iec61850'])
+        self.assertFalse(result['industrial']['profinet'])
+        self.assertFalse(result['industrial']['ethernet_ip'])
+        self.assertFalse(result['industrial']['opcua'])
+        self.assertFalse(result['industrial']['modbus'])
+
+    def test_set_services_single(self):
+        """set_services with one kwarg."""
+        self.backend.client.set.return_value = True
+        self.backend.client.set_multi = Mock()
+        self.backend.set_services(telnet=True)
+
+    def test_set_services_noop(self):
+        """set_services with no args is a no-op."""
+        self.backend.set_services()
+        self.backend.client.set.assert_not_called()
+        self.backend.client.set_multi.assert_not_called()
+
+
+class TestMOPSSnmpConfig(unittest.TestCase):
+    """Test MOPS SNMP config getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_snmp_config(self):
+        """get_snmp_config returns versions + communities."""
+        self.backend.client.get.side_effect = [
+            [{
+                "hm2SnmpV1AdminStatus": "2",
+                "hm2SnmpV2AdminStatus": "2",
+                "hm2SnmpV3AdminStatus": "1",
+                "hm2SnmpPortNumber": "161",
+            }],
+            [{
+                "snmpCommunityIndex": "70 75 62 6c 69 63",
+                "snmpCommunityName": "70 75 62 6c 69 63",
+                "snmpCommunitySecurityName": "72 65 61 64 4f 6e 6c 79",
+            }],
+        ]
+        result = self.backend.get_snmp_config()
+        self.assertFalse(result['versions']['v1'])
+        self.assertFalse(result['versions']['v2'])
+        self.assertTrue(result['versions']['v3'])
+        self.assertEqual(result['port'], 161)
+        self.assertEqual(len(result['communities']), 1)
+        self.assertEqual(result['communities'][0]['name'], 'public')
+        self.assertEqual(result['communities'][0]['access'], 'ro')
+
+    def test_get_snmp_config_no_communities(self):
+        """get_snmp_config with empty community table."""
+        from napalm_hios.mops_hios import MOPSError
+        self.backend.client.get.side_effect = [
+            [{
+                "hm2SnmpV1AdminStatus": "1",
+                "hm2SnmpV2AdminStatus": "1",
+                "hm2SnmpV3AdminStatus": "2",
+                "hm2SnmpPortNumber": "161",
+            }],
+            MOPSError("no community entries"),
+        ]
+        result = self.backend.get_snmp_config()
+        self.assertTrue(result['versions']['v1'])
+        self.assertTrue(result['versions']['v2'])
+        self.assertFalse(result['versions']['v3'])
+        self.assertEqual(result['communities'], [])
+
+    def test_set_snmp_config_v1(self):
+        """set_snmp_config enables v1."""
+        self.backend.client.set.return_value = True
+        self.backend.set_snmp_config(v1=True)
+        self.backend.client.set.assert_called_once_with(
+            "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSnmpGroup",
+            {"hm2SnmpV1AdminStatus": "1"})
+
+    def test_set_snmp_config_noop(self):
+        """set_snmp_config with no args is a no-op."""
+        self.backend.set_snmp_config()
+        self.backend.client.set.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()
