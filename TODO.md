@@ -42,6 +42,35 @@ Builds on SL1. Deeper controls, per-port security features.
 
 - [ ] `get_users()` / `set_user()` / `delete_user()` — local user account CRUD. Create/modify/delete user accounts with role (admin/operator/guest). **Unlocks**: JUSTIN fleet-wide credential management, sys-default-passwords remediation
 
+## `get_services()` / `set_services()` extension
+
+Extend to cover all SL1+SL2 service state. Selective query: pass field names to get/set only those, omit to get/set all. All fields are global (not per-port) booleans unless noted.
+
+**API:**
+```python
+# Get everything (slow on SSH, atomic on SNMP/MOPS)
+device.get_services()
+
+# Get specific fields only
+device.get_services('unsigned_sw', 'aca_auto_update')
+
+# Set — unchanged, kwargs only
+device.set_services(unsigned_sw=False, aca_auto_update=False)
+```
+
+**New fields needed** (verify each one live before implementing):
+
+- [ ] `unsigned_sw` — allow unsigned firmware upload. **Unlocks**: sec-unsigned-sw
+- [ ] `aca_auto_update` — ACA auto software load from ext NVM. **Unlocks**: sec-aca-auto-update
+- [ ] `aca_config_write` — ACA config save to ext NVM. **Unlocks**: sec-aca-config-write
+- [ ] `aca_config_load` — ACA config load from ext NVM (priority: first/second/third/disabled). **Unlocks**: sec-aca-config-load
+- [ ] `gvrp` — GVRP global enable (note: may be dot1q bridge MIB, not HiOS private). **Unlocks**: ns-gvrp-mvrp
+- [ ] `mvrp` — MVRP global enable. **Unlocks**: ns-gvrp-mvrp
+- [ ] `gmrp` — GMRP global enable (may be dot1q bridge MIB). **Unlocks**: ns-gmrp-mmrp
+- [ ] `mmrp` — MMRP global enable. **Unlocks**: ns-gmrp-mmrp
+- [ ] `devsec_monitors` — dict of 20+ individual DevSec sense monitors (bool each). **Unlocks**: sec-devsec-monitors
+- [ ] `dos_protection` — dict of DoS mitigation filters (TCP/ICMP/L2/IP checks). **Unlocks**: ns-dos-protection (SL2)
+
 ## Vendor-specific methods (driver) — future
 
 - [ ] Multi-get composition — `get_multi()` API that lets callers request multiple getters in one HTTP POST. Phase 0 gather (CLAMPS, VIKTOR, AARON) gets all facts in a single round-trip. Each additional safety check (SRM ports, VLAN egress, etc.) costs zero extra HTTP requests

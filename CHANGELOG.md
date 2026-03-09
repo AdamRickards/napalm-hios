@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.16.1
+
+### Bugfix — SL1 setter/getter fixes for syslog, NTP, and IP decode
+
+- **`get_syslog()` / `get_ntp()` — IP addresses returned as raw hex bytes**. `_decode_hex_string()` treats InetAddress fields as UTF-8 text, producing garbled output (`'À¨\x03\x01'` instead of `'192.168.3.1'`). Fixed: `_decode_hex_ip()` now used for all InetAddress fields in both getters
+- **`set_ntp()` wrapper kwarg mismatch** — `hios.py` wrapper passed `enabled=` but all backends expect `client_enabled=`. JUSTIN's `set_ntp(enabled=True)` raised `unexpected keyword argument`. Fixed: wrapper now maps `enabled` → `client_enabled` and passes `servers` through. MOPS backend extended with `servers=` param using RowStatus createAndWait sequence for new server entries
+- **`set_syslog()` can't create new server entry** — when no syslog server row exists, `set_syslog(servers=[...])` failed with `inconsistentValue` because RowStatus handling was missing. Fixed: createAndWait(5) → set values (IPAddrType + IP as hex octets + port) → activate(1). Queries existing rows first, only creates new. IP encoded via `_encode_hex_ip()` not `encode_string()`
+
 ## 1.16.0
 
 ### Config Watchdog — Multi-protocol support

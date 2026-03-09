@@ -994,7 +994,7 @@ class HIOSDriver(NetworkDriver):
     def set_ntp(self, enabled=None, servers=None):
         if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
             return self._get_active_connection().set_ntp(
-                enabled=enabled, servers=servers,
+                client_enabled=enabled, servers=servers,
             )
         raise NotImplementedError("set_ntp is not implemented for this protocol")
 

@@ -4489,7 +4489,7 @@ class MOPSHIOS:
             ip_raw = entry.get("hm2LogSyslogServerIPAddr", "")
             servers.append({
                 'index': idx,
-                'ip': _decode_hex_string(ip_raw) if ip_raw else '',
+                'ip': _decode_hex_ip(ip_raw) if ip_raw else '',
                 'port': _safe_int(entry.get(
                     "hm2LogSyslogServerUdpPort", "514")),
                 'severity': _SEVERITY.get(str(sev_code), str(sev_code)),
@@ -4516,17 +4516,43 @@ class MOPSHIOS:
         }
         _TRANSPORT_REV = {'udp': '1', 'tls': '2'}
 
-        mutations = []
         if enabled is not None:
-            mutations.append((
+            self._apply_set(
                 "HM2-LOGGING-MIB", "hm2LogSyslogGroup",
-                {"hm2LogSyslogAdminStatus": "1" if enabled else "2"}))
+                {"hm2LogSyslogAdminStatus": "1" if enabled else "2"})
 
         if servers:
+            # Find existing row indices
+            try:
+                existing = self.client.get(
+                    "HM2-LOGGING-MIB", "hm2LogSyslogServerEntry",
+                    ["hm2LogSyslogServerIndex",
+                     "hm2LogSyslogServerRowStatus"],
+                    decode_strings=False)
+            except MOPSError:
+                existing = []
+            existing_idx = set()
+            for e in existing:
+                rs = _safe_int(e.get("hm2LogSyslogServerRowStatus", "0"))
+                if rs in (1, 2, 3):  # active, notInService, notReady
+                    existing_idx.add(
+                        _safe_int(e.get("hm2LogSyslogServerIndex", "0")))
+
             for srv in servers:
+                idx_num = int(srv.get('index', 1))
+                idx = {"hm2LogSyslogServerIndex": str(idx_num)}
+
+                # Create row if it doesn't exist
+                if idx_num not in existing_idx:
+                    self._apply_set_indexed(
+                        "HM2-LOGGING-MIB", "hm2LogSyslogServerEntry",
+                        idx, {"hm2LogSyslogServerRowStatus": "5"})
+
+                # Build values
                 values = {}
                 if 'ip' in srv:
-                    values["hm2LogSyslogServerIPAddr"] = encode_string(
+                    values["hm2LogSyslogServerIPAddrType"] = "1"
+                    values["hm2LogSyslogServerIPAddr"] = _encode_hex_ip(
                         srv['ip'])
                 if 'port' in srv:
                     values["hm2LogSyslogServerUdpPort"] = str(
@@ -4540,13 +4566,15 @@ class MOPSHIOS:
                     if trans is not None:
                         values["hm2LogSyslogServerTransportType"] = trans
                 if values:
-                    idx = {"hm2LogSyslogServerIndex": str(
-                        srv.get('index', 1))}
-                    mutations.append((
+                    self._apply_set_indexed(
                         "HM2-LOGGING-MIB", "hm2LogSyslogServerEntry",
-                        values, idx))
+                        idx, values)
 
-        self._apply_mutations(mutations)
+                # Activate new rows
+                if idx_num not in existing_idx:
+                    self._apply_set_indexed(
+                        "HM2-LOGGING-MIB", "hm2LogSyslogServerEntry",
+                        idx, {"hm2LogSyslogServerRowStatus": "1"})
 
     # ------------------------------------------------------------------
     # NTP / SNTP (HM2-TIMESYNC-MIB)
@@ -4600,7 +4628,7 @@ class MOPSHIOS:
             status_code = entry.get(
                 "hm2SntpClientServerOperStatus", "1")
             servers.append({
-                'address': _decode_hex_string(addr_raw) if addr_raw else '',
+                'address': _decode_hex_ip(addr_raw) if addr_raw else '',
                 'port': _safe_int(entry.get(
                     "hm2SntpClientServerPort", "123")),
                 'status': _STATUS.get(
@@ -4632,12 +4660,14 @@ class MOPSHIOS:
             },
         }
 
-    def set_ntp(self, client_enabled=None, server_enabled=None):
+    def set_ntp(self, client_enabled=None, server_enabled=None,
+                servers=None):
         """Set NTP/SNTP configuration.
 
         Args:
             client_enabled: True/False — SNTP client admin state
             server_enabled: True/False — NTP server admin state
+            servers: list of dicts with keys: address, port (optional)
         """
         mutations = []
         if client_enabled is not None:
@@ -4651,6 +4681,56 @@ class MOPSHIOS:
                 {"hm2NtpServerAdminState":
                  "1" if server_enabled else "2"}))
         self._apply_mutations(mutations)
+
+        if servers:
+            # Find existing server row indices
+            try:
+                existing = self.client.get(
+                    "HM2-TIMESYNC-MIB", "hm2SntpClientServerAddrEntry",
+                    ["hm2SntpClientServerIndex",
+                     "hm2SntpClientServerRowStatus"],
+                    decode_strings=False)
+            except MOPSError:
+                existing = []
+            existing_idx = set()
+            for e in existing:
+                rs = _safe_int(e.get(
+                    "hm2SntpClientServerRowStatus", "0"))
+                if rs in (1, 2, 3):
+                    existing_idx.add(_safe_int(
+                        e.get("hm2SntpClientServerIndex", "0")))
+
+            for i, srv in enumerate(servers):
+                idx_num = srv.get('index', i + 1)
+                idx = {"hm2SntpClientServerIndex": str(idx_num)}
+
+                # Create row if it doesn't exist
+                if idx_num not in existing_idx:
+                    self._apply_set_indexed(
+                        "HM2-TIMESYNC-MIB",
+                        "hm2SntpClientServerAddrEntry",
+                        idx,
+                        {"hm2SntpClientServerRowStatus": "5"})
+
+                # Set address
+                values = {"hm2SntpClientServerAddrType": "1"}
+                values["hm2SntpClientServerAddr"] = _encode_hex_ip(
+                    srv['address'])
+                if 'port' in srv:
+                    values["hm2SntpClientServerPort"] = str(
+                        int(srv['port']))
+                self._apply_set_indexed(
+                    "HM2-TIMESYNC-MIB",
+                    "hm2SntpClientServerAddrEntry",
+                    idx, values)
+
+                # Activate new rows
+                if idx_num not in existing_idx:
+                    self._apply_set_indexed(
+                        "HM2-TIMESYNC-MIB",
+                        "hm2SntpClientServerAddrEntry",
+                        idx,
+                        {"hm2SntpClientServerRowStatus": "1"})
 
     # ------------------------------------------------------------------
     # Services (multi-MIB)

@@ -1,0 +1,184 @@
+{
+  "checks": [
+    {
+      "id": "sec-hidiscovery",
+      "clause": "CR 7.7",
+      "clause_title": "Least functionality",
+      "severity": "critical",
+      "sl": 1,
+      "getter": "get_hidiscovery",
+      "setter": "set_hidiscovery",
+      "desc": "HiDiscovery should be disabled in production",
+      "harden_defaults": {"status": "off"}
+    },
+    {
+      "id": "sec-insecure-protocols",
+      "clause": "CR 4.1",
+      "clause_title": "Communication confidentiality",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_services",
+      "setter": "set_services",
+      "desc": "Insecure management protocols should be disabled",
+      "harden_defaults": {"http": false, "telnet": false}
+    },
+    {
+      "id": "sec-unsigned-sw",
+      "clause": "CR 3.4",
+      "clause_title": "Software integrity",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_services",
+      "setter": "set_services",
+      "desc": "Unsigned firmware upload should be rejected",
+      "harden_defaults": {"unsigned_sw": false}
+    },
+    {
+      "id": "sec-login-policy",
+      "clause": "CR 1.11",
+      "clause_title": "Unsuccessful login attempts",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_login_policy",
+      "setter": "set_login_policy",
+      "desc": "Login lockout and minimum password length should be configured",
+      "harden_defaults": {
+        "max_login_attempts": 5,
+        "lockout_duration": 60,
+        "min_password_length": 8
+      }
+    },
+    {
+      "id": "sec-time-sync",
+      "clause": "CR 6.1",
+      "clause_title": "Audit log",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_ntp",
+      "setter": "set_ntp",
+      "desc": "NTP time synchronisation should be configured",
+      "harden_defaults": {"client_enabled": true},
+      "harden_config_keys": ["ntp_server"]
+    },
+    {
+      "id": "sec-logging",
+      "clause": "CR 6.1",
+      "clause_title": "Audit log",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_syslog",
+      "setter": "set_syslog",
+      "desc": "Syslog destination should be configured",
+      "harden_defaults": {"enabled": true},
+      "harden_config_keys": ["syslog_server", "syslog_port"]
+    },
+    {
+      "id": "sec-mgmt-vlan",
+      "clause": "CR 7.6",
+      "clause_title": "Network segmentation",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_management",
+      "setter": null,
+      "desc": "Management traffic should not use VLAN 1"
+    },
+    {
+      "id": "sec-aca-auto-update",
+      "clause": "CR 3.4",
+      "clause_title": "Software integrity",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_services",
+      "setter": "set_services",
+      "desc": "ACA auto-update should be disabled",
+      "harden_defaults": {"aca_auto_update": false}
+    },
+    {
+      "id": "sec-aca-config-write",
+      "clause": "CR 3.4",
+      "clause_title": "Software integrity",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_services",
+      "setter": "set_services",
+      "desc": "ACA external config write should be disabled",
+      "harden_defaults": {"aca_config_write": false}
+    },
+    {
+      "id": "sec-aca-config-load",
+      "clause": "CR 3.4",
+      "clause_title": "Software integrity",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_services",
+      "setter": "set_services",
+      "desc": "ACA external config load should be disabled",
+      "harden_defaults": {"aca_config_load": false}
+    },
+    {
+      "id": "sec-snmpv1-traps",
+      "clause": "CR 4.1",
+      "clause_title": "Communication confidentiality",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_snmp_config",
+      "setter": "set_snmp_config",
+      "desc": "SNMPv1 should be disabled",
+      "harden_defaults": {"v1": false}
+    },
+    {
+      "id": "sec-snmpv1v2-write",
+      "clause": "CR 2.1",
+      "clause_title": "Authorization enforcement",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_snmp_config",
+      "setter": "set_snmp_config",
+      "desc": "SNMPv1/v2 write access should be disabled",
+      "harden_defaults": {"v1": false, "v2": false}
+    },
+    {
+      "id": "sec-devsec-monitors",
+      "clause": "CR 6.2",
+      "clause_title": "Continuous monitoring",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_services",
+      "setter": "set_services",
+      "desc": "Device security monitors should all be enabled",
+      "harden_defaults": {"devsec_monitors": true}
+    },
+    {
+      "id": "sys-default-passwords",
+      "clause": "CR 1.5",
+      "clause_title": "Authenticator management",
+      "severity": "critical",
+      "sl": 1,
+      "getter": null,
+      "setter": null,
+      "desc": "Default admin/private credentials must be changed"
+    },
+    {
+      "id": "ns-gvrp-mvrp",
+      "clause": "CR 7.7",
+      "clause_title": "Least functionality",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_services",
+      "setter": "set_services",
+      "desc": "GVRP/MVRP dynamic VLAN registration should be disabled",
+      "harden_defaults": {"gvrp": false, "mvrp": false}
+    },
+    {
+      "id": "ns-gmrp-mmrp",
+      "clause": "CR 7.7",
+      "clause_title": "Least functionality",
+      "severity": "warning",
+      "sl": 1,
+      "getter": "get_services",
+      "setter": "set_services",
+      "desc": "GMRP/MMRP dynamic multicast registration should be disabled",
+      "harden_defaults": {"gmrp": false, "mmrp": false}
+    }
+  ]
+}

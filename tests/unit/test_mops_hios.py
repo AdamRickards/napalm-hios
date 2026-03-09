@@ -3261,7 +3261,7 @@ class TestMOPSSyslog(unittest.TestCase):
             [
                 {
                     "hm2LogSyslogServerIndex": "1",
-                    "hm2LogSyslogServerIPAddr": "31 30 2e 32 2e 31 2e 34",
+                    "hm2LogSyslogServerIPAddr": "0a 02 01 04",
                     "hm2LogSyslogServerUdpPort": "514",
                     "hm2LogSyslogServerLevelUpto": "6",
                     "hm2LogSyslogServerTransportType": "1",
@@ -3313,7 +3313,7 @@ class TestMOPSNtp(unittest.TestCase):
             [{"hm2SntpClientAdminState": "1"}],
             [{
                 "hm2SntpClientServerIndex": "1",
-                "hm2SntpClientServerAddr": "31 30 2e 32 2e 31 2e 31",
+                "hm2SntpClientServerAddr": "0a 02 01 01",
                 "hm2SntpClientServerPort": "123",
                 "hm2SntpClientServerOperStatus": "2",
                 "hm2SntpClientServerDescription": "",
