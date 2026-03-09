@@ -1,0 +1,37 @@
+{
+  "name": "RSTP",
+  "requiresSW": "L2S",
+  "layer": "switching",
+  "checks": [
+    {
+      "id": "redundancy-posture",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Redundancy protocol posture summary"
+    },
+    {
+      "id": "rstp-bpdu-guard",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "BPDU guard should be enabled globally"
+    },
+    {
+      "id": "rstp-edge-on-edge",
+      "scope": "device",
+      "severity": "info",
+      "desc": "Edge ports should have RSTP edge or auto-edge enabled"
+    },
+    {
+      "id": "rstp-trunk-not-edge",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Trunk ports should not be forced as RSTP edge"
+    },
+    {
+      "id": "rstp-global-state",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "RSTP global state sanity check"
+    }
+  ]
+}

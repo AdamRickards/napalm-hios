@@ -1,0 +1,13 @@
+{
+  "name": "Security-3A",
+  "requiresSW": "L3A_UR",
+  "layer": "security",
+  "checks": [
+    {
+      "id": "sec-module-slots",
+      "scope": "device",
+      "severity": "info",
+      "desc": "Unused media module slots should be disabled (§2.12.1 / 3A)"
+    }
+  ]
+}

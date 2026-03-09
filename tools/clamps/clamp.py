@@ -112,21 +112,25 @@ def interactive_mode():
         print(f'  {BD}{title}{RS}\n')
 
     def pick(text, options, default=1):
+        last = len(options)
         for i, (label, _) in enumerate(options, 1):
             mark = f'{YL}▸{RS}' if i == default else ' '
-            print(f'  {mark} {CY}{i}{RS}) {label}')
+            key = 'q' if i == last else str(i)
+            print(f'  {mark} {CY}{key}{RS}) {label}')
         print()
         while True:
             raw = input(f'  {GR}▸{RS} {text} [{default}]: ').strip()
             if not raw:
                 return options[default - 1][1]
+            if raw.lower() == 'q':
+                return options[-1][1]
             try:
                 idx = int(raw)
-                if 1 <= idx <= len(options):
+                if 1 <= idx <= last:
                     return options[idx - 1][1]
             except ValueError:
                 pass
-            print(f'  {YL}Pick 1–{len(options)}{RS}')
+            print(f'  {YL}Pick 1–{last - 1} or q{RS}')
 
     def ask(text, default=''):
         hint = f' {DM}[{default}]{RS}' if default else ''

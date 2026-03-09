@@ -1,0 +1,55 @@
+{
+  "name": "System",
+  "requiresSW": "L2S",
+  "layer": "system",
+  "checks": [
+    {
+      "id": "sys-hostname-default",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Hostname should not be default"
+    },
+    {
+      "id": "sys-mgmt-ip",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Management IP should be configured"
+    },
+    {
+      "id": "sys-snmp-communities",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Default SNMP communities should be removed"
+    },
+    {
+      "id": "sys-default-passwords",
+      "scope": "device",
+      "severity": "info",
+      "desc": "Check for default user accounts"
+    },
+    {
+      "id": "edge-loop-protection",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Edge ports should have exactly one protection strategy"
+    },
+    {
+      "id": "non-edge-loop-prot",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Loop protection should only be on edge ports"
+    },
+    {
+      "id": "edge-auto-disable-reasons",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Auto-disable should have multiple reasons enabled"
+    },
+    {
+      "id": "edge-auto-disable-timer",
+      "scope": "device",
+      "severity": "info",
+      "desc": "Edge ports should have auto-disable recovery timer"
+    }
+  ]
+}

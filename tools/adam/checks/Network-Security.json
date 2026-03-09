@@ -1,0 +1,55 @@
+{
+  "name": "Network-Security",
+  "requiresSW": "L2S",
+  "layer": "security",
+  "checks": [
+    {
+      "id": "ns-gvrp-mvrp",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "GVRP/MVRP should be disabled — dynamic VLAN registration (§3.3.2)"
+    },
+    {
+      "id": "ns-gmrp-mmrp",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "GMRP/MMRP should be disabled — dynamic multicast registration (§3.4.1)"
+    },
+    {
+      "id": "ns-port-security",
+      "scope": "device",
+      "severity": "info",
+      "desc": "Port security limits MAC addresses per port (§3.3.3)"
+    },
+    {
+      "id": "ns-dhcp-snooping",
+      "scope": "device",
+      "severity": "info",
+      "desc": "DHCP snooping prevents rogue DHCP servers (§3.3.4)"
+    },
+    {
+      "id": "ns-ipsg",
+      "scope": "device",
+      "severity": "info",
+      "desc": "IP Source Guard prevents IP spoofing (§3.3.5)"
+    },
+    {
+      "id": "ns-dai",
+      "scope": "device",
+      "severity": "info",
+      "desc": "Dynamic ARP Inspection prevents ARP spoofing (§3.3.6)"
+    },
+    {
+      "id": "ns-dos-protection",
+      "scope": "device",
+      "severity": "info",
+      "desc": "Consider enabling DoS mitigation filters (§3.6.1)"
+    },
+    {
+      "id": "ns-lldp",
+      "scope": "device",
+      "severity": "info",
+      "desc": "LLDP state awareness — review topology exposure (§3.10)"
+    }
+  ]
+}

@@ -1,0 +1,152 @@
+{
+  "name": "Security",
+  "requiresSW": "L2S",
+  "layer": "security",
+  "checks": [
+    {
+      "id": "sec-hidiscovery",
+      "scope": "device",
+      "severity": "critical",
+      "desc": "HiDiscovery should be disabled in production (§2.11.2)"
+    },
+    {
+      "id": "sec-mgmt-vlan",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Management should not be on default VLAN 1 (§2.11.5)"
+    },
+    {
+      "id": "sec-unused-ports",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Unused ports should be admin-disabled (§2.11.8)"
+    },
+    {
+      "id": "sec-poe",
+      "scope": "device",
+      "severity": "info",
+      "desc": "PoE should be disabled if not required (§2.11.9)"
+    },
+    {
+      "id": "sec-aca-auto-update",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Auto software update from external memory should be disabled (§2.11.10)"
+    },
+    {
+      "id": "sec-unsigned-sw",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Unsigned firmware upload should be rejected (§2.11.11)"
+    },
+    {
+      "id": "sec-aca-config-write",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Config write to external memory should be disabled (§2.11.12)"
+    },
+    {
+      "id": "sec-aca-config-load",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Config load from external memory should be disabled (§2.11.14)"
+    },
+    {
+      "id": "sec-insecure-protocols",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Insecure management protocols should be disabled (§2.11.16)"
+    },
+    {
+      "id": "sec-industrial-protocols",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Unused industrial protocols should be disabled (§2.11.16)"
+    },
+    {
+      "id": "sec-ip-restrict",
+      "scope": "device",
+      "severity": "info",
+      "desc": "Management IP access restrictions should be configured (§2.11.17)"
+    },
+    {
+      "id": "sec-login-policy",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Login policy should enforce lockout and minimum password length (§2.11.21)"
+    },
+    {
+      "id": "sec-password-policy",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Password policy should require complexity (§2.11.22)"
+    },
+    {
+      "id": "sec-session-timeouts",
+      "scope": "device",
+      "severity": "info",
+      "desc": "Session timeouts should not be excessive (§2.11.24)"
+    },
+    {
+      "id": "sec-time-sync",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Time synchronization should be configured (§2.11.25)"
+    },
+    {
+      "id": "sec-logging",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Remote syslog should be configured (§2.11.27)"
+    },
+    {
+      "id": "sec-snmpv1-traps",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "SNMPv1 traps should be disabled (§2.11.28)"
+    },
+    {
+      "id": "sec-login-banner",
+      "scope": "device",
+      "severity": "info",
+      "desc": "Pre-login banner should be configured (§2.11.30)"
+    },
+    {
+      "id": "sec-snmpv3-traps",
+      "scope": "device",
+      "severity": "info",
+      "desc": "SNMPv3 traps should be configured for monitoring (§2.11.29)"
+    },
+    {
+      "id": "sec-snmpv1v2-write",
+      "scope": "device",
+      "severity": "warning",
+      "requiresSW": "L2A",
+      "desc": "SNMPv1/v2 write access should be disabled (§2.11.28 2A)"
+    },
+    {
+      "id": "sec-snmpv3-auth",
+      "scope": "device",
+      "severity": "info",
+      "desc": "SNMPv3 should use HMAC-SHA over HMAC-MD5 for authentication"
+    },
+    {
+      "id": "sec-snmpv3-encrypt",
+      "scope": "device",
+      "severity": "info",
+      "desc": "SNMPv3 should use AES-128 over DES for encryption"
+    },
+    {
+      "id": "sec-dns-client",
+      "scope": "device",
+      "severity": "info",
+      "desc": "DNS client configuration should be reviewed"
+    },
+    {
+      "id": "sec-devsec-monitors",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Device security sense monitors should all be enabled"
+    }
+  ]
+}

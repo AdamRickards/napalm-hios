@@ -1,0 +1,37 @@
+{
+  "name": "MRP",
+  "requiresSW": "L2S",
+  "layer": "redundancy",
+  "checks": [
+    {
+      "id": "mrp-rstp-conflict",
+      "scope": "device",
+      "severity": "critical",
+      "desc": "RSTP must be disabled on MRP ring ports"
+    },
+    {
+      "id": "mrp-vlan-exists",
+      "scope": "device",
+      "severity": "critical",
+      "desc": "MRP VLAN must exist and ring ports must be members"
+    },
+    {
+      "id": "mrp-ring-count",
+      "scope": "site",
+      "severity": "info",
+      "desc": "Report MRP role (site-level RM count check)"
+    },
+    {
+      "id": "srm-rstp-conflict",
+      "scope": "device",
+      "severity": "critical",
+      "desc": "RSTP must be disabled on SRM sub-ring ports"
+    },
+    {
+      "id": "srm-global-state",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "SRM global state and instance consistency"
+    }
+  ]
+}

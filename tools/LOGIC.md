@@ -81,10 +81,11 @@ SNMP and SSH ignore staging calls — changes are sent individually.
 
 ## Standalone Tools
 
-**MARCO** and **SNOOP** do not use napalm-hios.
+**ADAM**, **MARCO** and **SNOOP** do not use napalm-hios.
 
 | Tool | Protocol | Purpose |
 |------|----------|---------|
+| ADAM | Config XML (xml.etree) | Offline security audit against Belden's Security Hardening Manual |
 | MARCO | HiDiscovery v2 (SNMPv2c multicast) | Device discovery + IP/name/blink configuration |
 | SNOOP | sFlow v5 (UDP) | Passive traffic observation + FDB/ARP/VLAN reconstruction |
 
@@ -97,6 +98,8 @@ Commissioning     → MOHAWC   (onboard, reset, profiles, system, management)
 VLAN + QoS        → VIKTOR   (create, delete, rename, access, trunk, QoS)
 Redundancy        → CLAMPS   (MRP, RSTP, sub-rings)
 Protection        → CLAMPS   (loop protection, auto-disable, storm control)
+Security audit    → ADAM     (offline XML, Belden Security Hardening Manual, read-only)
+Security          → JUSTIN   (services, syslog, NTP, users, ACLs, hardening — planned)
 Discovery (L2)    → MARCO    (HiDiscovery multicast)
 Discovery (L3)    → AARON    (LLDP + MAC + ARP, read-only)
 Optics            → STONE    (SFP power levels, read-only)
@@ -104,5 +107,5 @@ Traffic           → SNOOP    (sFlow, passive listener)
 Disruption        → BLIP     (multicast probe, planned)
 ```
 
-Read-only tools (AARON, STONE, SNOOP) can run anytime without conflict.
-Write tools (MOHAWC, VIKTOR, CLAMPS) operate on separate MIB domains — no overlap.
+Read-only tools (AARON, ADAM, STONE, SNOOP) can run anytime without conflict.
+Write tools (MOHAWC, VIKTOR, CLAMPS, JUSTIN) operate on separate MIB domains — no overlap.

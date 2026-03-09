@@ -2,13 +2,14 @@
 
 Fleet management tools for Hirschmann HiOS switches. Each tool handles one domain — discovery, commissioning, VLANs, ring protection, optics, monitoring — and they share a common config format, protocol selection, and parallel execution model.
 
-All tools except MARCO and SNOOP use [napalm-hios](https://github.com/adamr/napalm-hios) as their driver.
+All tools except ADAM, MARCO and SNOOP use [napalm-hios](https://github.com/adamr/napalm-hios) as their driver.
 
 ## Tools
 
 | Tool | Full Name | What It Does | Min Driver | Docs |
 |------|-----------|-------------|------------|------|
 | [AARON](aaron/) | Automated Asset Recognition On Network | Port classification (uplink/edge/indirect/empty) + ARP resolution | `>= 1.5.0` | [LOGIC](aaron/LOGIC.md) |
+| [ADAM](adam/) | Automated Device Audit Model | Offline security audit against Belden's Security Hardening Manual | standalone | [LOGIC](adam/LOGIC.md) |
 | [CLAMPS](clamps/) | Configuration of Loops, Access, MRP, Protection, and Sub-rings | MRP ring deployment, edge protection, sub-rings, storm control | `>= 1.14.0` | [LOGIC](clamps/LOGIC.md) |
 | [MARCO](marco/) | Multicast Address Resolution and Configuration Operator | HiDiscovery v2 — L2 multicast discovery + IP/name/blink config | standalone | [LOGIC](marco/LOGIC.md) |
 | [MOHAWC](mohawc/) | Management, Onboarding, HiDiscovery, And Wipe Configuration | Commissioning — onboard, save, reset, profiles, diff, system | `>= 1.5.0` | [LOGIC](mohawc/LOGIC.md) |
@@ -16,7 +17,7 @@ All tools except MARCO and SNOOP use [napalm-hios](https://github.com/adamr/napa
 | [STONE](stone/) | SFP Transceiver Optics Network Evaluator | SFP optical power levels → Excel report with outlier detection | `>= 1.4.1` | — |
 | [VIKTOR](viktor/) | VLAN Intent, Knowledgeable Topology-Optimized Rules | Fleet VLAN provisioning, QoS, audit, auto-trunk via LLDP | `>= 1.13.0` | [LOGIC](viktor/LOGIC.md) |
 
-**Planned:** [BLIP](blip/) (broadcast latency interruption probe — traffic disruption measurement), [POLO](polo/) (persistent onboarding via dnsmasq registry)
+**Planned:** [JUSTIN](justin/) (security audit + hardening, IEC 62443 SL1/SL2), [BLIP](blip/) (broadcast latency interruption probe), [POLO](polo/) (persistent onboarding via dnsmasq registry)
 
 ## Access Patterns
 
@@ -28,7 +29,7 @@ Most tools support three ways to run:
 | **Config file** | `tool.py -c site.cfg subcommand` | Fleet-scale batch operations |
 | **Interactive** | `tool.py -i` | Guided mode, no args to memorise |
 
-AARON and STONE are batch-only (no interactive mode). MARCO defaults to interactive. SNOOP is a passive listener.
+AARON, ADAM, and STONE are batch-only (no interactive mode). MARCO defaults to interactive. SNOOP is a passive listener.
 
 ## Shared Config Format
 

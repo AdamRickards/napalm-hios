@@ -1,0 +1,31 @@
+{
+  "name": "VLAN",
+  "requiresSW": "L2S",
+  "layer": "switching",
+  "checks": [
+    {
+      "id": "vlan-pvid-mismatch",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Port PVID should match an untagged VLAN membership"
+    },
+    {
+      "id": "vlan-orphan",
+      "scope": "device",
+      "severity": "info",
+      "desc": "VLANs with no physical port members are orphans"
+    },
+    {
+      "id": "vlan-dirty-access",
+      "scope": "device",
+      "severity": "warning",
+      "desc": "Edge ports should have exactly one untagged VLAN"
+    },
+    {
+      "id": "vlan-name-empty",
+      "scope": "device",
+      "severity": "info",
+      "desc": "VLANs should have descriptive names"
+    }
+  ]
+}
