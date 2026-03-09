@@ -138,6 +138,127 @@ def interactive_mode():
         return val in ('y', 'yes') if val else default
 
     try:
+        # ── Mode picker ──
+        step('MODE')
+        mode = pick('What do you want to do?', [
+            ('Deploy MRP ring',              'deploy'),
+            ('Export protection config',     'export'),
+            ('Import protection config',     'import'),
+        ])
+
+        if mode in ('export', 'import'):
+            # Simplified flow — just devices, credentials, filename
+            step('DEVICES')
+            print(f'  {DM}Enter device IPs (comma-separated, range, or CIDR).{RS}\n')
+            raw = ask('Device IPs')
+            if not raw:
+                print(f'\n  {YL}No devices. Exiting.{RS}\n')
+                return
+            devices = []
+            for part in raw.split(','):
+                part = part.strip()
+                if part.endswith('.xml'):
+                    devices.append(part)
+                elif is_valid_ipv4(part):
+                    devices.append(part)
+                elif '-' in part.split('.')[-1]:
+                    # Last-octet range: 192.168.1.80-85
+                    base = '.'.join(part.split('.')[:-1])
+                    last = part.split('.')[-1]
+                    lo, hi = last.split('-')
+                    for i in range(int(lo), int(hi) + 1):
+                        devices.append(f'{base}.{i}')
+                else:
+                    try:
+                        net = ipaddress.ip_network(part, strict=False)
+                        devices.extend(str(h) for h in net.hosts())
+                    except ValueError:
+                        print(f'  {YL}Skipping invalid: {part}{RS}')
+            if not devices:
+                print(f'\n  {YL}No valid devices. Exiting.{RS}\n')
+                return
+
+            is_offline = any(d.endswith('.xml') for d in devices)
+            if is_offline:
+                protocol = 'offline'
+                username = ''
+                password = ''
+                print(f'\n  {DM}Offline mode — no credentials needed.{RS}\n')
+            else:
+                step('CREDENTIALS')
+                username = ask('Username', 'admin')
+                password = ask('Password', 'private')
+                protocol = pick('Protocol', [
+                    ('MOPS — HTTPS, atomic writes (recommended)', 'mops'),
+                    ('SNMP — SNMPv3, no session state', 'snmp'),
+                    ('SSH — CLI parsing', 'ssh'),
+                ])
+
+            step('EXPORT' if mode == 'export' else 'IMPORT')
+            default_file = 'protection.csv'
+            filepath = ask('CSV file path', default_file)
+
+            # Build minimal config and shell out
+            cfg_lines = []
+            if not is_offline:
+                cfg_lines.append(f'username {username}')
+                cfg_lines.append(f'password {password}')
+            cfg_lines.append(f'protocol {protocol}')
+            # Dummy ring settings (required by parse_config but unused for export/import)
+            cfg_lines.append('port1 1/1')
+            cfg_lines.append('port2 1/2')
+            cfg_lines.append('vlan 1')
+            cfg_lines.append('edge_protection rstp-full')
+            cfg_lines.append('')
+            for ip in devices:
+                cfg_lines.append(ip)
+
+            tmp_cfg = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.interactive.cfg')
+            with open(tmp_cfg, 'w') as f:
+                f.write('\n'.join(cfg_lines) + '\n')
+
+            flag = '--export' if mode == 'export' else '--import'
+            cmd = [sys.executable, os.path.abspath(__file__), '-c', tmp_cfg, flag, filepath]
+
+            if mode == 'import':
+                action = pick('Go', [
+                    ('Dry run — preview only', 'dry'),
+                    ('Apply changes',          'live'),
+                    ('Quit',                   'quit'),
+                ])
+                if action == 'quit':
+                    try:
+                        os.remove(tmp_cfg)
+                    except OSError:
+                        pass
+                    return
+                if action == 'dry':
+                    cmd.append('--dry-run')
+                    print()
+                    subprocess.run(cmd)
+                    print()
+                    if not yesno('Apply changes?'):
+                        try:
+                            os.remove(tmp_cfg)
+                        except OSError:
+                            pass
+                        print(f'\n  {DM}Done.{RS}\n')
+                        return
+                    # Run live
+                    cmd = [sys.executable, os.path.abspath(__file__), '-c', tmp_cfg, flag, filepath]
+                    if yesno('Save to NVM after applying?'):
+                        cmd.append('--save')
+
+            print()
+            subprocess.run(cmd)
+
+            try:
+                os.remove(tmp_cfg)
+            except OSError:
+                pass
+            print(f'\n  {DM}Done.{RS}\n')
+            return
+
         # ── 1. Main ring devices ──
         step('STEP 1 ─── MAIN RING DEVICES')
         print(f'  {DM}Enter devices one at a time. First device = Ring Manager by default.{RS}')

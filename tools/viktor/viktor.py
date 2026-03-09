@@ -1877,6 +1877,8 @@ def interactive_mode():
                 ('Set trunk ports',       'trunk'),
                 ('Auto-trunk (LLDP)',     'auto-trunk'),
                 ('QoS — set default PCP', 'qos'),
+                ('Export to CSV',         'export'),
+                ('Import from CSV',       'import'),
                 ('Audit',                 'audit'),
                 ('Name consistency',      'names'),
                 ('Quit',                  'quit'),
@@ -1949,6 +1951,16 @@ def interactive_mode():
                 mock.include_trunk = inc_trunk
                 cmd_func = cmd_qos
 
+            elif op == 'export':
+                path = ask('Output CSV file', 'vlans.csv')
+                mock.export = path
+                cmd_func = cmd_export
+
+            elif op == 'import':
+                path = ask('Input CSV file', 'vlans.csv')
+                mock.import_file = path
+                cmd_func = cmd_import
+
             elif op == 'audit':
                 cmd_func = cmd_audit
 
@@ -1959,7 +1971,7 @@ def interactive_mode():
                 continue
 
             # ── Execute ──
-            is_readonly = op in ('list', 'audit')
+            is_readonly = op in ('list', 'audit', 'export')
 
             if is_readonly:
                 try:
@@ -1972,7 +1984,7 @@ def interactive_mode():
                 continue
 
             # Mutating — offer dry/live/back
-            has_dry_run = op in ('access', 'trunk', 'auto-trunk', 'qos', 'names')
+            has_dry_run = op in ('access', 'trunk', 'auto-trunk', 'qos', 'names', 'import')
 
             if has_dry_run:
                 action = pick('Go', [
