@@ -49,13 +49,15 @@ Main menu follows the MOHAWC acronym — one letter per top-level item:
 
 | # | Menu Item | Sub-menu |
 |---|-----------|----------|
-| 1 | **Status** (Monitor) | Status overview, Diff |
-| 2 | **Onboard** | — |
+| 1 | **Status** (Monitor) | Overview, System info, Management, Diff\*, Ping†, CLI† |
+| 2 | **Onboard**‡ | — |
 | 3 | **HiDiscovery** | — |
-| 4 | **Profiles** (Admin) | List, Activate, Delete, Download, Upload |
-| 5 | **Reset** (Wipe) | — |
-| 6 | **Save** (Config) | Save, Save with rollback, Snapshot |
+| 4 | **Profiles** (Admin) | List, Activate, Delete, Download, Upload\* |
+| 5 | **Reset**§ | — |
+| 6 | **Save** (Config) | Save, Save with rollback\*, Snapshot\*, Auto-backup‖ |
 | q | Quit | — |
+
+\* MOPS-only, hidden otherwise · † Requires SSH, hidden when offline · ‡ Hidden when offline/SNMP · § Hidden when offline · ‖ Hidden when offline
 
 Profile/config state is refreshed after every mutation. Activate handles the connection drop and reconnects on single-device sessions.
 
@@ -72,7 +74,7 @@ python mohawc.py -b                     # toggle blink on all devices in config
 
 ### `status` (default)
 
-Read-only overview: model, firmware, uptime, factory-default state, config status, HiDiscovery.
+Read-only overview: model, firmware, uptime, factory-default state, config status, HiDiscovery, management network, environment (PSU/temp/fans/CPU/memory), and port states.
 
 ```bash
 python mohawc.py status
@@ -202,6 +204,79 @@ python mohawc.py reset --factory --entry 192.168.1.4 --yes
 
 Without `--entry`, all devices reset in parallel.
 
+### `system`
+
+View or set sysName, sysContact, and sysLocation. No flags = read-only. All protocols supported.
+
+```bash
+python mohawc.py -d 192.168.1.4 system                                          # view
+python mohawc.py -d 192.168.1.4 system --hostname SW-OFFICE --contact "Adam R"   # set fields
+python mohawc.py -d 192.168.1.4 system --hostname SW-OFFICE --save               # set + save
+```
+
+In interactive mode: Status → System info (view/edit).
+
+### `management`
+
+View or set management network configuration (IP, netmask, gateway, VLAN, protocol). No flags = read-only. Changing IP/VLAN may sever your connection — requires `--yes` for set operations. All protocols supported.
+
+```bash
+python mohawc.py -d 192.168.1.4 management                                       # view
+python mohawc.py -d 192.168.1.4 management --ip 10.0.0.5 --netmask 255.255.255.0 --gateway 10.0.0.1 --yes
+python mohawc.py -d 192.168.1.4 management --vlan 5 --save --yes
+python mohawc.py -d 192.168.1.4 management --dhcp --yes                           # switch to DHCP
+python mohawc.py -d 192.168.1.4 management --static --yes                         # switch to static
+```
+
+In interactive mode: Status → Management (view/edit).
+
+### `auto-backup`
+
+View or configure remote config auto-backup. Also supports one-shot push/pull transfers. Not available offline.
+
+```bash
+python mohawc.py -d 192.168.1.4 auto-backup                                      # view current config
+python mohawc.py -d 192.168.1.4 auto-backup --enable --url "tftp://10.0.0.1/%p/config-%d.xml"
+python mohawc.py -d 192.168.1.4 auto-backup --disable --save
+python mohawc.py -d 192.168.1.4 auto-backup --push --server "tftp://10.0.0.1/backup.xml"
+python mohawc.py -d 192.168.1.4 auto-backup --pull --server "tftp://10.0.0.1/backup.xml"
+```
+
+URL wildcards: `%p` (profile name), `%d` (date), `%i` (IP), `%m` (MAC), `%t` (time).
+
+In interactive mode: Save → Auto-backup (view/edit).
+
+### `ping`
+
+ICMP ping from the switch to a destination. Uses SSH fallback — works with any protocol (driver handles SSH lazy-connect). Not available offline.
+
+```bash
+python mohawc.py -d 192.168.1.4 ping 192.168.1.1
+python mohawc.py -d 192.168.1.4 ping 192.168.1.1 --count 10 --size 1500
+```
+
+In interactive mode: Status → Ping.
+
+### `cli`
+
+Raw CLI escape hatch — execute one or more CLI commands on the switch. Uses SSH fallback. Not available offline. Intended for batching commands across a fleet that aren't covered by the tooling structure.
+
+Output is always saved to a timestamped folder (`cli_YYYYMMDD_HHMMSS/`) with one file per device (`192_168_1_4.txt`). Each file contains the command prefixed with `> ` followed by raw output.
+
+```bash
+python mohawc.py -d 192.168.1.4 cli "show interface status"
+python mohawc.py -c site.cfg cli "show system info" "show ip interface"
+```
+
+```
+cli_20260309_143022/
+  192_168_1_4.txt
+  192_168_1_117.txt
+  192_168_1_127.txt
+```
+
+In interactive mode: Status → CLI command (loops until blank input, no folder output).
+
 ## Global Arguments
 
 | Flag | Description |
@@ -245,19 +320,41 @@ configs/switch2.xml
 
 CLI args (`-u`, `-p`, `--protocol`) override config file values. With `-d`, no config file is needed at all.
 
+### Per-device arguments
+
+Device lines support `key=value` attributes after the IP. Useful for batching per-device changes from a spreadsheet — paste the data, run one command.
+
+```ini
+192.168.1.4   hostname=SW-OFFICE contact="Adam R" location="Room 5"
+192.168.1.117 hostname=SW-LAB
+192.168.1.127 hostname=SW-PLANT location="Floor 2"
+```
+
+```bash
+python mohawc.py system             # each device gets its own hostname/contact/location
+python mohawc.py system --save      # same, but save to NVM
+```
+
+Supported per-device keys: `hostname`, `contact`, `location` (for `system`), `ip`, `netmask`, `gateway`, `vlan` (for `management`). CLI args override per-device values when both are set.
+
+Global settings `save = true` and `yes = true` can also be set in the config file to avoid typing `--save` and `--yes` every time.
+
 ## Example Output
 
 ```
 ============================================================
   MOHAWC — STATUS
 ============================================================
-  Protocol:  MOPS | Devices: 3
+  Protocol:  MOPS | Devices: 2
 ------------------------------------------------------------
 
   192.168.1.4     BRS50-8TX/4SFP           09.4.04  (up 3d 12h)
     Factory default:  No
-    Config:           nvm=ok  aca=absent  boot=ok  [SAVED]
+    Config:           nvm=ok  aca=absent  boot=ok  [SAVED]  fp=9244C58FEA75..
     HiDiscovery:      read-only  blink=off
+    Management:       VLAN 1  192.168.1.4/24  gw 192.168.1.254  (local)
+    Environment:      PSU1=ok PSU2=n/a  temp=42°C  fans=ok  CPU=12%  mem=58%
+    Ports:            8/12 up  (1/1↑ 1/2↑ 1/3↓ 1/4↑ 1/5↑ 1/6↑ 1/7↓ 1/8↓ ...)
 
   192.168.1.117   BRS50-8TX/4SFP           09.4.04  (up 1d 5h)
     Factory default:  YES — needs onboarding

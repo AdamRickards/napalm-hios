@@ -206,14 +206,93 @@ def parse_arguments():
     p_ul.add_argument('--yes', action='store_true',
                        help='skip confirmation prompt')
 
+    # system
+    p_sys = subparsers.add_parser('system',
+                                   help='view/set sysName, sysContact, sysLocation')
+    p_sys.add_argument('--hostname', default=None, help='set system name (sysName)')
+    p_sys.add_argument('--contact', default=None, help='set system contact')
+    p_sys.add_argument('--location', default=None, help='set system location')
+    p_sys.add_argument('--save', action='store_true', help='save config to NVM after change')
+
+    # management
+    p_mgmt = subparsers.add_parser('management',
+                                    help='view/set management IP configuration')
+    p_mgmt.add_argument('--ip', default=None, help='management IP address')
+    p_mgmt.add_argument('--netmask', default=None, help='management netmask')
+    p_mgmt.add_argument('--gateway', default=None, help='default gateway')
+    p_mgmt.add_argument('--vlan', type=int, default=None, help='management VLAN ID')
+    p_mgmt_proto = p_mgmt.add_mutually_exclusive_group()
+    p_mgmt_proto.add_argument('--dhcp', action='store_true', help='switch to DHCP')
+    p_mgmt_proto.add_argument('--static', action='store_true', help='switch to static (local)')
+    p_mgmt.add_argument('--save', action='store_true', help='save config to NVM after change')
+    p_mgmt.add_argument('--yes', action='store_true',
+                         help='skip confirmation (changing IP/VLAN may sever connection)')
+
+    # auto-backup
+    p_ab = subparsers.add_parser('auto-backup',
+                                  help='view/configure remote config auto-backup')
+    p_ab_toggle = p_ab.add_mutually_exclusive_group()
+    p_ab_toggle.add_argument('--enable', action='store_true', help='enable auto-backup')
+    p_ab_toggle.add_argument('--disable', action='store_true', help='disable auto-backup')
+    p_ab.add_argument('--url', default=None,
+                       help='auto-backup URL (supports %%p/%%i/%%m/%%d/%%t wildcards)')
+    p_ab.add_argument('--username', default=None, help='auto-backup server username')
+    p_ab.add_argument('--password', default=None, help='auto-backup server password')
+    p_ab_xfer = p_ab.add_mutually_exclusive_group()
+    p_ab_xfer.add_argument('--push', action='store_true', help='push config to server')
+    p_ab_xfer.add_argument('--pull', action='store_true', help='pull config from server')
+    p_ab.add_argument('--server', default=None,
+                       help='TFTP/SCP URL for push/pull (required with --push/--pull)')
+    p_ab.add_argument('--profile', default=None,
+                       help='profile name for push/pull (default: active)')
+    p_ab.add_argument('--save', action='store_true', help='save config to NVM after change')
+
+    # ping
+    p_ping = subparsers.add_parser('ping', help='ICMP ping from the switch (SSH fallback)')
+    p_ping.add_argument('destination', help='destination IP to ping')
+    p_ping.add_argument('--count', type=int, default=5, help='number of pings (default: 5)')
+    p_ping.add_argument('--size', type=int, default=100, help='packet size (default: 100)')
+    p_ping.add_argument('--timeout', type=int, default=2, help='timeout seconds (default: 2)')
+
+    # cli
+    p_cli = subparsers.add_parser('cli', help='raw CLI commands (SSH fallback)')
+    p_cli.add_argument('commands', nargs='+', help='CLI commands to execute')
+
     # interactive (subcommand alias for -i)
     subparsers.add_parser('interactive', help='interactive guided mode')
 
     return parser.parse_args()
 
 
+def _parse_device_args(tokens):
+    """Parse key=value tokens from a device line.
+
+    Handles quoted values: hostname="My Switch" contact='Adam R'
+    Returns dict of {key: value}.
+    """
+    import shlex
+    device_args = {}
+    # Rejoin tokens and re-split with shlex to handle quotes properly
+    raw = ' '.join(tokens)
+    if not raw:
+        return device_args
+    try:
+        parts = shlex.split(raw)
+    except ValueError:
+        parts = tokens
+    for part in parts:
+        if '=' in part:
+            key, _, val = part.partition('=')
+            device_args[key.strip().lower()] = val.strip()
+    return device_args
+
+
 def parse_config(config_file: str) -> dict:
-    """Parse script.cfg into settings and device list."""
+    """Parse script.cfg into settings and device list.
+
+    Device lines support per-device key=value attributes after the IP:
+        192.168.1.4 hostname=SW-OFFICE contact="Adam R" location="Room 5"
+    """
     if not os.path.exists(config_file):
         raise FileNotFoundError(f"Configuration file '{config_file}' not found")
 
@@ -222,6 +301,7 @@ def parse_config(config_file: str) -> dict:
         'password': 'private',
         'protocol': 'mops',
         'devices': [],
+        'device_args': {},
     }
 
     with open(config_file, 'r') as f:
@@ -230,24 +310,41 @@ def parse_config(config_file: str) -> dict:
             if not line or line.startswith('#'):
                 continue
 
-            # Key = value pairs
-            if '=' in line:
+            # Global settings — standalone key = value lines (spaces around =)
+            # Distinguished from device lines by: first token contains '='
+            # and first token before '=' is not a valid IP
+            first_token = line.split()[0]
+            if '=' in first_token and not is_valid_ipv4(first_token.split('=')[0]):
+                # Bare key=value with no spaces around = (shouldn't happen, but handle)
+                key, _, val = first_token.partition('=')
+                key = key.strip().lower()
+                val = val.strip()
+            elif '=' in line and not is_valid_ipv4(first_token) and not first_token.endswith('.xml'):
+                # key = value with spaces around =
                 key, _, val = line.partition('=')
                 key = key.strip().lower()
                 val = val.strip()
+            else:
+                key = None
 
+            if key:
                 if key == 'username':
                     config['username'] = val
                 elif key == 'password':
                     config['password'] = val
                 elif key == 'protocol':
                     config['protocol'] = val.lower()
+                elif key == 'save':
+                    config['save'] = val.lower() in ('true', 'yes', '1')
+                elif key == 'yes':
+                    config['yes'] = val.lower() in ('true', 'yes', '1')
                 else:
                     logging.warning(f"Line {line_num}: unknown setting '{key}'")
                 continue
 
-            # Device lines — bare IP or .xml path
-            ip = line.split()[0]
+            # Device lines — IP (or .xml path) optionally followed by key=value pairs
+            tokens = line.split()
+            ip = tokens[0]
             if ip.endswith('.xml'):
                 # Offline config file — resolve relative paths, auto-set protocol
                 if not os.path.isabs(ip):
@@ -255,9 +352,15 @@ def parse_config(config_file: str) -> dict:
                 if not config.get('_offline_detected'):
                     config['protocol'] = 'offline'
                     config['_offline_detected'] = True
+                dev_args = _parse_device_args(tokens[1:])
                 config['devices'].append(ip)
+                if dev_args:
+                    config['device_args'][ip] = dev_args
             elif is_valid_ipv4(ip):
+                dev_args = _parse_device_args(tokens[1:])
                 config['devices'].append(ip)
+                if dev_args:
+                    config['device_args'][ip] = dev_args
             else:
                 logging.warning(f"Line {line_num}: skipping invalid IP '{ip}'")
 
@@ -274,6 +377,7 @@ def resolve_config(args) -> dict:
             'password': args.p or 'private',
             'protocol': args.protocol or ('offline' if is_xml else 'mops'),
             'devices': [args.d],
+            'device_args': {},
         }
     else:
         config_path = get_resource_path(args.c)
@@ -290,6 +394,16 @@ def resolve_config(args) -> dict:
         raise ValueError("No devices specified — use -d <ip> or add IPs to config file")
 
     return config
+
+
+def _get_device_arg(config, ip, key, cli_value=None):
+    """Get a per-device arg, with CLI override winning if set.
+
+    Priority: CLI arg (if not None) > per-device config > None
+    """
+    if cli_value is not None:
+        return cli_value
+    return config.get('device_args', {}).get(ip, {}).get(key)
 
 
 # ---------------------------------------------------------------------------
@@ -320,12 +434,42 @@ def worker_status(device, ip, protocol):
         factory = device.is_factory_default()
         config_status = device.get_config_status()
         hidiscovery = device.get_hidiscovery()
+
+        # Enrichment — each wrapped individually so missing data doesn't break status
+        environment = None
+        try:
+            environment = device.get_environment()
+        except Exception:
+            pass
+
+        interfaces = None
+        try:
+            interfaces = device.get_interfaces()
+        except Exception:
+            pass
+
+        fingerprint = None
+        try:
+            fingerprint = device.get_config_fingerprint()
+        except Exception:
+            pass
+
+        management = None
+        try:
+            management = device.get_management()
+        except Exception:
+            pass
+
         return ip, {
             'facts': facts,
             'factory': factory,
             'config_status': config_status,
             'hidiscovery': hidiscovery,
             'protocol': protocol,
+            'environment': environment,
+            'interfaces': interfaces,
+            'fingerprint': fingerprint,
+            'management': management,
         }, None
     except Exception as e:
         return ip, None, str(e)
@@ -1158,6 +1302,130 @@ def worker_snapshot(device, ip, snapshot_name):
         return ip, 'FAIL', str(e)
 
 
+def worker_system(device, ip, hostname=None, contact=None, location=None, save=False):
+    """View/set sysName, sysContact, sysLocation on one device."""
+    try:
+        before = device.get_snmp_information()
+        after = None
+
+        if hostname is not None or contact is not None or location is not None:
+            kwargs = {}
+            if hostname is not None:
+                kwargs['hostname'] = hostname
+            if contact is not None:
+                kwargs['contact'] = contact
+            if location is not None:
+                kwargs['location'] = location
+            device.set_snmp_information(**kwargs)
+            after = device.get_snmp_information()
+
+        if save:
+            device.save_config()
+
+        return ip, 'OK', {'before': before, 'after': after}
+    except Exception as e:
+        return ip, 'FAIL', str(e)
+
+
+def worker_management(device, ip, mgmt_ip=None, netmask=None, gateway=None,
+                      vlan=None, protocol=None, save=False):
+    """View/set management network config on one device."""
+    try:
+        before = device.get_management()
+        after = None
+
+        has_set = any(v is not None for v in (mgmt_ip, netmask, gateway, vlan, protocol))
+        if has_set:
+            kwargs = {}
+            if protocol is not None:
+                kwargs['protocol'] = protocol
+            if vlan is not None:
+                kwargs['vlan_id'] = vlan
+            if mgmt_ip is not None:
+                kwargs['ip_address'] = mgmt_ip
+            if netmask is not None:
+                kwargs['netmask'] = netmask
+            if gateway is not None:
+                kwargs['gateway'] = gateway
+            device.set_management(**kwargs)
+            try:
+                after = device.get_management()
+            except Exception:
+                # Connection may drop after IP/VLAN change — treat as success
+                after = {'note': 'connection lost (expected after IP/VLAN change)'}
+
+        if save:
+            try:
+                device.save_config()
+            except Exception:
+                pass  # Connection may already be lost
+
+        return ip, 'OK', {'before': before, 'after': after}
+    except Exception as e:
+        err = str(e).lower()
+        if any(t in err for t in ('closed', 'reset', 'timeout', 'eof',
+                                   'broken pipe', 'connection')):
+            return ip, 'OK', {'before': {}, 'after': {'note': 'connection lost (expected after change)'}}
+        return ip, 'FAIL', str(e)
+
+
+def worker_auto_backup(device, ip, enable=None, url=None, username=None,
+                       password=None, push=False, pull=False, server=None,
+                       profile=None, save=False):
+    """View/configure auto-backup on one device."""
+    try:
+        before = device.get_config_remote()
+        after = None
+
+        # Auto-backup config changes
+        has_config = any(v is not None for v in (enable, url, username, password))
+        if has_config:
+            kwargs = {}
+            if enable is not None:
+                kwargs['auto_backup'] = enable
+            if url is not None:
+                kwargs['auto_backup_url'] = url
+            if username is not None:
+                kwargs['auto_backup_username'] = username
+            if password is not None:
+                kwargs['auto_backup_password'] = password
+            device.set_config_remote(**kwargs)
+            after = device.get_config_remote()
+
+        # One-shot push/pull
+        if push and server:
+            device.set_config_remote(action='push', server=server, profile=profile)
+            return ip, 'OK', {'before': before, 'after': after, 'transfer': f'pushed to {server}'}
+        if pull and server:
+            device.set_config_remote(action='pull', server=server, profile=profile)
+            return ip, 'OK', {'before': before, 'after': after, 'transfer': f'pulled from {server}'}
+
+        if save:
+            device.save_config()
+
+        return ip, 'OK', {'before': before, 'after': after}
+    except Exception as e:
+        return ip, 'FAIL', str(e)
+
+
+def worker_ping(device, ip, destination, count=5, size=100, timeout=2):
+    """Ping from the switch."""
+    try:
+        result = device.ping(destination, count=count, size=size, timeout=timeout)
+        return ip, 'OK', result
+    except Exception as e:
+        return ip, 'FAIL', str(e)
+
+
+def worker_cli(device, ip, commands):
+    """Run raw CLI commands on the switch."""
+    try:
+        result = device.cli(commands)
+        return ip, 'OK', result
+    except Exception as e:
+        return ip, 'FAIL', str(e)
+
+
 # ---------------------------------------------------------------------------
 # Display helpers
 # ---------------------------------------------------------------------------
@@ -1188,6 +1456,44 @@ def format_hidiscovery(hd):
     return f"{status}  blink={blink}"
 
 
+def format_system_info(info):
+    """Format get_snmp_information() for display."""
+    lines = []
+    lines.append(f"    sysName:     {info.get('chassis_id', '(not set)')}")
+    lines.append(f"    sysContact:  {info.get('contact', '(not set)')}")
+    lines.append(f"    sysLocation: {info.get('location', '(not set)')}")
+    return '\n'.join(lines)
+
+
+def format_management_info(mgmt):
+    """Format get_management() for display."""
+    lines = []
+    lines.append(f"    VLAN:     {mgmt.get('vlan_id', '?')}")
+    lines.append(f"    IP:       {mgmt.get('ip_address', '?')}")
+    lines.append(f"    Netmask:  {mgmt.get('netmask', '?')}")
+    lines.append(f"    Gateway:  {mgmt.get('gateway', '?')}")
+    lines.append(f"    Protocol: {mgmt.get('protocol', '?')}")
+    return '\n'.join(lines)
+
+
+def format_auto_backup(cfg):
+    """Format get_config_remote() for display."""
+    lines = []
+    ab = cfg.get('auto_backup', {})
+    enabled = ab.get('enabled', False)
+    lines.append(f"    Auto-backup: {'enabled' if enabled else 'disabled'}")
+    dest = ab.get('destination', '')
+    if dest:
+        lines.append(f"    URL:         {dest}")
+    user = ab.get('username', '')
+    if user:
+        lines.append(f"    Username:    {user}")
+    srv_user = cfg.get('server_username', '')
+    if srv_user:
+        lines.append(f"    Server user: {srv_user}")
+    return '\n'.join(lines)
+
+
 def print_status_device(ip, data):
     """Print status output for one device."""
     facts = data['facts']
@@ -1212,18 +1518,91 @@ def print_status_device(ip, data):
     else:
         print(f"    Factory default:  No")
 
-    # Config status
+    # Config status + fingerprint
     cs = data['config_status']
     nvm = cs.get('nvm', '?')
     aca = cs.get('aca', '?')
     boot = cs.get('boot', '?')
     saved = cs.get('saved', None)
     saved_tag = '  [SAVED]' if saved else '  [UNSAVED]' if saved is False else ''
-    print(f"    Config:           nvm={nvm}  aca={aca}  boot={boot}{saved_tag}")
+    fp = data.get('fingerprint') or {}
+    fp_str = f"  fp={fp['fingerprint'][:12]}.." if fp.get('fingerprint') else ''
+    print(f"    Config:           nvm={nvm}  aca={aca}  boot={boot}{saved_tag}{fp_str}")
 
     # HiDiscovery
     hd = data['hidiscovery']
     print(f"    HiDiscovery:      {format_hidiscovery(hd)}")
+
+    # Management
+    mgmt = data.get('management')
+    if mgmt:
+        vlan = mgmt.get('vlan_id', '?')
+        mgmt_ip = mgmt.get('ip_address', '?')
+        mask = mgmt.get('netmask', '')
+        gw = mgmt.get('gateway', '')
+        proto = mgmt.get('protocol', '?')
+        # Convert netmask to prefix length
+        prefix = ''
+        if mask:
+            try:
+                prefix = f"/{sum(bin(int(o)).count('1') for o in mask.split('.'))}"
+            except Exception:
+                prefix = f"/{mask}"
+        gw_str = f"  gw {gw}" if gw and gw != '0.0.0.0' else ''
+        print(f"    Management:       VLAN {vlan}  {mgmt_ip}{prefix}{gw_str}  ({proto})")
+
+    # Environment
+    env = data.get('environment')
+    if env:
+        parts = []
+        # PSU
+        psu = env.get('power', {})
+        for i, (name, info) in enumerate(sorted(psu.items()), 1):
+            status = 'ok' if info.get('status') else 'n/a'
+            parts.append(f"PSU{i}={status}")
+        # Temperature
+        temp = env.get('temperature', {})
+        for name, info in sorted(temp.items()):
+            t = info.get('temperature', '?')
+            parts.append(f"temp={t}\u00b0C")
+        # Fans
+        fans = env.get('fans', {})
+        if fans:
+            all_ok = all(f.get('status') for f in fans.values())
+            parts.append(f"fans={'ok' if all_ok else 'FAIL'}")
+        # CPU
+        cpu = env.get('cpu', {})
+        for cid, info in sorted(cpu.items()):
+            parts.append(f"CPU={info.get('%usage', '?')}%")
+        # Memory
+        mem = env.get('memory', {})
+        avail = mem.get('available_ram', 0)
+        used = mem.get('used_ram', 0)
+        if avail > 0 and used >= 0:
+            pct = int(100 * used / avail)
+            parts.append(f"mem={pct}%")
+        if parts:
+            print(f"    Environment:      {'  '.join(parts)}")
+
+    # Interfaces — only show physical ports (slot/port format)
+    ifaces = data.get('interfaces')
+    if ifaces:
+        physical = {k: v for k, v in ifaces.items() if '/' in k}
+        up_count = sum(1 for i in physical.values() if i.get('is_up'))
+        total = len(physical)
+        def _port_sort_key(name):
+            try:
+                return [int(x) for x in name.split('/')]
+            except ValueError:
+                return [999]
+        port_details = []
+        for name in sorted(physical.keys(), key=_port_sort_key):
+            arrow = '\u2191' if physical[name].get('is_up') else '\u2193'
+            port_details.append(f"{name}{arrow}")
+        detail_str = ' '.join(port_details[:12])
+        if len(port_details) > 12:
+            detail_str += ' ...'
+        print(f"    Ports:            {up_count}/{total} up  ({detail_str})")
 
 
 # ---------------------------------------------------------------------------
@@ -1892,6 +2271,300 @@ def cmd_upload(args, config, driver):
     return reached
 
 
+def cmd_system(args, config, driver):
+    """View/set sysName, sysContact, sysLocation."""
+    save = args.save or config.get('save', False)
+
+    connections = connect_all(driver, config)
+    if not connections:
+        return 0
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(connections)) as pool:
+        futures = {
+            pool.submit(worker_system, device, ip,
+                        hostname=_get_device_arg(config, ip, 'hostname', args.hostname),
+                        contact=_get_device_arg(config, ip, 'contact', args.contact),
+                        location=_get_device_arg(config, ip, 'location', args.location),
+                        save=save): ip
+            for ip, device in connections.items()
+        }
+        for future in as_completed(futures):
+            ip, status, data = future.result()
+            results[ip] = (status, data)
+
+    for ip in config['devices']:
+        if ip not in results:
+            continue
+        status, data = results[ip]
+        label = display_name(ip)
+        if status == 'FAIL':
+            print(f"\n  [FAIL] {label:<17s}{data}")
+            continue
+
+        before = data['before']
+        after = data.get('after')
+        if after:
+            print(f"\n  [OK  ] {label}")
+            print(f"    sysName:     {before.get('chassis_id', '')} -> {after.get('chassis_id', '')}")
+            print(f"    sysContact:  {before.get('contact', '')} -> {after.get('contact', '')}")
+            print(f"    sysLocation: {before.get('location', '')} -> {after.get('location', '')}")
+        else:
+            print(f"\n  {label}")
+            print(format_system_info(before))
+
+    close_all(connections)
+    return sum(1 for s, _ in results.values() if s == 'OK')
+
+
+def cmd_management(args, config, driver):
+    """View/set management IP configuration."""
+    save = args.save or config.get('save', False)
+    skip_confirm = args.yes or config.get('yes', False)
+
+    # Determine if this is a set operation
+    mgmt_protocol = None
+    if args.dhcp:
+        mgmt_protocol = 'dhcp'
+    elif args.static:
+        mgmt_protocol = 'local'
+
+    # Check if any device has per-device management args
+    has_device_args = any(
+        config.get('device_args', {}).get(ip, {}).get(k)
+        for ip in config.get('devices', [])
+        for k in ('ip', 'netmask', 'gateway', 'vlan')
+    )
+    has_set = has_device_args or any(v is not None for v in (
+        args.ip, args.netmask, args.gateway, args.vlan, mgmt_protocol))
+
+    if has_set and not skip_confirm:
+        print(f"\n  WARNING: Changing management IP/VLAN may sever your connection.")
+        print(f"  Type 'yes' to continue: ", end='', flush=True)
+        confirm = input().strip()
+        if confirm != 'yes':
+            print("  Aborted.\n")
+            return 0
+
+    connections = connect_all(driver, config)
+    if not connections:
+        return 0
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(connections)) as pool:
+        futures = {}
+        for ip, device in connections.items():
+            dev_vlan = _get_device_arg(config, ip, 'vlan', args.vlan)
+            if dev_vlan is not None:
+                dev_vlan = int(dev_vlan)
+            futures[pool.submit(worker_management, device, ip,
+                        mgmt_ip=_get_device_arg(config, ip, 'ip', args.ip),
+                        netmask=_get_device_arg(config, ip, 'netmask', args.netmask),
+                        gateway=_get_device_arg(config, ip, 'gateway', args.gateway),
+                        vlan=dev_vlan,
+                        protocol=mgmt_protocol, save=save)] = ip
+        for future in as_completed(futures):
+            ip, status, data = future.result()
+            results[ip] = (status, data)
+
+    for ip in config['devices']:
+        if ip not in results:
+            continue
+        status, data = results[ip]
+        label = display_name(ip)
+        if status == 'FAIL':
+            print(f"\n  [FAIL] {label:<17s}{data}")
+            continue
+
+        before = data['before']
+        after = data.get('after')
+        if after and 'note' not in after:
+            print(f"\n  [OK  ] {label}")
+            for key in ('vlan_id', 'ip_address', 'netmask', 'gateway', 'protocol'):
+                bv = before.get(key, '?')
+                av = after.get(key, '?')
+                changed = ' *' if bv != av else ''
+                print(f"    {key:<12s} {bv} -> {av}{changed}")
+        elif after and 'note' in after:
+            print(f"\n  [OK  ] {label:<17s}{after['note']}")
+        else:
+            print(f"\n  {label}")
+            print(format_management_info(before))
+
+    close_all(connections)
+    return sum(1 for s, _ in results.values() if s == 'OK')
+
+
+def cmd_auto_backup(args, config, driver):
+    """View/configure remote config auto-backup."""
+    if config['protocol'] == 'offline':
+        print("\n  ERROR: auto-backup not available offline\n", file=sys.stderr)
+        sys.exit(1)
+
+    if (args.push or args.pull) and not args.server:
+        print("\n  ERROR: --push/--pull requires --server\n", file=sys.stderr)
+        sys.exit(1)
+
+    connections = connect_all(driver, config)
+    if not connections:
+        return 0
+
+    enable = None
+    if args.enable:
+        enable = True
+    elif args.disable:
+        enable = False
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(connections)) as pool:
+        futures = {
+            pool.submit(worker_auto_backup, device, ip,
+                        enable=enable, url=args.url,
+                        username=args.username, password=args.password,
+                        push=args.push, pull=args.pull,
+                        server=args.server, profile=args.profile,
+                        save=args.save): ip
+            for ip, device in connections.items()
+        }
+        for future in as_completed(futures):
+            ip, status, data = future.result()
+            results[ip] = (status, data)
+
+    for ip in config['devices']:
+        if ip not in results:
+            continue
+        status, data = results[ip]
+        label = display_name(ip)
+        if status == 'FAIL':
+            print(f"\n  [FAIL] {label:<17s}{data}")
+            continue
+
+        transfer = data.get('transfer')
+        if transfer:
+            print(f"\n  [OK  ] {label:<17s}{transfer}")
+            continue
+
+        before = data['before']
+        after = data.get('after')
+        if after:
+            print(f"\n  [OK  ] {label}")
+            print(format_auto_backup(after))
+        else:
+            print(f"\n  {label}")
+            print(format_auto_backup(before))
+
+    close_all(connections)
+    return sum(1 for s, _ in results.values() if s == 'OK')
+
+
+def cmd_ping(args, config, driver):
+    """Ping from the switch."""
+    if config['protocol'] == 'offline':
+        print("\n  ERROR: ping not available offline\n", file=sys.stderr)
+        sys.exit(1)
+
+    connections = connect_all(driver, config)
+    if not connections:
+        return 0
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(connections)) as pool:
+        futures = {
+            pool.submit(worker_ping, device, ip, args.destination,
+                        count=args.count, size=args.size,
+                        timeout=args.timeout): ip
+            for ip, device in connections.items()
+        }
+        for future in as_completed(futures):
+            ip, status, data = future.result()
+            results[ip] = (status, data)
+
+    for ip in config['devices']:
+        if ip not in results:
+            continue
+        status, data = results[ip]
+        label = display_name(ip)
+        if status == 'FAIL':
+            print(f"\n  [FAIL] {label:<17s}{data}")
+            continue
+
+        if 'success' in data:
+            s = data['success']
+            loss = s.get('packet_loss', 100)
+            sent = s.get('probes_sent', 0)
+            rtt_min = s.get('rtt_min', 0)
+            rtt_avg = s.get('rtt_avg', 0)
+            rtt_max = s.get('rtt_max', 0)
+            print(f"\n  [OK  ] {label:<17s}{args.destination}")
+            print(f"    {sent} sent, {loss}% loss, "
+                  f"RTT min/avg/max = {rtt_min:.1f}/{rtt_avg:.1f}/{rtt_max:.1f} ms")
+        elif 'error' in data:
+            print(f"\n  [FAIL] {label:<17s}{data['error']}")
+        else:
+            print(f"\n  [OK  ] {label:<17s}{data}")
+
+    close_all(connections)
+    return sum(1 for s, _ in results.values() if s == 'OK')
+
+
+def cmd_cli(args, config, driver):
+    """Run raw CLI commands on devices."""
+    if config['protocol'] == 'offline':
+        print("\n  ERROR: cli not available offline\n", file=sys.stderr)
+        sys.exit(1)
+
+    connections = connect_all(driver, config)
+    if not connections:
+        return 0
+
+    results = {}
+    with ThreadPoolExecutor(max_workers=len(connections)) as pool:
+        futures = {
+            pool.submit(worker_cli, device, ip, args.commands): ip
+            for ip, device in connections.items()
+        }
+        for future in as_completed(futures):
+            ip, status, data = future.result()
+            results[ip] = (status, data)
+
+    # Create output folder — always save raw output
+    out_dir = f"cli_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    os.makedirs(out_dir, exist_ok=True)
+
+    for ip in config['devices']:
+        if ip not in results:
+            continue
+        status, data = results[ip]
+        label = display_name(ip)
+        if status == 'FAIL':
+            print(f"\n  [FAIL] {label:<17s}{data}")
+            # Write failure to file too
+            out_path = os.path.join(out_dir, f"{label.replace('.', '_')}.txt")
+            with open(out_path, 'w') as f:
+                f.write(f"[FAIL] {data}\n")
+            continue
+
+        # Write raw output to file
+        out_path = os.path.join(out_dir, f"{label.replace('.', '_')}.txt")
+        with open(out_path, 'w') as f:
+            for cmd, output in data.items():
+                f.write(f"> {cmd}\n")
+                f.write(output)
+                f.write("\n\n")
+
+        # Also print to stdout
+        print(f"\n  {label}")
+        for cmd, output in data.items():
+            print(f"  > {cmd}")
+            for line in output.splitlines():
+                print(f"    {line}")
+
+    print(f"\n  Output saved to {out_dir}/")
+
+    close_all(connections)
+    return sum(1 for s, _ in results.values() if s == 'OK')
+
+
 # ---------------------------------------------------------------------------
 # Connection helpers
 # ---------------------------------------------------------------------------
@@ -2153,8 +2826,13 @@ def interactive_mode(args, config, driver):
             # ── SUB-MENUS ──
             if op == 'menu-status':
                 sub_ops = [('Status overview', 'status')]
+                sub_ops.append(('System info (view/edit)', 'system'))
+                sub_ops.append(('Management (view/edit)', 'management'))
                 if is_mops:
                     sub_ops.append(('Diff (unsaved changes)', 'diff'))
+                if not is_offline:
+                    sub_ops.append(('Ping (requires SSH)', 'ping'))
+                    sub_ops.append(('CLI command (requires SSH)', 'cli'))
                 sub_ops.append(('Back', 'back'))
                 op = pick('Status', sub_ops)
                 if op == 'back':
@@ -2167,6 +2845,8 @@ def interactive_mode(args, config, driver):
                 if is_mops:
                     sub_ops.append(('Save with rollback',    'save-rollback'))
                     sub_ops.append(('Snapshot (named backup)', 'snapshot'))
+                if not is_offline:
+                    sub_ops.append(('Auto-backup (view/edit)', 'auto-backup'))
                 sub_ops.append(('Back', 'back'))
                 op = pick('Save', sub_ops)
                 if op == 'back':
@@ -2658,6 +3338,242 @@ def interactive_mode(args, config, driver):
                 print(f'\n  {DM}Refreshing...{RS}')
                 state = refresh_state(connections)
 
+            # ── SYSTEM INFO ──
+            elif op == 'system':
+                for ip in config['devices']:
+                    device = connections.get(ip)
+                    if not device:
+                        continue
+                    try:
+                        info = device.get_snmp_information()
+                        print(f"  {BD}{display_name(ip)}{RS}")
+                        print(format_system_info(info))
+                    except Exception as e:
+                        print(f"  {display_name(ip):<17s}{YL}{e}{RS}")
+
+                print()
+                if yesno('Edit system info?'):
+                    hostname = ask('sysName (blank=keep)')
+                    contact = ask('sysContact (blank=keep)')
+                    location = ask('sysLocation (blank=keep)')
+
+                    if not any((hostname, contact, location)):
+                        continue
+
+                    save_nvm = yesno('Save to NVM?')
+                    print()
+                    for ip in config['devices']:
+                        device = connections.get(ip)
+                        if not device:
+                            continue
+                        _, tag, data = worker_system(
+                            device, ip,
+                            hostname=hostname or None,
+                            contact=contact or None,
+                            location=location or None,
+                            save=save_nvm)
+                        label = display_name(ip)
+                        if tag == 'FAIL':
+                            print(f"  {YL}[FAIL]{RS} {label:<17s}{data}")
+                        else:
+                            after = data.get('after', {})
+                            print(f"  {GR}[OK  ]{RS} {label:<17s}"
+                                  f"name={after.get('chassis_id', '')} "
+                                  f"contact={after.get('contact', '')} "
+                                  f"location={after.get('location', '')}")
+
+            # ── MANAGEMENT ──
+            elif op == 'management':
+                for ip in config['devices']:
+                    device = connections.get(ip)
+                    if not device:
+                        continue
+                    try:
+                        mgmt = device.get_management()
+                        print(f"  {BD}{display_name(ip)}{RS}")
+                        print(format_management_info(mgmt))
+                    except Exception as e:
+                        print(f"  {display_name(ip):<17s}{YL}{e}{RS}")
+
+                print()
+                if yesno('Edit management config?'):
+                    print(f"\n  {YL}WARNING: Changing IP/VLAN may sever your connection.{RS}")
+                    mgmt_ip = ask('IP address (blank=keep)')
+                    netmask = ask('Netmask (blank=keep)')
+                    gateway = ask('Gateway (blank=keep)')
+                    vlan_raw = ask('VLAN ID (blank=keep)')
+                    proto_raw = pick('Protocol', [
+                        ('No change', None),
+                        ('Static',    'local'),
+                        ('DHCP',      'dhcp'),
+                        ('Back',      'back'),
+                    ])
+                    if proto_raw == 'back':
+                        continue
+
+                    vlan = int(vlan_raw) if vlan_raw else None
+                    has_change = any((mgmt_ip, netmask, gateway, vlan, proto_raw))
+                    if not has_change:
+                        continue
+
+                    save_nvm = yesno('Save to NVM?')
+                    print()
+                    for ip in config['devices']:
+                        device = connections.get(ip)
+                        if not device:
+                            continue
+                        _, tag, data = worker_management(
+                            device, ip,
+                            mgmt_ip=mgmt_ip or None,
+                            netmask=netmask or None,
+                            gateway=gateway or None,
+                            vlan=vlan,
+                            protocol=proto_raw,
+                            save=save_nvm)
+                        label = display_name(ip)
+                        if tag == 'FAIL':
+                            print(f"  {YL}[FAIL]{RS} {label:<17s}{data}")
+                        elif data.get('after', {}).get('note'):
+                            print(f"  {GR}[OK  ]{RS} {label:<17s}{data['after']['note']}")
+                        else:
+                            print(f"  {GR}[OK  ]{RS} {label}")
+
+            # ── AUTO-BACKUP ──
+            elif op == 'auto-backup':
+                for ip in config['devices']:
+                    device = connections.get(ip)
+                    if not device:
+                        continue
+                    try:
+                        cfg = device.get_config_remote()
+                        print(f"  {BD}{display_name(ip)}{RS}")
+                        print(format_auto_backup(cfg))
+                    except Exception as e:
+                        print(f"  {display_name(ip):<17s}{YL}{e}{RS}")
+
+                print()
+                ab_op = pick('Auto-backup', [
+                    ('Enable',              'enable'),
+                    ('Disable',             'disable'),
+                    ('Set URL',             'url'),
+                    ('Push config',         'push'),
+                    ('Pull config',         'pull'),
+                    ('Back',                'back'),
+                ])
+
+                if ab_op == 'back':
+                    continue
+
+                save_nvm = False
+                if ab_op == 'enable':
+                    url = ask('Backup URL (e.g. tftp://10.0.0.1/%p/config-%d.xml)')
+                    for ip in config['devices']:
+                        device = connections.get(ip)
+                        if not device:
+                            continue
+                        kwargs = {'enable': True}
+                        if url:
+                            kwargs['url'] = url
+                        _, tag, data = worker_auto_backup(device, ip, **kwargs)
+                        label = display_name(ip)
+                        if tag == 'FAIL':
+                            print(f"  {YL}[FAIL]{RS} {label:<17s}{data}")
+                        else:
+                            print(f"  {GR}[OK  ]{RS} {label:<17s}auto-backup enabled")
+                elif ab_op == 'disable':
+                    for ip in config['devices']:
+                        device = connections.get(ip)
+                        if not device:
+                            continue
+                        _, tag, data = worker_auto_backup(device, ip, enable=False)
+                        label = display_name(ip)
+                        if tag == 'FAIL':
+                            print(f"  {YL}[FAIL]{RS} {label:<17s}{data}")
+                        else:
+                            print(f"  {GR}[OK  ]{RS} {label:<17s}auto-backup disabled")
+                elif ab_op == 'url':
+                    url = ask('Backup URL')
+                    if url:
+                        for ip in config['devices']:
+                            device = connections.get(ip)
+                            if not device:
+                                continue
+                            _, tag, data = worker_auto_backup(device, ip, url=url)
+                            label = display_name(ip)
+                            if tag == 'FAIL':
+                                print(f"  {YL}[FAIL]{RS} {label:<17s}{data}")
+                            else:
+                                print(f"  {GR}[OK  ]{RS} {label:<17s}URL set")
+                elif ab_op in ('push', 'pull'):
+                    server = ask('Server URL (e.g. tftp://10.0.0.1/backup.xml)')
+                    if not server:
+                        print(f"  {YL}Server URL required.{RS}")
+                        continue
+                    for ip in config['devices']:
+                        device = connections.get(ip)
+                        if not device:
+                            continue
+                        _, tag, data = worker_auto_backup(
+                            device, ip,
+                            push=(ab_op == 'push'), pull=(ab_op == 'pull'),
+                            server=server)
+                        label = display_name(ip)
+                        if tag == 'FAIL':
+                            print(f"  {YL}[FAIL]{RS} {label:<17s}{data}")
+                        else:
+                            xfer = data.get('transfer', ab_op)
+                            print(f"  {GR}[OK  ]{RS} {label:<17s}{xfer}")
+
+            # ── PING ──
+            elif op == 'ping':
+                dest = ask('Destination IP')
+                if not dest:
+                    continue
+                print()
+                for ip in config['devices']:
+                    device = connections.get(ip)
+                    if not device:
+                        continue
+                    _, tag, data = worker_ping(device, ip, dest)
+                    label = display_name(ip)
+                    if tag == 'FAIL':
+                        print(f"  {YL}[FAIL]{RS} {label:<17s}{data}")
+                    elif 'success' in data:
+                        s = data['success']
+                        loss = s.get('packet_loss', 100)
+                        sent = s.get('probes_sent', 0)
+                        rtt_min = s.get('rtt_min', 0)
+                        rtt_avg = s.get('rtt_avg', 0)
+                        rtt_max = s.get('rtt_max', 0)
+                        print(f"  {GR}[OK  ]{RS} {label:<17s}{dest}  "
+                              f"{sent} sent, {loss}% loss, "
+                              f"RTT {rtt_min:.1f}/{rtt_avg:.1f}/{rtt_max:.1f} ms")
+                    elif 'error' in data:
+                        print(f"  {YL}[FAIL]{RS} {label:<17s}{data['error']}")
+
+            # ── CLI COMMAND ──
+            elif op == 'cli':
+                while True:
+                    cmd = ask('CLI command (blank=back)')
+                    if not cmd:
+                        break
+                    print()
+                    for ip in config['devices']:
+                        device = connections.get(ip)
+                        if not device:
+                            continue
+                        _, tag, data = worker_cli(device, ip, [cmd])
+                        label = display_name(ip)
+                        if tag == 'FAIL':
+                            print(f"  {YL}[FAIL]{RS} {label:<17s}{data}")
+                        else:
+                            output = data.get(cmd, '')
+                            if len(config['devices']) > 1:
+                                print(f"  {BD}{label}{RS}")
+                            for line in output.splitlines():
+                                print(f"    {line}")
+                    print()
+
         # ── QUIT ──
         close_all(connections)
         print(f'\n  {DM}Later.{RS}\n')
@@ -2795,6 +3711,11 @@ def main():
             'download': cmd_download,
             'upload': cmd_upload,
             'snapshot': cmd_snapshot,
+            'system': cmd_system,
+            'management': cmd_management,
+            'auto-backup': cmd_auto_backup,
+            'ping': cmd_ping,
+            'cli': cmd_cli,
         }
 
         handler = dispatch[args.command]
