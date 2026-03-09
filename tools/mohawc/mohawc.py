@@ -2132,32 +2132,59 @@ def interactive_mode(args, config, driver):
             print(f'  {CY}{"━" * 58}{RS}')
             print(f'  {BD}SESSION{RS}  {CY}{n_dev}{RS} device(s) via {protocol.upper()}\n')
 
+            #  M.O.H.A.W.C — one letter per top-level item
             ops = [
-                ('Status',              'status'),
-                ('List profiles',       'profiles'),
+                ('Status',        'menu-status'),     # M: Monitor
             ]
-            if is_mops:
-                ops.append(('Diff (unsaved changes)', 'diff'))
-            ops.append(('Save',                 'save'))
-            if is_mops:
-                ops.append(('Save with rollback',   'save-rollback'))
-                ops.append(('Snapshot (named backup)', 'snapshot'))
-            ops.append(('Activate profile',     'activate'))
-            ops.append(('Delete profile',       'delete'))
-            ops.append(('Download config',      'download'))
-            if is_mops:
-                ops.append(('Upload config',    'upload'))
-            ops.append(('HiDiscovery',          'hidiscovery'))
-            if not is_offline:
-                ops.append(('Reset',            'reset'))
             if not is_offline and protocol != 'snmp':
-                ops.append(('Onboard',          'onboard'))
-            ops.append(('Quit',                 'quit'))
+                ops.append(('Onboard',    'onboard'))  # O: Onboarding
+            ops.append(('HiDiscovery',    'hidiscovery'))  # H: HiDiscovery
+            ops.append(('Profiles',       'menu-profiles'))  # A: Admin
+            if not is_offline:
+                ops.append(('Reset',      'reset'))    # W: Wipe
+            ops.append(('Save',           'menu-save'))  # C: Config
+            ops.append(('Quit',           'quit'))
 
             op = pick('What next?', ops)
 
             if op == 'quit':
                 break
+
+            # ── SUB-MENUS ──
+            if op == 'menu-status':
+                sub_ops = [('Status overview', 'status')]
+                if is_mops:
+                    sub_ops.append(('Diff (unsaved changes)', 'diff'))
+                sub_ops.append(('Back', 'back'))
+                op = pick('Status', sub_ops)
+                if op == 'back':
+                    continue
+
+            elif op == 'menu-save':
+                sub_ops = [
+                    ('Save to NVM',          'save'),
+                ]
+                if is_mops:
+                    sub_ops.append(('Save with rollback',    'save-rollback'))
+                    sub_ops.append(('Snapshot (named backup)', 'snapshot'))
+                sub_ops.append(('Back', 'back'))
+                op = pick('Save', sub_ops)
+                if op == 'back':
+                    continue
+
+            elif op == 'menu-profiles':
+                sub_ops = [
+                    ('List profiles',     'profiles'),
+                    ('Activate profile',  'activate'),
+                    ('Delete profile',    'delete'),
+                    ('Download config',   'download'),
+                ]
+                if is_mops:
+                    sub_ops.append(('Upload config', 'upload'))
+                sub_ops.append(('Back', 'back'))
+                op = pick('Profiles', sub_ops)
+                if op == 'back':
+                    continue
 
             # Clear before command execution — output replaces screen
             cls()

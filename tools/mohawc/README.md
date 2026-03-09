@@ -45,21 +45,16 @@ python mohawc.py                                # auto-enters if no subcommand +
 
 Menu adapts to protocol — MOPS-only items (diff, save-rollback) are hidden when connected via SSH/SNMP. Offline-incompatible items (reset, onboard) are hidden in offline mode.
 
-| # | Menu Item | Type |
-|---|-----------|------|
-| 1 | Status | Read-only |
-| 2 | List profiles | Read-only |
-| 3 | Diff (unsaved changes) | Read-only (MOPS) |
-| 4 | Save | Mutation |
-| 5 | Save with rollback | Mutation (MOPS) |
-| 6 | Activate profile | Mutation (warm restart) |
-| 7 | Delete profile | Mutation |
-| 8 | Download config | Read-only |
-| 9 | Upload config | Mutation (MOPS) |
-| 10 | Snapshot (named backup) | Mutation (MOPS) |
-| 11 | HiDiscovery | Mutation |
-| 12 | Reset | Mutation (destructive) |
-| 13 | Onboard | Mutation |
+Main menu follows the MOHAWC acronym — one letter per top-level item:
+
+| # | Menu Item | Sub-menu |
+|---|-----------|----------|
+| 1 | **Status** (Monitor) | Status overview, Diff |
+| 2 | **Onboard** | — |
+| 3 | **HiDiscovery** | — |
+| 4 | **Profiles** (Admin) | List, Activate, Delete, Download, Upload |
+| 5 | **Reset** (Wipe) | — |
+| 6 | **Save** (Config) | Save, Save with rollback, Snapshot |
 | q | Quit | — |
 
 Profile/config state is refreshed after every mutation. Activate handles the connection drop and reconnects on single-device sessions.
