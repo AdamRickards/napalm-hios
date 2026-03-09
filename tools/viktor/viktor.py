@@ -1704,21 +1704,25 @@ def interactive_mode():
         print(f'  {BD}{title}{RS}\n')
 
     def pick(text, options, default=1):
+        last = len(options)
         for i, (label, _) in enumerate(options, 1):
             mark = f'{YL}▸{RS}' if i == default else ' '
-            print(f'  {mark} {CY}{i}{RS}) {label}')
+            key = 'q' if i == last else str(i)
+            print(f'  {mark} {CY}{key}{RS}) {label}')
         print()
         while True:
             raw = input(f'  {GR}▸{RS} {text} [{default}]: ').strip()
             if not raw:
                 return options[default - 1][1]
+            if raw.lower() == 'q':
+                return options[-1][1]
             try:
                 idx = int(raw)
-                if 1 <= idx <= len(options):
+                if 1 <= idx <= last:
                     return options[idx - 1][1]
             except ValueError:
                 pass
-            print(f'  {YL}Pick 1–{len(options)}{RS}')
+            print(f'  {YL}Pick 1–{last - 1} or q{RS}')
 
     def ask(text, default=''):
         hint = f' {DM}[{default}]{RS}' if default else ''
@@ -1869,24 +1873,52 @@ def interactive_mode():
             print(f'  {BD}SESSION{RS}  {CY}{n_dev}{RS} device(s) via {protocol.upper()}{ring_tag}\n')
 
             ops = [
-                ('List VLANs',            'list'),
-                ('Create VLAN',           'create'),
-                ('Delete VLAN',           'delete'),
-                ('Rename VLAN',           'rename'),
-                ('Set access ports',      'access'),
-                ('Set trunk ports',       'trunk'),
-                ('Auto-trunk (LLDP)',     'auto-trunk'),
-                ('QoS — set default PCP', 'qos'),
-                ('Export to CSV',         'export'),
-                ('Import from CSV',       'import'),
-                ('Audit',                 'audit'),
-                ('Name consistency',      'names'),
-                ('Quit',                  'quit'),
+                ('VLANs',         'menu-vlans'),
+                ('Ports',         'menu-ports'),
+                ('Fleet',         'menu-fleet'),
+                ('Quit',          'quit'),
             ]
             op = pick('What next?', ops)
 
             if op == 'quit':
                 break
+
+            # ── Sub-menus ──
+            if op == 'menu-vlans':
+                sub = pick('VLANs', [
+                    ('List',    'list'),
+                    ('Create',  'create'),
+                    ('Delete',  'delete'),
+                    ('Rename',  'rename'),
+                    ('Back',    'back'),
+                ])
+                if sub == 'back':
+                    continue
+                op = sub
+
+            elif op == 'menu-ports':
+                sub = pick('Ports', [
+                    ('Access — set PVID + untagged',  'access'),
+                    ('Trunk — add tagged VLANs',      'trunk'),
+                    ('Auto-trunk — tag LLDP links',   'auto-trunk'),
+                    ('QoS — set default PCP',         'qos'),
+                    ('Back',                          'back'),
+                ])
+                if sub == 'back':
+                    continue
+                op = sub
+
+            elif op == 'menu-fleet':
+                sub = pick('Fleet', [
+                    ('Export to CSV',      'export'),
+                    ('Import from CSV',    'import'),
+                    ('Audit',              'audit'),
+                    ('Name consistency',   'names'),
+                    ('Back',               'back'),
+                ])
+                if sub == 'back':
+                    continue
+                op = sub
 
             # ── Gather parameters ──
             print()
