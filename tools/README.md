@@ -16,7 +16,7 @@ All tools except MARCO and SNOOP use [napalm-hios](https://github.com/adamr/napa
 | [STONE](stone/) | SFP Transceiver Optics Network Evaluator | SFP optical power levels → Excel report with outlier detection | `>= 1.4.1` | — |
 | [VIKTOR](viktor/) | VLAN Intent, Knowledgeable Topology-Optimized Rules | Fleet VLAN provisioning, QoS, audit, auto-trunk via LLDP | `>= 1.13.0` | [LOGIC](viktor/LOGIC.md) |
 
-**Planned:** [BLIP](blip/) (port blink identification), [POLO](polo/) (persistent onboarding via dnsmasq registry)
+**Planned:** [BLIP](blip/) (broadcast latency interruption probe — traffic disruption measurement), [POLO](polo/) (persistent onboarding via dnsmasq registry)
 
 ## Access Patterns
 
