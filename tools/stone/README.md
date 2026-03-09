@@ -14,6 +14,11 @@ pip install -r requirements.txt
 
 ## Quick Start
 
+Two access patterns (no interactive mode — STONE is a single-run report):
+
+1. **Config file** — `python stone.py` — fleet-scale batch scan
+2. **CLI overrides** — `python stone.py --protocol snmp -c site.cfg` — custom config
+
 ```bash
 python stone.py                        # default config + Excel output
 python stone.py -c my_site.cfg         # custom config file
@@ -97,6 +102,18 @@ protocol = mops
 ============================================================
 ```
 
+## Protocol Support
+
+Read-only tool — all features work with all live protocols. No offline mode (requires live SFP transceiver data).
+
+| Feature | MOPS | SNMP | SSH | Offline |
+|---------|------|------|-----|---------|
+| SFP optical power | Yes | Yes | Yes | — |
+
 ## Logs
 
 Written to `logs/stone_YYYYMMDD_HHMMSS.log` in the script directory.
+
+## See Also
+
+- [napalm-hios](https://github.com/adamr/napalm-hios) — NAPALM driver for HiOS

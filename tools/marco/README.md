@@ -136,6 +136,18 @@ python marco.py --name "MY-SWITCH" -i 2
 }
 ```
 
+## Protocol Support
+
+MARCO is standalone — it does NOT use napalm-hios. It speaks HiDiscovery v2 (SNMPv2c over multicast) directly via raw sockets. No dependencies.
+
+| Feature | HiDiscovery v2 | Notes |
+|---------|---------------|-------|
+| Discover | Yes | Multicast GetRequest, all devices respond |
+| Blink toggle | Yes | Requires `read-write` mode |
+| Set IP | Yes | Auto-sets config protocol to static |
+| Set sysName | Yes | MIB-II sysName via `@discover@` community |
+| DHCP/Static | Yes | Config protocol toggle |
+
 ## Notes
 
 - Requires HiDiscovery to be enabled (`read-write` mode) on target devices
@@ -145,3 +157,8 @@ python marco.py --name "MY-SWITCH" -i 2
 - Changes are not saved to NVM — use MOHAWC or the switch CLI to persist
 - JSON cache is only updated on successful Set responses (SNMP error-status 0)
 - This protocol is stateless — sometimes things might not appear to work but it's worth double checking because nr != dr
+
+## See Also
+
+- [LOGIC.md](LOGIC.md) — HiDiscovery v2 protocol, multicast targeting, Gauge32 bug, SNMP encoding
+- [MOHAWC](../mohawc/) — Use MOHAWC to persist changes to NVM after MARCO configures a device
