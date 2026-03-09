@@ -6,7 +6,7 @@ reports pass/fail with IEC clause references, and remediates findings.
 
 ADAM audits offline configs. JUSTIN audits live devices and fixes them.
 
-**Requires:** `napalm-hios >= 1.16.0`
+**Requires:** `napalm-hios >= 1.16.2`
 
 ## Quick Start
 
@@ -102,7 +102,7 @@ Separate the audit from the remediation:
 | ns-gvrp-mvrp | CR 7.7 | GVRP/MVRP disabled | * |
 | ns-gmrp-mmrp | CR 7.7 | GMRP/MMRP disabled | * |
 
-\* = Requires driver `get_services()` extension (reports "unable to assess" until available)
+\* = Requires napalm-hios v1.16.2+ (`get_services()` extension)
 
 ## Protocol Support
 

@@ -135,6 +135,43 @@ def is_valid_ipv4(s):
     except ValueError:
         return False
 
+def parse_ips(spec):
+    """Parse --ips spec into list of IPs.
+
+    Formats:
+      Comma: 192.168.1.1,192.168.1.5
+      Last-octet range: 192.168.1.80-85
+      CIDR: 192.168.1.0/24
+    """
+    ips = []
+    for part in spec.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if '/' in part:
+            try:
+                net = ipaddress.ip_network(part, strict=False)
+                ips.extend(str(h) for h in net.hosts())
+            except ValueError:
+                raise ValueError(f"Invalid CIDR: {part}")
+            continue
+        m = re.match(r'^(\d+\.\d+\.\d+\.)(\d+)-(\d+)$', part)
+        if m:
+            prefix, start, end = m.group(1), int(m.group(2)), int(m.group(3))
+            if start > end:
+                raise ValueError(f"Invalid range: {part} (start > end)")
+            for i in range(start, end + 1):
+                ip = f"{prefix}{i}"
+                if is_valid_ipv4(ip):
+                    ips.append(ip)
+            continue
+        if is_valid_ipv4(part):
+            ips.append(part)
+        else:
+            raise ValueError(f"Invalid IP: {part}")
+    return ips
+
+
 def parse_config(config_file):
     """Parse script.cfg into settings and device list."""
     if not os.path.exists(config_file):
@@ -332,13 +369,13 @@ def check_time_sync(state, spec, config):
     client = ntp.get('client', {})
     if not client.get('enabled'):
         return _make_finding(spec, 'SNTP client disabled',
-                             fix_cmd="set_ntp(client_enabled=True)")
+                             fix_cmd="set_ntp(enabled=True)")
     servers = client.get('servers', [])
     active = [s for s in servers
               if s.get('address') and s['address'] != '0.0.0.0']
     if not active:
         return _make_finding(spec, 'SNTP client enabled but no server configured',
-                             fix_cmd="set_ntp(client_enabled=True) + configure server")
+                             fix_cmd="set_ntp(enabled=True) + configure server")
     addrs = ', '.join(s['address'] for s in active)
     return _make_finding(spec, f'NTP configured ({addrs})', passed=True)
 
@@ -1077,8 +1114,10 @@ def harden_time_sync(device, spec, config, color=C):
     ntp_server = config.get('ntp_server')
     if not ntp_server:
         return None
-    device.set_ntp(client_enabled=True)
-    return f"set_ntp(client_enabled=True) [server={ntp_server}]"
+    addrs = [s.strip() for s in ntp_server.split(',') if s.strip()]
+    servers = [{'address': a} for a in addrs]
+    device.set_ntp(enabled=True, servers=servers)
+    return f"set_ntp(enabled=True, servers=[{', '.join(addrs)}])"
 
 
 @register_harden('sec-logging')
@@ -1086,13 +1125,14 @@ def harden_logging(device, spec, config, color=C):
     syslog_server = config.get('syslog_server')
     if not syslog_server:
         return None
-    port = config.get('syslog_port', 514)
-    device.set_syslog(
-        enabled=True,
-        servers=[{'index': 1, 'ip': syslog_server, 'port': port,
-                  'severity': 'warning', 'transport': 'udp'}])
-    return (f"set_syslog(enabled=True, "
-            f"servers=[{{ip: '{syslog_server}', port: {port}}}])")
+    port = int(config.get('syslog_port', 514))
+    addrs = [s.strip() for s in syslog_server.split(',') if s.strip()]
+    servers = [{'index': i + 1, 'ip': a, 'port': port,
+                'severity': 'warning', 'transport': 'udp'}
+               for i, a in enumerate(addrs)]
+    device.set_syslog(enabled=True, servers=servers)
+    joined = ', '.join(addrs)
+    return f"set_syslog(enabled=True, servers=[{joined}:{port}])"
 
 
 @register_harden('sec-snmpv1-traps')
@@ -1105,6 +1145,48 @@ def harden_snmpv1_traps(device, spec, config, color=C):
 def harden_snmpv1v2_write(device, spec, config, color=C):
     device.set_snmp_config(v1=False, v2=False)
     return "set_snmp_config(v1=False, v2=False)"
+
+
+@register_harden('sec-unsigned-sw')
+def harden_unsigned_sw(device, spec, config, color=C):
+    device.set_services(unsigned_sw=False)
+    return "set_services(unsigned_sw=False)"
+
+
+@register_harden('sec-aca-auto-update')
+def harden_aca_auto_update(device, spec, config, color=C):
+    device.set_services(aca_auto_update=False)
+    return "set_services(aca_auto_update=False)"
+
+
+@register_harden('sec-aca-config-write')
+def harden_aca_config_write(device, spec, config, color=C):
+    device.set_services(aca_config_write=False)
+    return "set_services(aca_config_write=False)"
+
+
+@register_harden('sec-aca-config-load')
+def harden_aca_config_load(device, spec, config, color=C):
+    device.set_services(aca_config_load=False)
+    return "set_services(aca_config_load=False)"
+
+
+@register_harden('sec-devsec-monitors')
+def harden_devsec_monitors(device, spec, config, color=C):
+    device.set_services(devsec_monitors=True)
+    return "set_services(devsec_monitors=True)"
+
+
+@register_harden('ns-gvrp-mvrp')
+def harden_gvrp_mvrp(device, spec, config, color=C):
+    device.set_services(mvrp=False)
+    return "set_services(mvrp=False)"
+
+
+@register_harden('ns-gmrp-mmrp')
+def harden_gmrp_mmrp(device, spec, config, color=C):
+    device.set_services(mmrp=False)
+    return "set_services(mmrp=False)"
 
 
 def _make_state_snapshot(state):
@@ -1963,7 +2045,8 @@ def _interactive_single(driver, config, ip, check_defs, color=C):
             # Findings multi-select (after explicit harden intent)
             fix_raw = input(
                 f'  {C.GRN}▸{C.RST} Findings '
-                f'{C.DIM}[a]{C.RST}: ').strip()
+                f'{C.CYN}[a]{C.RST}ll / 1-{len(fixable)}: '
+                ).strip()
             sel = _parse_selection(fix_raw or 'a', len(fixable))
             if not sel:
                 continue
@@ -2361,7 +2444,8 @@ def interactive_mode():
             # Two-prompt multi-select (after explicit harden)
             dev_raw = input(
                 f'  {C.GRN}▸{C.RST} Devices '
-                f'{C.DIM}[a]{C.RST}: ').strip()
+                f'{C.CYN}[a]{C.RST}ll / 1-{len(sorted_ips)}: '
+                ).strip()
             dev_sel = _parse_selection(
                 dev_raw or 'a', len(sorted_ips))
             if not dev_sel:
@@ -2369,7 +2453,8 @@ def interactive_mode():
 
             fix_raw = input(
                 f'  {C.GRN}▸{C.RST} Findings '
-                f'{C.DIM}[a]{C.RST}: ').strip()
+                f'{C.CYN}[a]{C.RST}ll / 1-{len(ordered_fixable)}: '
+                ).strip()
             fix_sel = _parse_selection(
                 fix_raw or 'a', len(ordered_fixable))
             if not fix_sel:
@@ -2632,6 +2717,8 @@ def parse_arguments():
     # Target
     parser.add_argument('-d', metavar='IP',
                         help='single device IP')
+    parser.add_argument('--ips', metavar='TARGETS',
+                        help='comma list, last-octet range, or CIDR')
     parser.add_argument('-c', metavar='FILE', default='script.cfg',
                         help='config file (default: script.cfg)')
     parser.add_argument('--from-report', metavar='FILE',
@@ -2722,18 +2809,33 @@ def main():
 
     # Config
     try:
-        if args.d:
+        if args.d or args.ips:
+            devices = [args.d] if args.d else parse_ips(args.ips)
             config = {
                 'username': args.u or 'admin',
                 'password': args.p or 'private',
                 'protocol': args.protocol or 'mops',
-                'devices': [args.d],
+                'devices': devices,
                 'syslog_server': None,
                 'syslog_port': 514,
                 'ntp_server': None,
                 'banner': None,
                 'level': args.level,
             }
+            # Read hardening targets from script.cfg if it exists
+            cfg_path = args.c
+            if os.path.exists(cfg_path):
+                supplementary = parse_config(cfg_path)
+                for key in ('syslog_server', 'syslog_port',
+                            'ntp_server', 'banner'):
+                    if supplementary.get(key) is not None:
+                        config[key] = supplementary[key]
+                if not args.u:
+                    config['username'] = supplementary['username']
+                if not args.p:
+                    config['password'] = supplementary['password']
+                if not args.protocol:
+                    config['protocol'] = supplementary['protocol']
         elif args.from_report:
             # Two-step: harden from report — still need credentials
             config = {

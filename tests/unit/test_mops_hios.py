@@ -3340,51 +3340,120 @@ class TestMOPSServices(unittest.TestCase):
         self.backend.client = Mock()
         self.backend._connected = True
 
-    def test_get_services(self):
-        """get_services returns correct shape."""
-        self.backend.client.get_multi.side_effect = [
-            {"mibs": {
-                "HM2-MGMTACCESS-MIB": {
-                    "hm2MgmtAccessWebGroup": [{
-                        "hm2WebHttpAdminStatus": "1",
-                        "hm2WebHttpsAdminStatus": "1",
-                        "hm2WebHttpPortNumber": "80",
-                        "hm2WebHttpsPortNumber": "443",
-                    }],
-                    "hm2MgmtAccessSshGroup": [{
-                        "hm2SshAdminStatus": "1",
-                    }],
-                    "hm2MgmtAccessTelnetGroup": [{
-                        "hm2TelnetServerAdminStatus": "2",
-                    }],
-                    "hm2MgmtAccessSnmpGroup": [{
-                        "hm2SnmpV1AdminStatus": "2",
-                        "hm2SnmpV2AdminStatus": "2",
-                        "hm2SnmpV3AdminStatus": "1",
-                        "hm2SnmpPortNumber": "161",
-                    }],
-                },
-            }, "errors": []},
-            {"mibs": {
-                "HM2-INDUSTRIAL-PROTOCOLS-MIB": {
-                    "hm2Iec61850ConfigGroup": [{
-                        "hm2Iec61850MmsServerAdminStatus": "2",
-                    }],
-                    "hm2ProfinetIOConfigGroup": [{
-                        "hm2PNIOAdminStatus": "2",
-                    }],
-                    "hm2EthernetIPConfigGroup": [{
-                        "hm2EtherNetIPAdminStatus": "2",
-                    }],
-                    "hm2Iec62541ConfigGroup": [{
-                        "hm2Iec62541OpcUaServerAdminStatus": "2",
-                    }],
-                    "hm2ModbusConfigGroup": [{
-                        "hm2ModbusTcpServerAdminStatus": "2",
-                    }],
-                },
-            }, "errors": []},
+    def _mock_mgmt_response(self):
+        return {"mibs": {
+            "HM2-MGMTACCESS-MIB": {
+                "hm2MgmtAccessWebGroup": [{
+                    "hm2WebHttpAdminStatus": "1",
+                    "hm2WebHttpsAdminStatus": "1",
+                    "hm2WebHttpPortNumber": "80",
+                    "hm2WebHttpsPortNumber": "443",
+                }],
+                "hm2MgmtAccessSshGroup": [{
+                    "hm2SshAdminStatus": "1",
+                }],
+                "hm2MgmtAccessTelnetGroup": [{
+                    "hm2TelnetServerAdminStatus": "2",
+                }],
+                "hm2MgmtAccessSnmpGroup": [{
+                    "hm2SnmpV1AdminStatus": "2",
+                    "hm2SnmpV2AdminStatus": "2",
+                    "hm2SnmpV3AdminStatus": "1",
+                    "hm2SnmpPortNumber": "161",
+                }],
+            },
+        }, "errors": []}
+
+    def _mock_industrial_response(self):
+        return {"mibs": {
+            "HM2-INDUSTRIAL-PROTOCOLS-MIB": {
+                "hm2Iec61850ConfigGroup": [{
+                    "hm2Iec61850MmsServerAdminStatus": "2",
+                }],
+                "hm2ProfinetIOConfigGroup": [{
+                    "hm2PNIOAdminStatus": "2",
+                }],
+                "hm2EthernetIPConfigGroup": [{
+                    "hm2EtherNetIPAdminStatus": "2",
+                }],
+                "hm2Iec62541ConfigGroup": [{
+                    "hm2Iec62541OpcUaServerAdminStatus": "2",
+                }],
+                "hm2ModbusConfigGroup": [{
+                    "hm2ModbusTcpServerAdminStatus": "2",
+                }],
+            },
+        }, "errors": []}
+
+    def _mock_ext_response(self, unsigned="2", mvrp="2", mmrp="2",
+                           devsec_val="1"):
+        """Extended scalars: unsigned_sw, MVRP, MMRP, DevSec monitors.
+
+        Based on live BRS50 10.3.04 responses — 19 DevSec monitors.
+        """
+        devsec_attrs = {a: devsec_val for a in [
+            "hm2DevSecSensePasswordChange",
+            "hm2DevSecSensePasswordMinLength",
+            "hm2DevSecSensePasswordStrengthNotConfigured",
+            "hm2DevSecSenseBypassPasswordStrength",
+            "hm2DevSecSenseTelnetEnabled",
+            "hm2DevSecSenseHttpEnabled",
+            "hm2DevSecSenseSnmpUnsecure",
+            "hm2DevSecSenseSysmonEnabled",
+            "hm2DevSecSenseExtNvmUpdateEnabled",
+            "hm2DevSecSenseNoLinkEnabled",
+            "hm2DevSecSenseHiDiscoveryEnabled",
+            "hm2DevSecSenseExtNvmConfigLoadUnsecure",
+            "hm2DevSecSenseIec61850MmsEnabled",
+            "hm2DevSecSenseHttpsCertificateWarning",
+            "hm2DevSecSenseModbusTcpEnabled",
+            "hm2DevSecSenseEtherNetIpEnabled",
+            "hm2DevSecSenseProfinetIOEnabled",
+            "hm2DevSecSenseSecureBootDisabled",
+            "hm2DevSecSenseDevModeEnabled",
+        ]}
+        return {"mibs": {
+            "HM2-DEVMGMT-MIB": {
+                "hm2DeviceMgmtSoftwareVersionGroup": [{
+                    "hm2DevMgmtSwVersAllowUnsigned": unsigned,
+                }],
+            },
+            "HM2-PLATFORM-MVRP-MIB": {
+                "hm2AgentDot1qMvrp": [{
+                    "hm2AgentDot1qBridgeMvrpMode": mvrp,
+                }],
+            },
+            "HM2-PLATFORM-MMRP-MIB": {
+                "hm2AgentDot1qMmrp": [{
+                    "hm2AgentDot1qBridgeMmrpMode": mmrp,
+                }],
+            },
+            "HM2-DIAGNOSTIC-MIB": {
+                "hm2DevSecConfigGroup": [devsec_attrs],
+            },
+        }, "errors": []}
+
+    def _mock_aca_rows(self, auto="2", save="2", load="0"):
+        """ACA / ExtNVM table rows (sd + usb)."""
+        return [
+            {"hm2ExtNvmTableIndex": "1",
+             "hm2ExtNvmAutomaticSoftwareLoad": auto,
+             "hm2ExtNvmConfigSave": save,
+             "hm2ExtNvmConfigLoadPriority": load},
+            {"hm2ExtNvmTableIndex": "2",
+             "hm2ExtNvmAutomaticSoftwareLoad": auto,
+             "hm2ExtNvmConfigSave": save,
+             "hm2ExtNvmConfigLoadPriority": load},
         ]
+
+    def test_get_services(self):
+        """get_services returns correct shape with all fields."""
+        self.backend.client.get_multi.side_effect = [
+            self._mock_mgmt_response(),
+            self._mock_industrial_response(),
+            self._mock_ext_response(),
+        ]
+        self.backend.client.get.return_value = self._mock_aca_rows()
         result = self.backend.get_services()
         self.assertTrue(result['http']['enabled'])
         self.assertEqual(result['http']['port'], 80)
@@ -3400,6 +3469,87 @@ class TestMOPSServices(unittest.TestCase):
         self.assertFalse(result['industrial']['ethernet_ip'])
         self.assertFalse(result['industrial']['opcua'])
         self.assertFalse(result['industrial']['modbus'])
+        # New fields
+        self.assertFalse(result['unsigned_sw'])
+        self.assertFalse(result['mvrp'])
+        self.assertFalse(result['mmrp'])
+        self.assertTrue(result['devsec_monitors'])
+        self.assertFalse(result['aca_auto_update'])
+        self.assertFalse(result['aca_config_write'])
+        self.assertFalse(result['aca_config_load'])
+        self.assertFalse(result['gvrp'])
+        self.assertFalse(result['gmrp'])
+
+    def test_get_services_unsigned_sw_enabled(self):
+        """get_services detects unsigned_sw=True."""
+        self.backend.client.get_multi.side_effect = [
+            self._mock_mgmt_response(),
+            self._mock_industrial_response(),
+            self._mock_ext_response(unsigned="1"),
+        ]
+        self.backend.client.get.return_value = self._mock_aca_rows()
+        result = self.backend.get_services()
+        self.assertTrue(result['unsigned_sw'])
+
+    def test_get_services_aca_enabled(self):
+        """get_services detects ACA fields when any NVM row enabled."""
+        self.backend.client.get_multi.side_effect = [
+            self._mock_mgmt_response(),
+            self._mock_industrial_response(),
+            self._mock_ext_response(),
+        ]
+        self.backend.client.get.return_value = self._mock_aca_rows(
+            auto="1", save="1", load="1")
+        result = self.backend.get_services()
+        self.assertTrue(result['aca_auto_update'])
+        self.assertTrue(result['aca_config_write'])
+        self.assertTrue(result['aca_config_load'])
+
+    def test_get_services_mvrp_mmrp_enabled(self):
+        """get_services detects MVRP/MMRP enabled."""
+        self.backend.client.get_multi.side_effect = [
+            self._mock_mgmt_response(),
+            self._mock_industrial_response(),
+            self._mock_ext_response(mvrp="1", mmrp="1"),
+        ]
+        self.backend.client.get.return_value = self._mock_aca_rows()
+        result = self.backend.get_services()
+        self.assertTrue(result['mvrp'])
+        self.assertTrue(result['mmrp'])
+
+    def test_get_services_devsec_some_disabled(self):
+        """devsec_monitors is False when any monitor disabled."""
+        ext = self._mock_ext_response(devsec_val="1")
+        # Disable one monitor
+        ext["mibs"]["HM2-DIAGNOSTIC-MIB"]["hm2DevSecConfigGroup"][0][
+            "hm2DevSecSenseSysmonEnabled"] = "2"
+        self.backend.client.get_multi.side_effect = [
+            self._mock_mgmt_response(),
+            self._mock_industrial_response(),
+            ext,
+        ]
+        self.backend.client.get.return_value = self._mock_aca_rows()
+        result = self.backend.get_services()
+        self.assertFalse(result['devsec_monitors'])
+
+    def test_get_services_selective(self):
+        """get_services('unsigned_sw') only queries ext batch."""
+        self.backend.client.get_multi.side_effect = [
+            self._mock_ext_response(unsigned="1"),
+        ]
+        result = self.backend.get_services('unsigned_sw')
+        self.assertTrue(result['unsigned_sw'])
+        # Only 1 get_multi call (ext), no client.get (aca)
+        self.assertEqual(self.backend.client.get_multi.call_count, 1)
+        self.backend.client.get.assert_not_called()
+
+    def test_get_services_selective_aca(self):
+        """get_services('aca_auto_update') only queries aca batch."""
+        self.backend.client.get.return_value = self._mock_aca_rows(
+            auto="1")
+        result = self.backend.get_services('aca_auto_update')
+        self.assertTrue(result['aca_auto_update'])
+        self.backend.client.get_multi.assert_not_called()
 
     def test_set_services_single(self):
         """set_services with one kwarg."""
@@ -3412,6 +3562,56 @@ class TestMOPSServices(unittest.TestCase):
         self.backend.set_services()
         self.backend.client.set.assert_not_called()
         self.backend.client.set_multi.assert_not_called()
+
+    def test_set_services_unsigned_sw(self):
+        """set_services(unsigned_sw=False) sends correct mutation."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_services(unsigned_sw=False)
+        self.backend.client.set_multi.assert_called_once()
+        mutations = self.backend.client.set_multi.call_args[0][0]
+        self.assertEqual(mutations[0][0], "HM2-DEVMGMT-MIB")
+        self.assertEqual(mutations[0][2][
+            "hm2DevMgmtSwVersAllowUnsigned"], "2")
+
+    def test_set_services_mvrp_mmrp(self):
+        """set_services(mvrp=False, mmrp=False) sends two mutations."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_services(mvrp=False, mmrp=False)
+        self.backend.client.set_multi.assert_called_once()
+        mutations = self.backend.client.set_multi.call_args[0][0]
+        self.assertEqual(len(mutations), 2)
+
+    def test_set_services_devsec_monitors(self):
+        """set_services(devsec_monitors=True) sets all 19 DevSec attrs."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_services(devsec_monitors=True)
+        self.backend.client.set_multi.assert_called_once()
+        mutations = self.backend.client.set_multi.call_args[0][0]
+        self.assertEqual(mutations[0][0], "HM2-DIAGNOSTIC-MIB")
+        # All 19 DevSec attrs set to "1"
+        self.assertEqual(len(mutations[0][2]), 19)
+        for v in mutations[0][2].values():
+            self.assertEqual(v, "1")
+
+    def test_set_services_aca_auto_update(self):
+        """set_services(aca_auto_update=False) sets on all NVM rows."""
+        self.backend.client.set_multi = Mock()
+        self.backend.client.get.return_value = [
+            {"hm2ExtNvmTableIndex": "1"},
+            {"hm2ExtNvmTableIndex": "2"},
+        ]
+        self.backend.client.set_indexed = Mock()
+        self.backend.set_services(aca_auto_update=False)
+        # set_multi not called (no scalar mutations)
+        self.backend.client.set_multi.assert_not_called()
+        # set_indexed called once per NVM row
+        self.assertEqual(
+            self.backend.client.set_indexed.call_count, 2)
+        for call in self.backend.client.set_indexed.call_args_list:
+            self.assertEqual(call[0][0], "HM2-DEVMGMT-MIB")
+            self.assertEqual(
+                call[1]["values"]["hm2ExtNvmAutomaticSoftwareLoad"],
+                "2")
 
 
 class TestMOPSSnmpConfig(unittest.TestCase):

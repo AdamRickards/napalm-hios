@@ -1002,9 +1002,9 @@ class HIOSDriver(NetworkDriver):
     # Services
     # ------------------------------------------------------------------
 
-    def get_services(self):
+    def get_services(self, *fields):
         if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_services()
+            return self._get_active_connection().get_services(*fields)
         raise NotImplementedError("get_services is not implemented for this protocol")
 
     def set_services(self, **kwargs):

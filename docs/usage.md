@@ -128,7 +128,7 @@ device.close()
 - `get_login_policy()` — password complexity and login lockout settings
 - `get_syslog()` — syslog global state and server list
 - `get_ntp()` — SNTP client and NTP server config
-- `get_services()` — management and industrial protocol enable/disable state
+- `get_services()` — management, industrial, firmware, ACA, and device security state
 - `get_snmp_config()` — SNMP version status, port, and community table
 - `is_factory_default()` — detect factory-fresh HiOS 10.3+ devices
 
@@ -165,7 +165,7 @@ device.close()
 - `set_login_policy()` — set password complexity and login lockout policy
 - `set_syslog()` — set syslog global state and server config
 - `set_ntp()` — set SNTP client and NTP server enable/disable
-- `set_services()` — set management and industrial protocol enable/disable
+- `set_services()` — set management, industrial, firmware, ACA, and device security state
 - `set_snmp_config()` — set SNMP version enable/disable
 - `save_config()` — save running config to NVM
 - `clear_config()` — clear running config (warm restart)

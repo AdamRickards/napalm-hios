@@ -3499,14 +3499,9 @@ class SSHHIOS:
 
     # ── Services ─────────────────────────────────────────────────
 
-    def get_services(self):
+    def get_services(self, *fields):
         """Read service enable/disable state via CLI."""
-        results = self.cli([
-            'show http', 'show https', 'show ssh server',
-            'show telnet', 'show snmp access',
-            'show iec61850-mms', 'show profinet global',
-            'show ethernet-ip', 'show modbus-tcp',
-        ])
+        _all = not fields
 
         def _parse_enabled(key, text):
             d = parse_dot_keys(text)
@@ -3526,61 +3521,145 @@ class SSHHIOS:
                         pass
             return default
 
-        http_out = results.get('show http', '')
-        https_out = results.get('show https', '')
-        ssh_out = results.get('show ssh server', '')
-        tel_out = results.get('show telnet', '')
-        snmp_out = results.get('show snmp access', '')
-        iec_out = results.get('show iec61850-mms', '')
-        pn_out = results.get('show profinet global', '')
-        eip_out = results.get('show ethernet-ip', '')
-        mb_out = results.get('show modbus-tcp', '')
+        out = {}
+        cmds = []
+        if _all or any(f in fields for f in
+                       ('http', 'https', 'ssh', 'telnet', 'snmp')):
+            cmds += ['show http', 'show https', 'show ssh server',
+                     'show telnet', 'show snmp access']
+        if _all or 'industrial' in fields:
+            cmds += ['show iec61850-mms', 'show profinet global',
+                     'show ethernet-ip', 'show modbus-tcp']
+        if _all or 'unsigned_sw' in fields:
+            cmds.append('show firmware allow-unsigned')
+        if _all or 'mvrp' in fields:
+            cmds.append('show mrp-ieee mvrp global')
+        if _all or 'mmrp' in fields:
+            cmds.append('show mrp-ieee mmrp global')
+        if _all or any(f in fields for f in
+                       ('aca_auto_update', 'aca_config_write',
+                        'aca_config_load')):
+            cmds.append('show config envm settings')
+        if _all or 'devsec_monitors' in fields:
+            cmds.append('show security-status monitor')
 
-        snmp_d = parse_dot_keys(snmp_out)
+        results = self.cli(cmds) if cmds else {}
 
-        return {
-            'http': {
-                'enabled': _parse_enabled('HTTP status', http_out),
-                'port': _parse_port('HTTP', http_out, 80),
-            },
-            'https': {
-                'enabled': _parse_enabled('HTTPS status', https_out),
-                'port': _parse_port('HTTPS', https_out, 443),
-            },
-            'ssh': {
-                'enabled': _parse_enabled('SSH server status', ssh_out),
-            },
-            'telnet': {
-                'enabled': _parse_enabled(
-                    'Telnet server status', tel_out),
-            },
-            'snmp': {
-                'v1': snmp_d.get(
-                    'Access by SNMP v1', '').strip().lower() == 'enabled',
-                'v2': snmp_d.get(
-                    'Access by SNMP v2', '').strip().lower() == 'enabled',
-                'v3': snmp_d.get(
-                    'Access by SNMP v3', '').strip().lower() == 'enabled',
-                'port': int(snmp_d.get(
-                    'SNMP port number', '161').strip()),
-            },
-            'industrial': {
+        if _all or any(f in fields for f in
+                       ('http', 'https', 'ssh', 'telnet', 'snmp')):
+            http_out = results.get('show http', '')
+            https_out = results.get('show https', '')
+            ssh_out = results.get('show ssh server', '')
+            tel_out = results.get('show telnet', '')
+            snmp_out = results.get('show snmp access', '')
+            snmp_d = parse_dot_keys(snmp_out)
+            out.update({
+                'http': {
+                    'enabled': _parse_enabled(
+                        'HTTP status', http_out),
+                    'port': _parse_port('HTTP', http_out, 80),
+                },
+                'https': {
+                    'enabled': _parse_enabled(
+                        'HTTPS status', https_out),
+                    'port': _parse_port('HTTPS', https_out, 443),
+                },
+                'ssh': {
+                    'enabled': _parse_enabled(
+                        'SSH server status', ssh_out),
+                },
+                'telnet': {
+                    'enabled': _parse_enabled(
+                        'Telnet server status', tel_out),
+                },
+                'snmp': {
+                    'v1': snmp_d.get(
+                        'Access by SNMP v1',
+                        '').strip().lower() == 'enabled',
+                    'v2': snmp_d.get(
+                        'Access by SNMP v2',
+                        '').strip().lower() == 'enabled',
+                    'v3': snmp_d.get(
+                        'Access by SNMP v3',
+                        '').strip().lower() == 'enabled',
+                    'port': int(snmp_d.get(
+                        'SNMP port number', '161').strip()),
+                },
+            })
+
+        if _all or 'industrial' in fields:
+            iec_out = results.get('show iec61850-mms', '')
+            pn_out = results.get('show profinet global', '')
+            eip_out = results.get('show ethernet-ip', '')
+            mb_out = results.get('show modbus-tcp', '')
+            out['industrial'] = {
                 'iec61850': _parse_enabled(
                     'MMS server operation', iec_out),
                 'profinet': _parse_enabled(
                     'PROFINET operation', pn_out),
                 'ethernet_ip': _parse_enabled(
                     'EtherNet/IP operation', eip_out),
-                'opcua': False,  # no CLI show command discovered
+                'opcua': False,
                 'modbus': _parse_enabled(
                     'Modbus TCP/IP server operation', mb_out),
-            },
-        }
+            }
+
+        if _all or 'unsigned_sw' in fields:
+            fw_out = results.get('show firmware allow-unsigned', '')
+            out['unsigned_sw'] = _parse_enabled(
+                'allow-unsigned', fw_out)
+
+        if _all or 'mvrp' in fields:
+            mvrp_out = results.get(
+                'show mrp-ieee mvrp global', '')
+            out['mvrp'] = _parse_enabled('operation', mvrp_out)
+
+        if _all or 'mmrp' in fields:
+            mmrp_out = results.get(
+                'show mrp-ieee mmrp global', '')
+            out['mmrp'] = _parse_enabled('operation', mmrp_out)
+
+        if _all or any(f in fields for f in
+                       ('aca_auto_update', 'aca_config_write',
+                        'aca_config_load')):
+            envm_out = results.get('show config envm settings', '')
+            envm_d = parse_dot_keys(envm_out)
+            out['aca_auto_update'] = any(
+                v.strip().lower() in ('enable', 'enabled')
+                for k, v in envm_d.items()
+                if 'auto-update' in k.lower())
+            out['aca_config_write'] = any(
+                v.strip().lower() in ('enable', 'enabled')
+                for k, v in envm_d.items()
+                if 'config-save' in k.lower())
+            out['aca_config_load'] = any(
+                v.strip().lower() not in ('disable', 'disabled', '0')
+                for k, v in envm_d.items()
+                if 'load-priority' in k.lower()
+                and v.strip() != '0')
+
+        if _all or 'devsec_monitors' in fields:
+            sec_out = results.get(
+                'show security-status monitor', '')
+            sec_d = parse_dot_keys(sec_out)
+            out['devsec_monitors'] = all(
+                v.strip().lower() in ('enable', 'enabled')
+                for v in sec_d.values()) if sec_d else False
+
+        if _all or 'gvrp' in fields:
+            out['gvrp'] = False
+        if _all or 'gmrp' in fields:
+            out['gmrp'] = False
+
+        return out
 
     def set_services(self, http=None, https=None, ssh=None,
                      telnet=None, snmp_v1=None, snmp_v2=None,
                      snmp_v3=None, iec61850=None, profinet=None,
-                     ethernet_ip=None, opcua=None, modbus=None):
+                     ethernet_ip=None, opcua=None, modbus=None,
+                     unsigned_sw=None, aca_auto_update=None,
+                     aca_config_write=None, aca_config_load=None,
+                     mvrp=None, mmrp=None, devsec_monitors=None):
         """Set service enable/disable via CLI."""
         self._config_mode()
         try:
@@ -3598,27 +3677,77 @@ class SSHHIOS:
                          else 'no telnet server')
             if snmp_v1 is not None:
                 self.cli('snmp access version v1'
-                         if snmp_v1 else 'no snmp access version v1')
+                         if snmp_v1
+                         else 'no snmp access version v1')
             if snmp_v2 is not None:
                 self.cli('snmp access version v2'
-                         if snmp_v2 else 'no snmp access version v2')
+                         if snmp_v2
+                         else 'no snmp access version v2')
             if snmp_v3 is not None:
                 self.cli('snmp access version v3'
-                         if snmp_v3 else 'no snmp access version v3')
+                         if snmp_v3
+                         else 'no snmp access version v3')
             if iec61850 is not None:
                 self.cli('iec61850-mms operation'
                          if iec61850
                          else 'no iec61850-mms operation')
             if profinet is not None:
                 self.cli('profinet operation'
-                         if profinet else 'no profinet operation')
+                         if profinet
+                         else 'no profinet operation')
             if ethernet_ip is not None:
                 self.cli('ethernet-ip operation'
                          if ethernet_ip
                          else 'no ethernet-ip operation')
             if modbus is not None:
                 self.cli('modbus-tcp operation'
-                         if modbus else 'no modbus-tcp operation')
+                         if modbus
+                         else 'no modbus-tcp operation')
+            if unsigned_sw is not None:
+                self.cli('firmware allow-unsigned enable'
+                         if unsigned_sw
+                         else 'firmware allow-unsigned disable')
+            if mvrp is not None:
+                self.cli('mrp-ieee mvrp operation'
+                         if mvrp
+                         else 'no mrp-ieee mvrp operation')
+            if mmrp is not None:
+                self.cli('mrp-ieee mmrp operation'
+                         if mmrp
+                         else 'no mrp-ieee mmrp operation')
+            if aca_auto_update is not None:
+                _s = 'enable' if aca_auto_update else 'disable'
+                self.cli(f'config envm auto-update {_s}')
+            if aca_config_write is not None:
+                _s = 'enable' if aca_config_write else 'disable'
+                self.cli(f'config envm config-save {_s}')
+            if aca_config_load is not None:
+                _s = ('first' if aca_config_load
+                      else 'disable')
+                self.cli(f'config envm load-priority {_s}')
+            if devsec_monitors is not None:
+                _s = '' if devsec_monitors else 'no '
+                _monitors = [
+                    'pwd-change', 'pwd-min-length',
+                    'pwd-str-not-config',
+                    'bypass-pwd-strength',
+                    'telnet-enabled', 'http-enabled',
+                    'snmp-unsecure', 'sysmon-enabled',
+                    'extnvm-upd-enabled',
+                    'no-link-enabled',
+                    'hidisc-enabled',
+                    'extnvm-load-unsecure',
+                    'iec61850-mms-enabled',
+                    'https-certificate',
+                    'modbus-tcp-enabled',
+                    'ethernet-ip-enabled',
+                    'profinet-io-enabled',
+                    'secure-boot-disabled',
+                    'support-mode-enabled',
+                ]
+                for mon in _monitors:
+                    self.cli(
+                        f'{_s}security-status monitor {mon}')
         finally:
             self._exit_config_mode()
 

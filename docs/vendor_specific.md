@@ -1817,10 +1817,16 @@ device.set_ntp(server_enabled=False)
 
 ### get_services()
 
-Read service enable/disable state — management protocols and industrial protocols.
+Read service enable/disable state — management protocols, industrial protocols, firmware security, external NVM (ACA), registration protocols, and device security monitors.
 
 ```python
 services = device.get_services()
+```
+
+Selective query — only fetch specific fields (reduces round-trips):
+
+```python
+services = device.get_services('unsigned_sw', 'mvrp')
 ```
 
 ```python
@@ -1837,6 +1843,15 @@ services = device.get_services()
         'opcua': False,
         'modbus': False,
     },
+    'unsigned_sw': False,
+    'aca_auto_update': True,
+    'aca_config_write': True,
+    'aca_config_load': True,
+    'mvrp': False,
+    'mmrp': False,
+    'gvrp': False,
+    'gmrp': False,
+    'devsec_monitors': True,
 }
 ```
 
@@ -1846,6 +1861,7 @@ Set service enable/disable state. Only provided kwargs are changed.
 
 ```python
 device.set_services(telnet=False, snmp_v1=False)
+device.set_services(unsigned_sw=False, devsec_monitors=True)
 ```
 
 | Parameter | Type | Description |
@@ -1862,6 +1878,15 @@ device.set_services(telnet=False, snmp_v1=False)
 | `ethernet_ip` | bool | EtherNet/IP |
 | `opcua` | bool | OPC UA |
 | `modbus` | bool | Modbus TCP |
+| `unsigned_sw` | bool | Allow unsigned firmware upload |
+| `aca_auto_update` | bool | ACA automatic software load from external NVM |
+| `aca_config_write` | bool | ACA config save to external NVM |
+| `aca_config_load` | bool | ACA config load from external NVM |
+| `mvrp` | bool | MVRP global enable |
+| `mmrp` | bool | MMRP global enable |
+| `devsec_monitors` | bool | All 19 device security sense monitors |
+
+`gvrp` and `gmrp` are read-only (`False`) — legacy protocols with no global toggle in HiOS MIBs.
 
 ---
 

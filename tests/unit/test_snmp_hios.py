@@ -107,6 +107,12 @@ from napalm_hios.snmp_hios import (
     OID_hm2Iec61850MmsServerAdminStatus, OID_hm2PNIOAdminStatus,
     OID_hm2EtherNetIPAdminStatus, OID_hm2Iec62541OpcUaAdminStatus,
     OID_hm2ModbusTcpServerAdminStatus,
+    OID_hm2DevMgmtSwVersAllowUnsigned,
+    OID_hm2ExtNvmTableIndex,
+    OID_hm2ExtNvmAutomaticSoftwareLoad,
+    OID_hm2ExtNvmConfigLoadPriority, OID_hm2ExtNvmConfigSave,
+    OID_hm2AgentDot1qBridgeMvrpMode, OID_hm2AgentDot1qBridgeMmrpMode,
+    _OID_DEVSEC_ALL,
 )
 from napalm.base.exceptions import ConnectionException
 
@@ -3224,26 +3230,44 @@ class TestSNMPServices(unittest.TestCase):
         self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
         self.snmp._connected = True
 
+    def _base_scalar_dict(self, **overrides):
+        d = {
+            OID_hm2WebHttpAdminStatus: 1,
+            OID_hm2WebHttpsAdminStatus: 1,
+            OID_hm2WebHttpPortNumber: 80,
+            OID_hm2WebHttpsPortNumber: 443,
+            OID_hm2SshAdminStatus: 1,
+            OID_hm2TelnetServerAdminStatus: 2,
+            OID_hm2SnmpV1AdminStatus: 2,
+            OID_hm2SnmpV2AdminStatus: 2,
+            OID_hm2SnmpV3AdminStatus: 1,
+            OID_hm2SnmpPortNumber: 161,
+            OID_hm2Iec61850MmsServerAdminStatus: 2,
+            OID_hm2PNIOAdminStatus: 2,
+            OID_hm2EtherNetIPAdminStatus: 2,
+            OID_hm2Iec62541OpcUaAdminStatus: 2,
+            OID_hm2ModbusTcpServerAdminStatus: 2,
+            OID_hm2DevMgmtSwVersAllowUnsigned: 2,
+            OID_hm2AgentDot1qBridgeMvrpMode: 2,
+            OID_hm2AgentDot1qBridgeMmrpMode: 2,
+        }
+        for oid in _OID_DEVSEC_ALL:
+            d[oid] = 1
+        d.update(overrides)
+        return d
+
     def test_get_services(self):
         async def mock_scalar(*oids):
+            return self._base_scalar_dict()
+        async def mock_walk_cols(oid_map, engine=None):
             return {
-                OID_hm2WebHttpAdminStatus: 1,
-                OID_hm2WebHttpsAdminStatus: 1,
-                OID_hm2WebHttpPortNumber: 80,
-                OID_hm2WebHttpsPortNumber: 443,
-                OID_hm2SshAdminStatus: 1,
-                OID_hm2TelnetServerAdminStatus: 2,
-                OID_hm2SnmpV1AdminStatus: 2,
-                OID_hm2SnmpV2AdminStatus: 2,
-                OID_hm2SnmpV3AdminStatus: 1,
-                OID_hm2SnmpPortNumber: 161,
-                OID_hm2Iec61850MmsServerAdminStatus: 2,
-                OID_hm2PNIOAdminStatus: 2,
-                OID_hm2EtherNetIPAdminStatus: 2,
-                OID_hm2Iec62541OpcUaAdminStatus: 2,
-                OID_hm2ModbusTcpServerAdminStatus: 2,
+                '1': {'auto': 2, 'save': 2, 'load': 0},
+                '2': {'auto': 2, 'save': 2, 'load': 0},
             }
-        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+        with patch.object(self.snmp, '_get_scalar',
+                          side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk_cols):
             result = self.snmp.get_services()
         self.assertTrue(result['http']['enabled'])
         self.assertEqual(result['http']['port'], 80)
@@ -3251,6 +3275,58 @@ class TestSNMPServices(unittest.TestCase):
         self.assertFalse(result['telnet']['enabled'])
         self.assertTrue(result['snmp']['v3'])
         self.assertFalse(result['industrial']['modbus'])
+        self.assertFalse(result['unsigned_sw'])
+        self.assertFalse(result['mvrp'])
+        self.assertFalse(result['mmrp'])
+        self.assertTrue(result['devsec_monitors'])
+        self.assertFalse(result['aca_auto_update'])
+        self.assertFalse(result['aca_config_write'])
+        self.assertFalse(result['aca_config_load'])
+        self.assertFalse(result['gvrp'])
+        self.assertFalse(result['gmrp'])
+
+    def test_get_services_unsigned_enabled(self):
+        async def mock_scalar(*oids):
+            return self._base_scalar_dict(
+                **{OID_hm2DevMgmtSwVersAllowUnsigned: 1})
+        async def mock_walk_cols(oid_map, engine=None):
+            return {}
+        with patch.object(self.snmp, '_get_scalar',
+                          side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk_cols):
+            result = self.snmp.get_services()
+        self.assertTrue(result['unsigned_sw'])
+
+    def test_get_services_aca_enabled(self):
+        async def mock_scalar(*oids):
+            return self._base_scalar_dict()
+        async def mock_walk_cols(oid_map, engine=None):
+            return {
+                '1': {'auto': 1, 'save': 1, 'load': 1},
+            }
+        with patch.object(self.snmp, '_get_scalar',
+                          side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk_cols):
+            result = self.snmp.get_services()
+        self.assertTrue(result['aca_auto_update'])
+        self.assertTrue(result['aca_config_write'])
+        self.assertTrue(result['aca_config_load'])
+
+    def test_get_services_devsec_some_disabled(self):
+        d = self._base_scalar_dict()
+        d[_OID_DEVSEC_ALL[5]] = 2  # disable one
+        async def mock_scalar(*oids):
+            return d
+        async def mock_walk_cols(oid_map, engine=None):
+            return {}
+        with patch.object(self.snmp, '_get_scalar',
+                          side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk_cols):
+            result = self.snmp.get_services()
+        self.assertFalse(result['devsec_monitors'])
 
     def test_set_services_telnet(self):
         set_calls = []
@@ -3261,6 +3337,42 @@ class TestSNMPServices(unittest.TestCase):
             self.snmp.set_services(telnet=True)
         self.assertEqual(len(set_calls), 1)
         self.assertIn(OID_hm2TelnetServerAdminStatus, set_calls[0][0])
+
+    def test_set_services_unsigned_sw(self):
+        set_calls = []
+        async def mock_set(*pairs):
+            set_calls.extend(pairs)
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set):
+            self.snmp.set_services(unsigned_sw=False)
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2DevMgmtSwVersAllowUnsigned,
+                      set_calls[0][0])
+
+    def test_set_services_devsec_monitors(self):
+        """set_services(devsec_monitors=True) sets all 19 DevSec OIDs."""
+        set_calls = []
+        async def mock_set(*pairs):
+            set_calls.extend(pairs)
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set):
+            self.snmp.set_services(devsec_monitors=True)
+        # 19 DevSec OIDs in one SET
+        self.assertEqual(len(set_calls), 19)
+
+    def test_set_services_aca(self):
+        set_calls = []
+        async def mock_set(*pairs):
+            set_calls.extend(pairs)
+        async def mock_walk(base_oid):
+            return {'1': 1, '2': 2}
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set), \
+             patch.object(self.snmp, '_walk',
+                          side_effect=mock_walk):
+            self.snmp.set_services(aca_auto_update=False)
+        # 2 rows, 1 OID each
+        self.assertEqual(len(set_calls), 2)
 
 
 class TestSNMPSnmpConfig(unittest.TestCase):

@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.16.2
+
+### `get_services()` / `set_services()` — extended service state for full SL1
+
+Nine new fields covering unsigned firmware, external NVM (ACA), registration protocols, and device security monitors:
+
+- **`unsigned_sw`** — allow unsigned firmware upload (HM2-DEVMGMT-MIB)
+- **`aca_auto_update`** — ACA automatic software load from external NVM. `True` if any NVM (SD/USB) has auto-update enabled
+- **`aca_config_write`** — ACA config save to external NVM. `True` if any NVM has config-save enabled
+- **`aca_config_load`** — ACA config load from external NVM. `True` if any NVM has load-priority != disabled
+- **`mvrp`** — MVRP global enable (HM2-PLATFORM-MVRP-MIB)
+- **`mmrp`** — MMRP global enable (HM2-PLATFORM-MMRP-MIB)
+- **`gvrp`** / **`gmrp`** — hardcoded `False` (legacy, no global toggle in HiOS MIBs)
+- **`devsec_monitors`** — `True` when all 19 device security sense monitors enabled (HM2-DIAGNOSTIC-MIB). Setter enables/disables all 19 at once
+
+### Selective query support
+
+`get_services()` now accepts optional field names: `get_services('unsigned_sw', 'mvrp')` queries only the batches containing those fields. Omitting arguments returns all fields (backwards compatible). Reduces MOPS/SNMP/SSH round-trips when only specific fields are needed.
+
+### Multi-protocol support
+
+All new fields implemented on MOPS, SNMP, and SSH backends. Offline inherits from MOPS. ACA fields use indexed table operations (per-NVM-row SET on MOPS/SNMP, single CLI command on SSH). DevSec monitors batch all 19 scalars into a single request on MOPS and SNMP.
+
+### JUSTIN — full SL1 coverage
+
+Seven new `@register_harden` functions: `sec-unsigned-sw`, `sec-aca-auto-update`, `sec-aca-config-write`, `sec-aca-config-load`, `sec-devsec-monitors`, `ns-gvrp-mvrp`, `ns-gmrp-mmrp`. All 16 SL1 checks now have both gather and harden support — zero "unable to assess" results.
+
+16 new unit tests (601 total).
+
 ## 1.16.1
 
 ### Bugfix — SL1 setter/getter fixes for syslog, NTP, and IP decode

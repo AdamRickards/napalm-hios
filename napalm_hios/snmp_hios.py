@@ -434,6 +434,63 @@ OID_hm2EtherNetIPAdminStatus        = '1.3.6.1.4.1.248.11.101.1.3.1.1'
 OID_hm2ModbusTcpServerAdminStatus   = '1.3.6.1.4.1.248.11.101.1.4.1.1'
 OID_hm2Iec62541OpcUaAdminStatus     = '1.3.6.1.4.1.248.11.101.1.5.1.1'
 
+# HM2-DEVMGMT-MIB — unsigned SW  1.3.6.1.4.1.248.11.10.1.3.1.*
+OID_hm2DevMgmtSwVersAllowUnsigned = '1.3.6.1.4.1.248.11.10.1.3.1.2'
+
+# HM2-DEVMGMT-MIB — ExtNVM table  1.3.6.1.4.1.248.11.10.1.8.2.1.*
+OID_hm2ExtNvmTableIndex           = '1.3.6.1.4.1.248.11.10.1.8.2.1.1'
+OID_hm2ExtNvmAutomaticSoftwareLoad = '1.3.6.1.4.1.248.11.10.1.8.2.1.8'
+OID_hm2ExtNvmConfigLoadPriority   = '1.3.6.1.4.1.248.11.10.1.8.2.1.9'
+OID_hm2ExtNvmConfigSave           = '1.3.6.1.4.1.248.11.10.1.8.2.1.10'
+
+# HM2-PLATFORM-MVRP-MIB  1.3.6.1.4.1.248.12.60.2.2.1.*
+OID_hm2AgentDot1qBridgeMvrpMode  = '1.3.6.1.4.1.248.12.60.2.2.1.2'
+# HM2-PLATFORM-MMRP-MIB  1.3.6.1.4.1.248.12.60.2.1.1.*
+OID_hm2AgentDot1qBridgeMmrpMode  = '1.3.6.1.4.1.248.12.60.2.1.1.2'
+
+# HM2-DIAGNOSTIC-MIB — DevSec monitors  1.3.6.1.4.1.248.11.22.1.3.3.1.*
+OID_hm2DevSecSensePasswordChange  = '1.3.6.1.4.1.248.11.22.1.3.3.1.6'
+OID_hm2DevSecSensePasswordMinLen  = '1.3.6.1.4.1.248.11.22.1.3.3.1.7'
+OID_hm2DevSecSensePwStrNotCfg     = '1.3.6.1.4.1.248.11.22.1.3.3.1.8'
+OID_hm2DevSecSenseBypassPwStr     = '1.3.6.1.4.1.248.11.22.1.3.3.1.9'
+OID_hm2DevSecSenseTelnetEnabled   = '1.3.6.1.4.1.248.11.22.1.3.3.1.10'
+OID_hm2DevSecSenseHttpEnabled     = '1.3.6.1.4.1.248.11.22.1.3.3.1.11'
+OID_hm2DevSecSenseSnmpUnsecure    = '1.3.6.1.4.1.248.11.22.1.3.3.1.12'
+OID_hm2DevSecSenseSysmonEnabled   = '1.3.6.1.4.1.248.11.22.1.3.3.1.13'
+OID_hm2DevSecSenseExtNvmUpdate    = '1.3.6.1.4.1.248.11.22.1.3.3.1.14'
+OID_hm2DevSecSenseNoLinkEnabled   = '1.3.6.1.4.1.248.11.22.1.3.3.1.15'
+OID_hm2DevSecSenseHiDiscovery     = '1.3.6.1.4.1.248.11.22.1.3.3.1.16'
+OID_hm2DevSecSenseExtNvmCfgLoad   = '1.3.6.1.4.1.248.11.22.1.3.3.1.17'
+OID_hm2DevSecSenseIec61850Mms     = '1.3.6.1.4.1.248.11.22.1.3.3.1.18'
+OID_hm2DevSecSenseHttpsCertWarn   = '1.3.6.1.4.1.248.11.22.1.3.3.1.19'
+OID_hm2DevSecSenseModbusTcp       = '1.3.6.1.4.1.248.11.22.1.3.3.1.20'
+OID_hm2DevSecSenseEtherNetIp      = '1.3.6.1.4.1.248.11.22.1.3.3.1.21'
+OID_hm2DevSecSenseProfinetIO      = '1.3.6.1.4.1.248.11.22.1.3.3.1.22'
+OID_hm2DevSecSenseSecureBoot      = '1.3.6.1.4.1.248.11.22.1.3.3.1.24'
+OID_hm2DevSecSenseDevMode         = '1.3.6.1.4.1.248.11.22.1.3.3.1.25'
+
+_OID_DEVSEC_ALL = [
+    OID_hm2DevSecSensePasswordChange,
+    OID_hm2DevSecSensePasswordMinLen,
+    OID_hm2DevSecSensePwStrNotCfg,
+    OID_hm2DevSecSenseBypassPwStr,
+    OID_hm2DevSecSenseTelnetEnabled,
+    OID_hm2DevSecSenseHttpEnabled,
+    OID_hm2DevSecSenseSnmpUnsecure,
+    OID_hm2DevSecSenseSysmonEnabled,
+    OID_hm2DevSecSenseExtNvmUpdate,
+    OID_hm2DevSecSenseNoLinkEnabled,
+    OID_hm2DevSecSenseHiDiscovery,
+    OID_hm2DevSecSenseExtNvmCfgLoad,
+    OID_hm2DevSecSenseIec61850Mms,
+    OID_hm2DevSecSenseHttpsCertWarn,
+    OID_hm2DevSecSenseModbusTcp,
+    OID_hm2DevSecSenseEtherNetIp,
+    OID_hm2DevSecSenseProfinetIO,
+    OID_hm2DevSecSenseSecureBoot,
+    OID_hm2DevSecSenseDevMode,
+]
+
 # HM2-TIMESYNC-MIB — SNTP client admin  1.3.6.1.4.1.248.11.50.1.2.3.1
 OID_hm2SntpClientAdminState = '1.3.6.1.4.1.248.11.50.1.2.3.1'
 
@@ -3537,12 +3594,13 @@ class SNMPHIOS:
     # Services (multi-MIB)
     # ------------------------------------------------------------------
 
-    def get_services(self):
+    def get_services(self, *fields):
         """Read service enable/disable state."""
-        return asyncio.run(self._get_services_async())
+        return asyncio.run(self._get_services_async(fields))
 
-    async def _get_services_async(self):
-        scalars = await self._get_scalar(
+    async def _get_services_async(self, fields=()):
+        # All scalars in one GET — maximum efficiency
+        scalar_oids = [
             OID_hm2WebHttpAdminStatus,
             OID_hm2WebHttpsAdminStatus,
             OID_hm2WebHttpPortNumber,
@@ -3558,46 +3616,110 @@ class SNMPHIOS:
             OID_hm2EtherNetIPAdminStatus,
             OID_hm2Iec62541OpcUaAdminStatus,
             OID_hm2ModbusTcpServerAdminStatus,
-        )
+            OID_hm2DevMgmtSwVersAllowUnsigned,
+            OID_hm2AgentDot1qBridgeMvrpMode,
+            OID_hm2AgentDot1qBridgeMmrpMode,
+        ] + _OID_DEVSEC_ALL
+        scalars = await self._get_scalar(*scalar_oids)
         def _en(oid):
             return _snmp_int(scalars.get(oid, 2)) == 1
         def _port(oid, default):
             return _snmp_int(scalars.get(oid, default))
-        return {
-            'http': {'enabled': _en(OID_hm2WebHttpAdminStatus),
-                     'port': _port(OID_hm2WebHttpPortNumber, 80)},
-            'https': {'enabled': _en(OID_hm2WebHttpsAdminStatus),
-                      'port': _port(OID_hm2WebHttpsPortNumber, 443)},
-            'ssh': {'enabled': _en(OID_hm2SshAdminStatus)},
-            'telnet': {'enabled': _en(OID_hm2TelnetServerAdminStatus)},
-            'snmp': {
-                'v1': _en(OID_hm2SnmpV1AdminStatus),
-                'v2': _en(OID_hm2SnmpV2AdminStatus),
-                'v3': _en(OID_hm2SnmpV3AdminStatus),
-                'port': _port(OID_hm2SnmpPortNumber, 161),
-            },
-            'industrial': {
-                'iec61850': _en(OID_hm2Iec61850MmsServerAdminStatus),
+
+        out = {}
+        _all = not fields
+
+        if _all or any(f in fields for f in
+                       ('http', 'https', 'ssh', 'telnet', 'snmp')):
+            out.update({
+                'http': {'enabled': _en(OID_hm2WebHttpAdminStatus),
+                         'port': _port(OID_hm2WebHttpPortNumber, 80)},
+                'https': {'enabled': _en(OID_hm2WebHttpsAdminStatus),
+                          'port': _port(
+                              OID_hm2WebHttpsPortNumber, 443)},
+                'ssh': {'enabled': _en(OID_hm2SshAdminStatus)},
+                'telnet': {'enabled': _en(
+                    OID_hm2TelnetServerAdminStatus)},
+                'snmp': {
+                    'v1': _en(OID_hm2SnmpV1AdminStatus),
+                    'v2': _en(OID_hm2SnmpV2AdminStatus),
+                    'v3': _en(OID_hm2SnmpV3AdminStatus),
+                    'port': _port(OID_hm2SnmpPortNumber, 161),
+                },
+            })
+        if _all or 'industrial' in fields:
+            out['industrial'] = {
+                'iec61850': _en(
+                    OID_hm2Iec61850MmsServerAdminStatus),
                 'profinet': _en(OID_hm2PNIOAdminStatus),
                 'ethernet_ip': _en(OID_hm2EtherNetIPAdminStatus),
                 'opcua': _en(OID_hm2Iec62541OpcUaAdminStatus),
                 'modbus': _en(OID_hm2ModbusTcpServerAdminStatus),
-            },
-        }
+            }
+        if _all or 'unsigned_sw' in fields:
+            out['unsigned_sw'] = _en(
+                OID_hm2DevMgmtSwVersAllowUnsigned)
+        if _all or 'mvrp' in fields:
+            out['mvrp'] = _en(OID_hm2AgentDot1qBridgeMvrpMode)
+        if _all or 'mmrp' in fields:
+            out['mmrp'] = _en(OID_hm2AgentDot1qBridgeMmrpMode)
+        if _all or 'devsec_monitors' in fields:
+            out['devsec_monitors'] = all(
+                _en(oid) for oid in _OID_DEVSEC_ALL)
+        if _all or 'gvrp' in fields:
+            out['gvrp'] = False
+        if _all or 'gmrp' in fields:
+            out['gmrp'] = False
+
+        # ACA — table walk
+        if _all or any(f in fields for f in
+                       ('aca_auto_update', 'aca_config_write',
+                        'aca_config_load')):
+            try:
+                aca_table = await self._walk_columns({
+                    'auto': OID_hm2ExtNvmAutomaticSoftwareLoad,
+                    'save': OID_hm2ExtNvmConfigSave,
+                    'load': OID_hm2ExtNvmConfigLoadPriority,
+                })
+            except Exception:
+                aca_table = {}
+            aca_auto = False
+            aca_write = False
+            aca_load = False
+            for row in aca_table.values():
+                if _snmp_int(row.get('auto', 2)) == 1:
+                    aca_auto = True
+                if _snmp_int(row.get('save', 2)) == 1:
+                    aca_write = True
+                if _snmp_int(row.get('load', 0)) != 0:
+                    aca_load = True
+            out['aca_auto_update'] = aca_auto
+            out['aca_config_write'] = aca_write
+            out['aca_config_load'] = aca_load
+
+        return out
 
     def set_services(self, http=None, https=None, ssh=None,
                      telnet=None, snmp_v1=None, snmp_v2=None,
                      snmp_v3=None, iec61850=None, profinet=None,
-                     ethernet_ip=None, opcua=None, modbus=None):
+                     ethernet_ip=None, opcua=None, modbus=None,
+                     unsigned_sw=None, aca_auto_update=None,
+                     aca_config_write=None, aca_config_load=None,
+                     mvrp=None, mmrp=None, devsec_monitors=None):
         """Set service enable/disable state."""
         return asyncio.run(self._set_services_async(
             http, https, ssh, telnet, snmp_v1, snmp_v2, snmp_v3,
-            iec61850, profinet, ethernet_ip, opcua, modbus))
+            iec61850, profinet, ethernet_ip, opcua, modbus,
+            unsigned_sw, aca_auto_update, aca_config_write,
+            aca_config_load, mvrp, mmrp, devsec_monitors))
 
     async def _set_services_async(self, http, https, ssh, telnet,
                                    snmp_v1, snmp_v2, snmp_v3,
                                    iec61850, profinet, ethernet_ip,
-                                   opcua, modbus):
+                                   opcua, modbus, unsigned_sw,
+                                   aca_auto_update, aca_config_write,
+                                   aca_config_load, mvrp, mmrp,
+                                   devsec_monitors):
         _map = [
             (http, OID_hm2WebHttpAdminStatus),
             (https, OID_hm2WebHttpsAdminStatus),
@@ -3611,14 +3733,50 @@ class SNMPHIOS:
             (ethernet_ip, OID_hm2EtherNetIPAdminStatus),
             (opcua, OID_hm2Iec62541OpcUaAdminStatus),
             (modbus, OID_hm2ModbusTcpServerAdminStatus),
+            (unsigned_sw, OID_hm2DevMgmtSwVersAllowUnsigned),
+            (mvrp, OID_hm2AgentDot1qBridgeMvrpMode),
+            (mmrp, OID_hm2AgentDot1qBridgeMmrpMode),
         ]
         sets = []
         for val, oid in _map:
             if val is not None:
                 sets.append((oid + '.0',
                              Integer32(1 if val else 2)))
+        # DevSec monitors — all 19 in one SET
+        if devsec_monitors is not None:
+            v = Integer32(1 if devsec_monitors else 2)
+            for oid in _OID_DEVSEC_ALL:
+                sets.append((oid + '.0', v))
         if sets:
             await self._set_oids(*sets)
+
+        # ACA — indexed table rows
+        if any(v is not None for v in (aca_auto_update,
+                                       aca_config_write,
+                                       aca_config_load)):
+            try:
+                idx_data = await self._walk(OID_hm2ExtNvmTableIndex)
+            except Exception:
+                idx_data = {}
+            for suffix in idx_data:
+                row_sets = []
+                if aca_auto_update is not None:
+                    row_sets.append((
+                        OID_hm2ExtNvmAutomaticSoftwareLoad
+                        + '.' + suffix,
+                        Integer32(1 if aca_auto_update else 2)))
+                if aca_config_write is not None:
+                    row_sets.append((
+                        OID_hm2ExtNvmConfigSave + '.' + suffix,
+                        Integer32(1 if aca_config_write else 2)))
+                if aca_config_load is not None:
+                    row_sets.append((
+                        OID_hm2ExtNvmConfigLoadPriority
+                        + '.' + suffix,
+                        Integer32(
+                            0 if not aca_config_load else 1)))
+                if row_sets:
+                    await self._set_oids(*row_sets)
 
     # ------------------------------------------------------------------
     # SNMP Config (HM2-MGMTACCESS-MIB)

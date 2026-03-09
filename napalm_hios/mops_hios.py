@@ -4736,8 +4736,49 @@ class MOPSHIOS:
     # Services (multi-MIB)
     # ------------------------------------------------------------------
 
-    def get_services(self):
+    # Field → batch mapping for selective get_services() queries.
+    # Batches: 'mgmt', 'industrial', 'ext' (scalars), 'aca' (table)
+    _SVC_FIELD_BATCH = {
+        'http': 'mgmt', 'https': 'mgmt', 'ssh': 'mgmt',
+        'telnet': 'mgmt', 'snmp': 'mgmt',
+        'industrial': 'industrial',
+        'unsigned_sw': 'ext', 'mvrp': 'ext', 'mmrp': 'ext',
+        'devsec_monitors': 'ext',
+        'aca_auto_update': 'aca', 'aca_config_write': 'aca',
+        'aca_config_load': 'aca',
+        'gvrp': None, 'gmrp': None,  # hardcoded, no query
+    }
+
+    _DEVSEC_ATTRS = [
+        "hm2DevSecSensePasswordChange",
+        "hm2DevSecSensePasswordMinLength",
+        "hm2DevSecSensePasswordStrengthNotConfigured",
+        "hm2DevSecSenseBypassPasswordStrength",
+        "hm2DevSecSenseTelnetEnabled",
+        "hm2DevSecSenseHttpEnabled",
+        "hm2DevSecSenseSnmpUnsecure",
+        "hm2DevSecSenseSysmonEnabled",
+        "hm2DevSecSenseExtNvmUpdateEnabled",
+        "hm2DevSecSenseNoLinkEnabled",
+        "hm2DevSecSenseHiDiscoveryEnabled",
+        "hm2DevSecSenseExtNvmConfigLoadUnsecure",
+        "hm2DevSecSenseIec61850MmsEnabled",
+        "hm2DevSecSenseHttpsCertificateWarning",
+        "hm2DevSecSenseModbusTcpEnabled",
+        "hm2DevSecSenseEtherNetIpEnabled",
+        "hm2DevSecSenseProfinetIOEnabled",
+        "hm2DevSecSenseSecureBootDisabled",
+        "hm2DevSecSenseDevModeEnabled",
+    ]
+
+    def get_services(self, *fields):
         """Read service enable/disable state across management + industrial.
+
+        Args:
+            *fields: optional field names to query.  If omitted, returns
+                all fields.  Pass specific names (e.g. ``'unsigned_sw'``,
+                ``'mvrp'``) to query only the batches that contain those
+                fields — fewer MOPS round-trips.
 
         Returns::
 
@@ -4751,79 +4792,103 @@ class MOPSHIOS:
                     'iec61850': bool, 'profinet': bool,
                     'ethernet_ip': bool, 'opcua': bool, 'modbus': bool,
                 },
+                'unsigned_sw': bool,
+                'aca_auto_update': bool,
+                'aca_config_write': bool,
+                'aca_config_load': bool,
+                'mvrp': bool,
+                'mmrp': bool,
+                'gvrp': bool,
+                'gmrp': bool,
+                'devsec_monitors': bool,
             }
         """
-        result = self.client.get_multi([
-            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessWebGroup", [
-                "hm2WebHttpAdminStatus", "hm2WebHttpsAdminStatus",
-                "hm2WebHttpPortNumber", "hm2WebHttpsPortNumber"]),
-            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessSshGroup", [
-                "hm2SshAdminStatus"]),
-            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessTelnetGroup", [
-                "hm2TelnetServerAdminStatus"]),
-            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessSnmpGroup", [
-                "hm2SnmpV1AdminStatus", "hm2SnmpV2AdminStatus",
-                "hm2SnmpV3AdminStatus", "hm2SnmpPortNumber"]),
-        ], decode_strings=False)
-        mibs = result["mibs"].get("HM2-MGMTACCESS-MIB", {})
-        web = (mibs.get("hm2MgmtAccessWebGroup", [{}])[0])
-        ssh = (mibs.get("hm2MgmtAccessSshGroup", [{}])[0])
-        tel = (mibs.get("hm2MgmtAccessTelnetGroup", [{}])[0])
-        snmp = (mibs.get("hm2MgmtAccessSnmpGroup", [{}])[0])
+        if fields:
+            need = {self._SVC_FIELD_BATCH.get(f) for f in fields} - {None}
+        else:
+            need = {'mgmt', 'industrial', 'ext', 'aca'}
 
-        # Industrial protocols (separate MIB)
-        ind_result = self.client.get_multi([
-            ("HM2-INDUSTRIAL-PROTOCOLS-MIB", "hm2Iec61850ConfigGroup",
-             ["hm2Iec61850MmsServerAdminStatus"]),
-            ("HM2-INDUSTRIAL-PROTOCOLS-MIB", "hm2ProfinetIOConfigGroup",
-             ["hm2PNIOAdminStatus"]),
-            ("HM2-INDUSTRIAL-PROTOCOLS-MIB", "hm2EthernetIPConfigGroup",
-             ["hm2EtherNetIPAdminStatus"]),
-            ("HM2-INDUSTRIAL-PROTOCOLS-MIB", "hm2Iec62541ConfigGroup",
-             ["hm2Iec62541OpcUaServerAdminStatus"]),
-            ("HM2-INDUSTRIAL-PROTOCOLS-MIB", "hm2ModbusConfigGroup",
-             ["hm2ModbusTcpServerAdminStatus"]),
-        ], decode_strings=False)
-        ind_mibs = ind_result["mibs"].get(
-            "HM2-INDUSTRIAL-PROTOCOLS-MIB", {})
-        iec = (ind_mibs.get("hm2Iec61850ConfigGroup", [{}])[0])
-        pn = (ind_mibs.get("hm2ProfinetIOConfigGroup", [{}])[0])
-        eip = (ind_mibs.get("hm2EthernetIPConfigGroup", [{}])[0])
-        opc = (ind_mibs.get("hm2Iec62541ConfigGroup", [{}])[0])
-        mb = (ind_mibs.get("hm2ModbusConfigGroup", [{}])[0])
+        out = {}
 
-        return {
-            'http': {
-                'enabled': _safe_int(web.get(
-                    "hm2WebHttpAdminStatus", "2")) == 1,
-                'port': _safe_int(web.get(
-                    "hm2WebHttpPortNumber", "80")),
-            },
-            'https': {
-                'enabled': _safe_int(web.get(
-                    "hm2WebHttpsAdminStatus", "2")) == 1,
-                'port': _safe_int(web.get(
-                    "hm2WebHttpsPortNumber", "443")),
-            },
-            'ssh': {
-                'enabled': _safe_int(ssh.get(
-                    "hm2SshAdminStatus", "2")) == 1,
-            },
-            'telnet': {
-                'enabled': _safe_int(tel.get(
-                    "hm2TelnetServerAdminStatus", "2")) == 1,
-            },
-            'snmp': {
-                'v1': _safe_int(snmp.get(
-                    "hm2SnmpV1AdminStatus", "2")) == 1,
-                'v2': _safe_int(snmp.get(
-                    "hm2SnmpV2AdminStatus", "2")) == 1,
-                'v3': _safe_int(snmp.get(
-                    "hm2SnmpV3AdminStatus", "2")) == 1,
-                'port': _safe_int(snmp.get(
-                    "hm2SnmpPortNumber", "161")),
-            },
-            'industrial': {
+        # Batch: management protocols
+        if 'mgmt' in need:
+            result = self.client.get_multi([
+                ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessWebGroup", [
+                    "hm2WebHttpAdminStatus", "hm2WebHttpsAdminStatus",
+                    "hm2WebHttpPortNumber", "hm2WebHttpsPortNumber"]),
+                ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessSshGroup", [
+                    "hm2SshAdminStatus"]),
+                ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessTelnetGroup", [
+                    "hm2TelnetServerAdminStatus"]),
+                ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessSnmpGroup", [
+                    "hm2SnmpV1AdminStatus", "hm2SnmpV2AdminStatus",
+                    "hm2SnmpV3AdminStatus", "hm2SnmpPortNumber"]),
+            ], decode_strings=False)
+            mibs = result["mibs"].get("HM2-MGMTACCESS-MIB", {})
+            web = (mibs.get("hm2MgmtAccessWebGroup", [{}])[0])
+            ssh = (mibs.get("hm2MgmtAccessSshGroup", [{}])[0])
+            tel = (mibs.get("hm2MgmtAccessTelnetGroup", [{}])[0])
+            snmp = (mibs.get("hm2MgmtAccessSnmpGroup", [{}])[0])
+            out.update({
+                'http': {
+                    'enabled': _safe_int(web.get(
+                        "hm2WebHttpAdminStatus", "2")) == 1,
+                    'port': _safe_int(web.get(
+                        "hm2WebHttpPortNumber", "80")),
+                },
+                'https': {
+                    'enabled': _safe_int(web.get(
+                        "hm2WebHttpsAdminStatus", "2")) == 1,
+                    'port': _safe_int(web.get(
+                        "hm2WebHttpsPortNumber", "443")),
+                },
+                'ssh': {
+                    'enabled': _safe_int(ssh.get(
+                        "hm2SshAdminStatus", "2")) == 1,
+                },
+                'telnet': {
+                    'enabled': _safe_int(tel.get(
+                        "hm2TelnetServerAdminStatus", "2")) == 1,
+                },
+                'snmp': {
+                    'v1': _safe_int(snmp.get(
+                        "hm2SnmpV1AdminStatus", "2")) == 1,
+                    'v2': _safe_int(snmp.get(
+                        "hm2SnmpV2AdminStatus", "2")) == 1,
+                    'v3': _safe_int(snmp.get(
+                        "hm2SnmpV3AdminStatus", "2")) == 1,
+                    'port': _safe_int(snmp.get(
+                        "hm2SnmpPortNumber", "161")),
+                },
+            })
+
+        # Batch: industrial protocols
+        if 'industrial' in need:
+            ind_result = self.client.get_multi([
+                ("HM2-INDUSTRIAL-PROTOCOLS-MIB",
+                 "hm2Iec61850ConfigGroup",
+                 ["hm2Iec61850MmsServerAdminStatus"]),
+                ("HM2-INDUSTRIAL-PROTOCOLS-MIB",
+                 "hm2ProfinetIOConfigGroup",
+                 ["hm2PNIOAdminStatus"]),
+                ("HM2-INDUSTRIAL-PROTOCOLS-MIB",
+                 "hm2EthernetIPConfigGroup",
+                 ["hm2EtherNetIPAdminStatus"]),
+                ("HM2-INDUSTRIAL-PROTOCOLS-MIB",
+                 "hm2Iec62541ConfigGroup",
+                 ["hm2Iec62541OpcUaServerAdminStatus"]),
+                ("HM2-INDUSTRIAL-PROTOCOLS-MIB",
+                 "hm2ModbusConfigGroup",
+                 ["hm2ModbusTcpServerAdminStatus"]),
+            ], decode_strings=False)
+            ind_mibs = ind_result["mibs"].get(
+                "HM2-INDUSTRIAL-PROTOCOLS-MIB", {})
+            iec = (ind_mibs.get("hm2Iec61850ConfigGroup", [{}])[0])
+            pn = (ind_mibs.get("hm2ProfinetIOConfigGroup", [{}])[0])
+            eip = (ind_mibs.get("hm2EthernetIPConfigGroup", [{}])[0])
+            opc = (ind_mibs.get("hm2Iec62541ConfigGroup", [{}])[0])
+            mb = (ind_mibs.get("hm2ModbusConfigGroup", [{}])[0])
+            out['industrial'] = {
                 'iec61850': _safe_int(iec.get(
                     "hm2Iec61850MmsServerAdminStatus", "2")) == 1,
                 'profinet': _safe_int(pn.get(
@@ -4834,13 +4899,88 @@ class MOPSHIOS:
                     "hm2Iec62541OpcUaServerAdminStatus", "2")) == 1,
                 'modbus': _safe_int(mb.get(
                     "hm2ModbusTcpServerAdminStatus", "2")) == 1,
-            },
-        }
+            }
+
+        # Batch: extended scalars (unsigned_sw + MVRP + MMRP + DevSec)
+        if 'ext' in need:
+            ext_result = self.client.get_multi([
+                ("HM2-DEVMGMT-MIB",
+                 "hm2DeviceMgmtSoftwareVersionGroup",
+                 ["hm2DevMgmtSwVersAllowUnsigned"]),
+                ("HM2-PLATFORM-MVRP-MIB", "hm2AgentDot1qMvrp",
+                 ["hm2AgentDot1qBridgeMvrpMode"]),
+                ("HM2-PLATFORM-MMRP-MIB", "hm2AgentDot1qMmrp",
+                 ["hm2AgentDot1qBridgeMmrpMode"]),
+                ("HM2-DIAGNOSTIC-MIB", "hm2DevSecConfigGroup",
+                 self._DEVSEC_ATTRS),
+            ], decode_strings=False)
+            unsw = (ext_result["mibs"]
+                    .get("HM2-DEVMGMT-MIB", {})
+                    .get("hm2DeviceMgmtSoftwareVersionGroup",
+                         [{}])[0])
+            mvrp_d = (ext_result["mibs"]
+                      .get("HM2-PLATFORM-MVRP-MIB", {})
+                      .get("hm2AgentDot1qMvrp", [{}])[0])
+            mmrp_d = (ext_result["mibs"]
+                      .get("HM2-PLATFORM-MMRP-MIB", {})
+                      .get("hm2AgentDot1qMmrp", [{}])[0])
+            devsec = (ext_result["mibs"]
+                      .get("HM2-DIAGNOSTIC-MIB", {})
+                      .get("hm2DevSecConfigGroup", [{}])[0])
+            out['unsigned_sw'] = _safe_int(unsw.get(
+                "hm2DevMgmtSwVersAllowUnsigned", "2")) == 1
+            out['mvrp'] = _safe_int(mvrp_d.get(
+                "hm2AgentDot1qBridgeMvrpMode", "2")) == 1
+            out['mmrp'] = _safe_int(mmrp_d.get(
+                "hm2AgentDot1qBridgeMmrpMode", "2")) == 1
+            out['devsec_monitors'] = all(
+                _safe_int(devsec.get(a, "2")) == 1
+                for a in self._DEVSEC_ATTRS)
+
+        # Batch: ACA / ExtNVM table
+        if 'aca' in need:
+            try:
+                aca_rows = self.client.get(
+                    "HM2-DEVMGMT-MIB", "hm2ExtNvmEntry",
+                    ["hm2ExtNvmTableIndex",
+                     "hm2ExtNvmAutomaticSoftwareLoad",
+                     "hm2ExtNvmConfigLoadPriority",
+                     "hm2ExtNvmConfigSave"],
+                    decode_strings=False)
+            except (MOPSError, ConnectionException):
+                aca_rows = []
+            aca_auto = False
+            aca_write = False
+            aca_load = False
+            for row in aca_rows:
+                if _safe_int(row.get(
+                        "hm2ExtNvmAutomaticSoftwareLoad", "2")) == 1:
+                    aca_auto = True
+                if _safe_int(row.get(
+                        "hm2ExtNvmConfigSave", "2")) == 1:
+                    aca_write = True
+                if _safe_int(row.get(
+                        "hm2ExtNvmConfigLoadPriority", "0")) != 0:
+                    aca_load = True
+            out['aca_auto_update'] = aca_auto
+            out['aca_config_write'] = aca_write
+            out['aca_config_load'] = aca_load
+
+        # Hardcoded (no OID in HiOS MIBs — legacy, not supported)
+        if not fields or 'gvrp' in fields:
+            out['gvrp'] = False
+        if not fields or 'gmrp' in fields:
+            out['gmrp'] = False
+
+        return out
 
     def set_services(self, http=None, https=None, ssh=None,
                      telnet=None, snmp_v1=None, snmp_v2=None,
                      snmp_v3=None, iec61850=None, profinet=None,
-                     ethernet_ip=None, opcua=None, modbus=None):
+                     ethernet_ip=None, opcua=None, modbus=None,
+                     unsigned_sw=None, aca_auto_update=None,
+                     aca_config_write=None, aca_config_load=None,
+                     mvrp=None, mmrp=None, devsec_monitors=None):
         """Set service enable/disable state.
 
         Each arg is bool (True=enable, False=disable) or None (no change).
@@ -4902,8 +5042,56 @@ class MOPSHIOS:
                 "HM2-INDUSTRIAL-PROTOCOLS-MIB",
                 "hm2ModbusConfigGroup",
                 {"hm2ModbusTcpServerAdminStatus": _en(modbus)}))
+        if unsigned_sw is not None:
+            mutations.append((
+                "HM2-DEVMGMT-MIB",
+                "hm2DeviceMgmtSoftwareVersionGroup",
+                {"hm2DevMgmtSwVersAllowUnsigned": _en(unsigned_sw)}))
+        if mvrp is not None:
+            mutations.append((
+                "HM2-PLATFORM-MVRP-MIB", "hm2AgentDot1qMvrp",
+                {"hm2AgentDot1qBridgeMvrpMode": _en(mvrp)}))
+        if mmrp is not None:
+            mutations.append((
+                "HM2-PLATFORM-MMRP-MIB", "hm2AgentDot1qMmrp",
+                {"hm2AgentDot1qBridgeMmrpMode": _en(mmrp)}))
+        if devsec_monitors is not None:
+            mutations.append((
+                "HM2-DIAGNOSTIC-MIB", "hm2DevSecConfigGroup",
+                {a: _en(devsec_monitors) for a in self._DEVSEC_ATTRS}))
 
         self._apply_mutations(mutations)
+
+        # ACA fields require indexed SET on each NVM row
+        if any(v is not None for v in (aca_auto_update,
+                                       aca_config_write,
+                                       aca_config_load)):
+            try:
+                aca_rows = self.client.get(
+                    "HM2-DEVMGMT-MIB", "hm2ExtNvmEntry",
+                    ["hm2ExtNvmTableIndex"],
+                    decode_strings=False)
+            except (MOPSError, ConnectionException):
+                aca_rows = []
+            for row in aca_rows:
+                idx_val = row.get("hm2ExtNvmTableIndex", "")
+                if not idx_val:
+                    continue
+                values = {}
+                if aca_auto_update is not None:
+                    values["hm2ExtNvmAutomaticSoftwareLoad"] = (
+                        _en(aca_auto_update))
+                if aca_config_write is not None:
+                    values["hm2ExtNvmConfigSave"] = (
+                        _en(aca_config_write))
+                if aca_config_load is not None:
+                    values["hm2ExtNvmConfigLoadPriority"] = (
+                        "0" if not aca_config_load else "1")
+                if values:
+                    self._apply_set_indexed(
+                        "HM2-DEVMGMT-MIB", "hm2ExtNvmEntry",
+                        {"hm2ExtNvmTableIndex": idx_val},
+                        values)
 
     # ------------------------------------------------------------------
     # SNMP Config (HM2-MGMTACCESS-MIB + SNMP-COMMUNITY-MIB)

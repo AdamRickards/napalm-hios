@@ -23,7 +23,7 @@
 
 Each getter/setter pair unlocks audit (gather) + remediation (harden) for the corresponding JUSTIN checks. Grouped by security level so they can ship incrementally. See [JUSTIN TODO](tools/justin/TODO.md) for check→fix mapping.
 
-SL1 shipped in v1.16.0: `get/set_services`, `get/set_syslog`, `get/set_ntp`, `get/set_login_policy`, `get/set_snmp_config`, `set_access_port`, multi-protocol watchdog.
+SL1 shipped in v1.16.0–v1.16.2: `get/set_services` (extended v1.16.2), `get/set_syslog`, `get/set_ntp`, `get/set_login_policy`, `get/set_snmp_config`, `set_access_port`, multi-protocol watchdog. Full SL1 JUSTIN coverage (16/16 checks, 14 auto-remediate).
 
 ### SL2 — advanced hardening (v1.17.0)
 
@@ -60,15 +60,15 @@ device.set_services(unsigned_sw=False, aca_auto_update=False)
 
 **New fields needed** (verify each one live before implementing):
 
-- [ ] `unsigned_sw` — allow unsigned firmware upload. **Unlocks**: sec-unsigned-sw
-- [ ] `aca_auto_update` — ACA auto software load from ext NVM. **Unlocks**: sec-aca-auto-update
-- [ ] `aca_config_write` — ACA config save to ext NVM. **Unlocks**: sec-aca-config-write
-- [ ] `aca_config_load` — ACA config load from ext NVM (priority: first/second/third/disabled). **Unlocks**: sec-aca-config-load
-- [ ] `gvrp` — GVRP global enable (note: may be dot1q bridge MIB, not HiOS private). **Unlocks**: ns-gvrp-mvrp
-- [ ] `mvrp` — MVRP global enable. **Unlocks**: ns-gvrp-mvrp
-- [ ] `gmrp` — GMRP global enable (may be dot1q bridge MIB). **Unlocks**: ns-gmrp-mmrp
-- [ ] `mmrp` — MMRP global enable. **Unlocks**: ns-gmrp-mmrp
-- [ ] `devsec_monitors` — dict of 20+ individual DevSec sense monitors (bool each). **Unlocks**: sec-devsec-monitors
+- [x] `unsigned_sw` — allow unsigned firmware upload. **Unlocks**: sec-unsigned-sw *(v1.16.2)*
+- [x] `aca_auto_update` — ACA auto software load from ext NVM. **Unlocks**: sec-aca-auto-update *(v1.16.2)*
+- [x] `aca_config_write` — ACA config save to ext NVM. **Unlocks**: sec-aca-config-write *(v1.16.2)*
+- [x] `aca_config_load` — ACA config load from ext NVM (priority: first/second/third/disabled). **Unlocks**: sec-aca-config-load *(v1.16.2)*
+- [x] `gvrp` — hardcoded False (legacy, no global toggle in HiOS MIBs). **Unlocks**: ns-gvrp-mvrp *(v1.16.2)*
+- [x] `mvrp` — MVRP global enable. **Unlocks**: ns-gvrp-mvrp *(v1.16.2)*
+- [x] `gmrp` — hardcoded False (legacy, no global toggle in HiOS MIBs). **Unlocks**: ns-gmrp-mmrp *(v1.16.2)*
+- [x] `mmrp` — MMRP global enable. **Unlocks**: ns-gmrp-mmrp *(v1.16.2)*
+- [x] `devsec_monitors` — bool, True when all 19 DevSec sense monitors enabled. **Unlocks**: sec-devsec-monitors *(v1.16.2)*
 - [ ] `dos_protection` — dict of DoS mitigation filters (TCP/ICMP/L2/IP checks). **Unlocks**: ns-dos-protection (SL2)
 
 ## Vendor-specific methods (driver) — future
