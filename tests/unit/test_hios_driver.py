@@ -579,6 +579,173 @@ class TestHIOSDriver(unittest.TestCase):
         self.device.delete_vlan(100)
         self.mock_connection.delete_vlan.assert_called_once_with(100)
 
+    # --- DNS ---
+
+    def test_get_dns_output_shape(self):
+        """get_dns returns correct dict shape."""
+        self.mock_connection.get_dns.return_value = {
+            'enabled': False,
+            'config_source': 'mgmt-dhcp',
+            'domain_name': '',
+            'timeout': 3,
+            'retransmits': 2,
+            'cache_enabled': True,
+            'servers': [],
+            'active_servers': [],
+        }
+        result = self.device.get_dns()
+        # Validate all expected keys present
+        self.assertIn('enabled', result)
+        self.assertIn('config_source', result)
+        self.assertIn('domain_name', result)
+        self.assertIn('timeout', result)
+        self.assertIn('retransmits', result)
+        self.assertIn('cache_enabled', result)
+        self.assertIn('servers', result)
+        self.assertIn('active_servers', result)
+        # Validate types
+        self.assertIsInstance(result['enabled'], bool)
+        self.assertIsInstance(result['config_source'], str)
+        self.assertIsInstance(result['domain_name'], str)
+        self.assertIsInstance(result['timeout'], int)
+        self.assertIsInstance(result['retransmits'], int)
+        self.assertIsInstance(result['cache_enabled'], bool)
+        self.assertIsInstance(result['servers'], list)
+        self.assertIsInstance(result['active_servers'], list)
+
+    def test_get_dns_with_servers(self):
+        """get_dns returns servers as list of IP strings."""
+        self.mock_connection.get_dns.return_value = {
+            'enabled': True,
+            'config_source': 'user',
+            'domain_name': 'test.local',
+            'timeout': 5,
+            'retransmits': 3,
+            'cache_enabled': False,
+            'servers': ['192.168.3.1', '10.0.0.1'],
+            'active_servers': ['192.168.3.1'],
+        }
+        result = self.device.get_dns()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['config_source'], 'user')
+        self.assertEqual(result['domain_name'], 'test.local')
+        self.assertEqual(len(result['servers']), 2)
+        self.assertEqual(result['servers'][0], '192.168.3.1')
+        self.assertEqual(len(result['active_servers']), 1)
+
+    def test_get_dns_dispatches_all_protocols(self):
+        """get_dns dispatches to all supported protocols."""
+        for proto in ('mops', 'snmp', 'ssh', 'offline'):
+            self.device.active_protocol = proto
+            self.mock_connection.get_dns.return_value = {
+                'enabled': False, 'config_source': 'mgmt-dhcp',
+                'domain_name': '', 'timeout': 3, 'retransmits': 2,
+                'cache_enabled': True, 'servers': [],
+                'active_servers': [],
+            }
+            result = self.device.get_dns()
+            self.assertIsInstance(result, dict)
+
+    def test_set_dns_dispatches(self):
+        """set_dns dispatches to mops/snmp/ssh."""
+        for proto in ('mops', 'snmp', 'ssh'):
+            self.device.active_protocol = proto
+            self.device.set_dns(enabled=True)
+            self.mock_connection.set_dns.assert_called_with(
+                enabled=True)
+
+    def test_add_dns_server_dispatches(self):
+        """add_dns_server dispatches to mops/snmp/ssh."""
+        for proto in ('mops', 'snmp', 'ssh'):
+            self.device.active_protocol = proto
+            self.device.add_dns_server('192.168.3.1')
+            self.mock_connection.add_dns_server.assert_called_with(
+                '192.168.3.1')
+
+    def test_delete_dns_server_dispatches(self):
+        """delete_dns_server dispatches to mops/snmp/ssh."""
+        for proto in ('mops', 'snmp', 'ssh'):
+            self.device.active_protocol = proto
+            self.device.delete_dns_server('192.168.3.1')
+            self.mock_connection.delete_dns_server.assert_called_with(
+                '192.168.3.1')
+
+
+    # --- PoE ---
+
+    def test_get_poe_output_shape(self):
+        """get_poe returns correct dict shape."""
+        self.mock_connection.get_poe.return_value = {
+            'enabled': False,
+            'power_w': 0,
+            'delivered_current_ma': 0,
+            'modules': {},
+            'ports': {},
+        }
+        result = self.device.get_poe()
+        self.assertIn('enabled', result)
+        self.assertIn('power_w', result)
+        self.assertIn('delivered_current_ma', result)
+        self.assertIn('modules', result)
+        self.assertIn('ports', result)
+        self.assertIsInstance(result['enabled'], bool)
+        self.assertIsInstance(result['power_w'], int)
+        self.assertIsInstance(result['delivered_current_ma'], int)
+        self.assertIsInstance(result['modules'], dict)
+        self.assertIsInstance(result['ports'], dict)
+
+    def test_get_poe_with_ports(self):
+        """get_poe returns ports with correct structure."""
+        self.mock_connection.get_poe.return_value = {
+            'enabled': True,
+            'power_w': 30,
+            'delivered_current_ma': 250,
+            'modules': {
+                '1/1': {
+                    'budget_w': 370, 'max_w': 370,
+                    'reserved_w': 30, 'delivered_w': 5,
+                    'source': 'internal',
+                    'threshold_pct': 90, 'notifications': True,
+                },
+            },
+            'ports': {
+                '1/1': {
+                    'enabled': True, 'status': 'delivering',
+                    'priority': 'low', 'classification': 'class4',
+                    'consumption_mw': 5300, 'power_limit_mw': 15400,
+                    'name': 'AP', 'fast_startup': False,
+                },
+            },
+        }
+        result = self.device.get_poe()
+        self.assertTrue(result['enabled'])
+        self.assertIn('1/1', result['ports'])
+        port = result['ports']['1/1']
+        self.assertTrue(port['enabled'])
+        self.assertEqual(port['status'], 'delivering')
+        self.assertEqual(port['classification'], 'class4')
+        self.assertIn('1/1', result['modules'])
+
+    def test_get_poe_dispatches_all_protocols(self):
+        """get_poe dispatches to all supported protocols."""
+        for proto in ('mops', 'snmp', 'ssh', 'offline'):
+            self.device.active_protocol = proto
+            self.mock_connection.get_poe.return_value = {
+                'enabled': False, 'power_w': 0,
+                'delivered_current_ma': 0,
+                'modules': {}, 'ports': {},
+            }
+            result = self.device.get_poe()
+            self.assertIsInstance(result, dict)
+
+    def test_set_poe_dispatches(self):
+        """set_poe dispatches to mops/snmp/ssh."""
+        for proto in ('mops', 'snmp', 'ssh'):
+            self.device.active_protocol = proto
+            self.device.set_poe(enabled=True)
+            self.mock_connection.set_poe.assert_called_with(
+                enabled=True)
+
 
 if __name__ == '__main__':
     unittest.main()

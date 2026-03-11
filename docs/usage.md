@@ -130,6 +130,20 @@ device.close()
 - `get_ntp()` — SNTP client and NTP server config
 - `get_services()` — management, industrial, firmware, ACA, and device security state
 - `get_snmp_config()` — SNMP version status, port, and community table
+- `get_signal_contact()` — signal contact relay mode, sense flags, and status
+- `get_device_monitor()` — device monitor sense flags and status
+- `get_devsec_status()` — device security monitor flags and status
+- `get_banner()` — pre-login and CLI login banner text
+- `get_session_config()` — session timeouts and max-sessions for all management protocols
+- `get_ip_restrict()` — restricted management access rules and global state
+- `get_dns()` — DNS client configuration and server list
+- `get_poe()` — PoE global state, module budgets, and per-port config
+- `get_remote_auth()` — RADIUS/TACACS+/LDAP detection (enabled or not)
+- `get_users()` — local user accounts with roles, status, SNMP security, default password detection
+- `get_port_security()` — port security global state, per-port MAC limits, static MAC/IP entries
+- `get_dhcp_snooping()` — DHCP snooping global state, per-VLAN enable, per-port trust/rate-limit
+- `get_arp_inspection()` — Dynamic ARP Inspection validation flags, per-VLAN enable/ACL, per-port trust/rate-limit
+- `get_ip_source_guard()` — IP Source Guard per-port verify-source/port-security, static and dynamic binding tables
 - `is_factory_default()` — detect factory-fresh HiOS 10.3+ devices
 
 ### Vendor-specific write methods
@@ -166,7 +180,29 @@ device.close()
 - `set_syslog()` — set syslog global state and server config
 - `set_ntp()` — set SNTP client and NTP server enable/disable
 - `set_services()` — set management, industrial, firmware, ACA, and device security state
-- `set_snmp_config()` — set SNMP version enable/disable
+- `set_snmp_config()` — set SNMP version enable/disable and trap service
+- `set_session_config()` — set session timeouts and max-sessions
+- `set_ip_restrict()` — set global restricted management access enable/logging
+- `add_ip_restrict_rule()` — create restricted management access rule (1-16)
+- `delete_ip_restrict_rule()` — delete restricted management access rule
+- `set_signal_contact()` — set signal contact mode, sense flags, per-port link alarm
+- `set_device_monitor()` — set device monitor sense flags, per-port link alarm
+- `set_devsec_status()` — set device security monitor flags, per-port no-link
+- `set_banner()` — set pre-login and CLI login banner text
+- `set_dns()` — set DNS client configuration
+- `add_dns_server()` — add a DNS server (up to 4)
+- `delete_dns_server()` — delete a DNS server by address
+- `set_poe()` — set PoE global state or per-port config
+- `set_user()` — create or update local user account
+- `delete_user()` — delete local user account
+- `add_snmp_trap_dest()` — add SNMP trap destination (v1/v2c/v3)
+- `delete_snmp_trap_dest()` — delete SNMP trap destination by name
+- `set_port_security()` — set port security global mode or per-port config
+- `add_port_security()` — add static MAC or IP entries to port security
+- `delete_port_security()` — remove static MAC or IP entries from port security
+- `set_dhcp_snooping()` — set DHCP snooping global, per-VLAN, or per-port config
+- `set_arp_inspection()` — set Dynamic ARP Inspection global, per-VLAN, or per-port config
+- `set_ip_source_guard()` — set IP Source Guard per-port verify-source and port-security
 - `save_config()` — save running config to NVM
 - `clear_config()` — clear running config (warm restart)
 - `clear_factory()` — full factory reset (reboot)

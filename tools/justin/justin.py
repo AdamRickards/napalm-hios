@@ -2,7 +2,7 @@
 """JUSTIN — Justified Unified Security Testing for Industrial Networks.
 
 IEC 62443-4-2 security audit and hardening tool for Hirschmann HiOS switches.
-Connects via napalm-hios, audits against SL1 baseline, remediates findings.
+Connects via napalm-hios, audits against composable security levels, remediates findings.
 
 Usage:
     justin --audit -d 192.168.1.4              # single device audit
@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import getpass
 import ipaddress
 import json
 import logging
@@ -46,12 +47,18 @@ NO_COLOR = type('NC', (), {k: '' for k in vars(C) if not k.startswith('_')})()
 # When True, progress/status goes to stderr so stdout stays clean for JSON
 _JSON_MODE = False
 
-def _progress(msg):
-    """Print progress message — stderr in JSON mode, stdout otherwise."""
+def _log(tag, msg='', end='\n', flush=False, color=C):
+    """Tagged progress line: HH:MM:SS [TAG] msg.
+
+    Use for all operational output (gather, check, harden, save, snapshot).
+    Report card display (the boxed table) stays untagged.
+    """
+    ts = datetime.now().strftime('%H:%M:%S')
+    line = f"  {color.DIM}{ts}{color.RST} [{tag}] {msg}"
     if _JSON_MODE:
-        print(msg, file=sys.stderr)
+        print(line, end=end, flush=flush, file=sys.stderr)
     else:
-        print(msg)
+        print(line, end=end, flush=flush)
 
 # ---------------------------------------------------------------------------
 # Severity helpers
@@ -91,7 +98,7 @@ class Finding:
             'desc': self.desc,
             'passed': self.passed,
         }
-        if self.detail:
+        if self.detail is not None:
             d['detail'] = self.detail
         if self.fix_cmd:
             d['fix'] = self.fix_cmd
@@ -123,6 +130,108 @@ def load_checks(checks_file=None):
     with open(checks_file, 'r') as f:
         data = json.load(f)
     return {c['id']: c for c in data['checks']}
+
+
+# ---------------------------------------------------------------------------
+# Composable --level filter
+# ---------------------------------------------------------------------------
+
+VALID_LEVELS = {'sl1', 'sl2', 'vendor', 'highest'}
+# sl3 excluded until Phase 2/3 adds deducible SL3 checks (get_users,
+# get_password_policy). Currently sl3 == sl2 (zero additional checks).
+# Add 'sl3' to VALID_LEVELS when meaningful coverage exists.
+
+
+def _check_sl_set(spec):
+    """Return the set of SL values for a check (handles int or list)."""
+    sl = spec.get('sl', 1)
+    return set(sl) if isinstance(sl, list) else {sl}
+
+
+def filter_checks_by_level(check_defs, level_str):
+    """Filter checks by composable security level string.
+
+    Supports comma-separated levels. Hierarchical SL levels collapse
+    (sl1,sl2 -> sl2). 'vendor' = vendor checks only. 'sl1,vendor' =
+    IEC SL1 + vendor. 'highest' = everything.
+
+    sl field can be int (1) or list ([1, 2]) for checks that serve
+    multiple levels. source can be 'iec', 'vendor', or 'cert'.
+
+    Examples:
+        'sl1'        -> IEC/cert SL1 checks
+        'sl2'        -> IEC/cert SL1+SL2 + vendor checks tagged SL2
+        'vendor'     -> vendor checks only
+        'sl1,vendor' -> IEC SL1 + all vendor
+        'highest'    -> everything
+    """
+    parts = [p.strip().lower() for p in level_str.split(',')]
+    for p in parts:
+        if p not in VALID_LEVELS:
+            raise ValueError(
+                f"Unknown level: {p}. Valid: {', '.join(sorted(VALID_LEVELS))}")
+
+    if 'highest' in parts:
+        return check_defs
+
+    # Determine highest SL requested (hierarchical collapse)
+    sl_max = 0
+    for p in parts:
+        if p.startswith('sl'):
+            sl_max = max(sl_max, int(p[2:]))
+    include_vendor = 'vendor' in parts
+
+    filtered = {}
+    for k, v in check_defs.items():
+        source = v.get('source', 'iec')
+        sls = _check_sl_set(v)
+        # IEC + cert: include if any sl value <= sl_max
+        if source in ('iec', 'cert') and sl_max > 0 and min(sls) <= sl_max:
+            filtered[k] = v
+        # Vendor: always include if vendor flag set
+        elif source == 'vendor' and include_vendor:
+            filtered[k] = v
+        # Vendor with SL2 tag: include at SL2 even without vendor flag
+        elif source == 'vendor' and sl_max >= 2 and max(sls) >= 2:
+            filtered[k] = v
+    return filtered
+
+
+# ---------------------------------------------------------------------------
+# Certs loader — IEC 62443-4-2 certification context
+# ---------------------------------------------------------------------------
+
+def load_certs(certs_file=None):
+    """Load family->cert->SL-C lookup from certs.json."""
+    if certs_file is None:
+        certs_file = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'certs.json')
+    if not os.path.exists(certs_file):
+        return {}
+    with open(certs_file, 'r') as f:
+        return json.load(f)
+
+
+def resolve_cert(certs, model):
+    """Resolve a device model to its IEC 62443 cert info.
+
+    Matches model prefix to family (longest-match-first so GRS1042
+    matches before GRS10x0 before GRS10x). Lowercase 'x' in a family
+    key acts as a single-character wildcard (e.g. GRS10x matches
+    GRS1020, GRS1030).
+    """
+    if not certs or not model:
+        return None
+    families = certs.get('families', {})
+    model_up = model.upper()
+    # Sort by key length descending for longest-match-first
+    for fam in sorted(families.keys(), key=len, reverse=True):
+        # Build a regex from the family key: 'x' -> '.' (single char wildcard)
+        pattern = ''.join('.' if c == 'x' else re.escape(c.upper())
+                          for c in fam)
+        if re.match(pattern, model_up):
+            return families[fam]
+    return None
 
 # ---------------------------------------------------------------------------
 # Config parsing (same pattern as AARON/MOHAWC/CLAMPS)
@@ -160,6 +269,8 @@ def parse_ips(spec):
             prefix, start, end = m.group(1), int(m.group(2)), int(m.group(3))
             if start > end:
                 raise ValueError(f"Invalid range: {part} (start > end)")
+            if not (0 <= start <= 255 and 0 <= end <= 255):
+                raise ValueError(f"Invalid IP range: {part} (octet must be 0-255)")
             for i in range(start, end + 1):
                 ip = f"{prefix}{i}"
                 if is_valid_ipv4(ip):
@@ -186,7 +297,10 @@ def parse_config(config_file):
         'syslog_port': 514,
         'ntp_server': None,
         'banner': None,
-        'level': 'SL1',
+        'level': 'sl1',
+        'dirty_guard': True,
+        'auto_save': False,
+        'snapshot': 'off',
     }
 
     with open(config_file, 'r') as f:
@@ -215,7 +329,15 @@ def parse_config(config_file):
                 elif key == 'banner':
                     config['banner'] = val
                 elif key == 'level':
-                    config['level'] = val.upper()
+                    config['level'] = val.lower()
+                elif key == 'dirty_guard':
+                    config['dirty_guard'] = val.lower() not in (
+                        'false', 'off', 'no', '0')
+                elif key == 'auto_save':
+                    config['auto_save'] = val.lower() in (
+                        'true', 'on', 'yes', '1')
+                elif key == 'snapshot':
+                    config['snapshot'] = val.lower()
                 continue
 
             tokens = line.split()
@@ -230,21 +352,39 @@ def parse_config(config_file):
 # ---------------------------------------------------------------------------
 
 def gather(device, check_defs, color=C):
-    """Call each unique getter referenced by the check set, return state dict."""
+    """Call each unique getter referenced by the check set.
+
+    Returns (state, evidence) where state is the raw getter results dict
+    (used by check functions) and evidence is a timestamped copy for the
+    audit trail: {getter: {gathered_at: iso, data: result}}.
+    """
     getters = set()
     for spec in check_defs.values():
         if spec.get('getter'):
             getters.add(spec['getter'])
 
     state = {}
+    evidence = {}
     for getter_name in sorted(getters):
-        _progress(f"  {color.DIM}Gathering {getter_name}() ...{color.RST}")
+        _log('GATHER', f"{color.DIM}{getter_name}() ...{color.RST}",
+             color=color)
+        ts = datetime.now().isoformat()
         try:
-            state[getter_name] = getattr(device, getter_name)()
+            result = getattr(device, getter_name)()
+            state[getter_name] = result
+            evidence[getter_name] = {
+                'gathered_at': ts,
+                'data': json.loads(json.dumps(result, default=str)),
+            }
         except Exception as e:
-            logging.warning("Getter %s failed: %s", getter_name, e)
+            _log('GATHER', f"{color.YEL}WARNING: {getter_name}() "
+                 f"failed: {type(e).__name__}: {e}{color.RST}",
+                 color=color)
             state[getter_name] = None
-    return state
+            evidence[getter_name] = {
+                'gathered_at': ts, 'error': str(e),
+            }
+    return state, evidence
 
 # ---------------------------------------------------------------------------
 # Check functions — one per check ID
@@ -524,9 +664,24 @@ def check_devsec_monitors(state, spec, config):
 
 @register_check('sys-default-passwords')
 def check_default_passwords(state, spec, config):
+    users = state.get('get_users')
+    if users is not None:
+        # New path: use get_users() default_password field (MOPS only)
+        defaults = [u['name'] for u in users
+                    if u.get('default_password')]
+        if defaults:
+            return _make_finding(
+                spec,
+                f"Default password active: {', '.join(defaults)}",
+                detail='Factory-default credentials are a critical risk. '
+                       'Change passwords for all flagged accounts',
+                fix_cmd="set_user(name, password=<new>)")
+        # No defaults flagged — but only MOPS detects this
+        return _make_finding(
+            spec, 'No default passwords detected', passed=True)
+    # Fallback: credential-based detection (SNMP/SSH)
     username = config.get('username', 'admin')
     password = config.get('password', 'private')
-
     if username == 'admin' and password == 'private':
         return _make_finding(
             spec, 'Using default credentials (admin/private)',
@@ -536,8 +691,9 @@ def check_default_passwords(state, spec, config):
         return _make_finding(
             spec, 'Admin password changed from default', passed=True)
     return _make_finding(
-        spec, 'Non-admin user in use — default password probe not implemented',
-        detail='Future: probe admin/private on same protocol')
+        spec, 'Non-admin user in use — default password status unknown',
+        detail='Use MOPS protocol for definitive detection via '
+               'hm2PwdMgmtDefaultPwdStatusTable')
 
 
 # --- ns-gvrp-mvrp ----------------------------------------------------------
@@ -592,6 +748,1004 @@ def check_gmrp_mmrp(state, spec, config):
     return _make_finding(spec, 'GMRP/MMRP disabled', passed=True)
 
 
+# --- sec-industrial-protocols -----------------------------------------------
+
+@register_check('sec-industrial-protocols')
+def check_industrial_protocols(state, spec, config):
+    svc = state.get('get_services')
+    if svc is None:
+        return _unable(spec)
+    ind = svc.get('industrial')
+    if ind is None:
+        return _unable(spec)
+    enabled = []
+    for proto, label in [('profinet', 'PROFINET'), ('modbus', 'Modbus TCP'),
+                         ('ethernet_ip', 'EtherNet/IP'),
+                         ('iec61850', 'IEC 61850 MMS')]:
+        if ind.get(proto):
+            enabled.append(label)
+    if enabled:
+        return _make_finding(
+            spec, f"Industrial protocols enabled: {', '.join(enabled)}",
+            detail='Disable unless required by operational technology',
+            fix_cmd="set_services(profinet=False, modbus=False, "
+                    "ethernet_ip=False, iec61850=False)")
+    return _make_finding(spec, 'No industrial protocols enabled', passed=True)
+
+
+# --- ns-dos-protection ------------------------------------------------------
+
+@register_check('ns-dos-protection')
+def check_dos_protection(state, spec, config):
+    sc = state.get('get_storm_control')
+    if sc is None:
+        return _unable(spec)
+    interfaces = sc.get('interfaces', {})
+    if not interfaces:
+        return _unable(spec)
+    protected = sum(
+        1 for cfg in interfaces.values()
+        if any(cfg.get(t, {}).get('enabled', False)
+               for t in ('broadcast', 'multicast', 'unicast')))
+    total = len(interfaces)
+    if protected == 0:
+        return _make_finding(
+            spec, 'No storm control configured on any port',
+            detail='Enable broadcast/multicast storm control on access ports')
+    return _make_finding(
+        spec, f"Storm control active on {protected}/{total} ports",
+        passed=True)
+
+
+# --- ns-lldp ----------------------------------------------------------------
+
+@register_check('ns-lldp')
+def check_lldp(state, spec, config):
+    neighbors = state.get('get_lldp_neighbors')
+    if neighbors is None:
+        return _unable(spec)
+    n_neighbors = sum(len(v) for v in neighbors.values())
+    n_ports = len(neighbors)
+    return _make_finding(
+        spec,
+        f"LLDP active: {n_neighbors} neighbor(s) on {n_ports} port(s)"
+        if n_neighbors else 'No LLDP neighbors detected',
+        detail='Advisory: review LLDP exposure — topology visible to neighbors',
+        passed=True)
+
+
+# --- ns-port-security -----------------------------------------------------
+
+@register_check('ns-port-security')
+def check_port_security(state, spec, config):
+    ps = state.get('get_port_security')
+    if ps is None:
+        return _unable(spec)
+    ports = ps.get('ports', {})
+    if not ports:
+        return _unable(spec)
+
+    # Build skip set: uplinks (LLDP neighbors) + MRP ring ports
+    skip = set()
+    neighbors = state.get('get_lldp_neighbors')
+    if neighbors:
+        skip.update(neighbors.keys())
+    mrp = state.get('get_mrp')
+    if mrp:
+        for domain in mrp.values() if isinstance(mrp, dict) else [mrp]:
+            for key in ('ring_port_1', 'ring_port_2'):
+                rp = domain.get(key, {}) if isinstance(domain, dict) else {}
+                iface = rp.get('interface', '') if isinstance(rp, dict) else ''
+                if iface:
+                    skip.add(iface)
+
+    unprotected = []
+    access_total = 0
+    for port, cfg in sorted(ports.items()):
+        if port in skip:
+            continue
+        access_total += 1
+        if not cfg.get('enabled', False):
+            unprotected.append(port)
+
+    if access_total == 0:
+        return _make_finding(
+            spec, 'No access ports found (all ports are uplinks/ring)',
+            passed=True)
+    if unprotected:
+        sample = ', '.join(unprotected[:5])
+        suffix = (f' (+{len(unprotected) - 5} more)'
+                  if len(unprotected) > 5 else '')
+        return _make_finding(
+            spec,
+            f"Port security disabled on {len(unprotected)}/{access_total}"
+            f" access port(s): {sample}{suffix}",
+            detail='Enable port security on access ports to limit MAC addresses'
+                   ' — harden deferred (requires per-site MAC limit policy)')
+    return _make_finding(
+        spec,
+        f"Port security enabled on all {access_total} access port(s)",
+        passed=True)
+
+
+# --- ns-dhcp-snooping -----------------------------------------------------
+
+@register_check('ns-dhcp-snooping')
+def check_dhcp_snooping(state, spec, config):
+    ds = state.get('get_dhcp_snooping')
+    if ds is None:
+        return _unable(spec)
+    ports = ds.get('ports', {})
+    if not ports:
+        return _unable(spec)
+
+    if not ds.get('enabled', False):
+        return _make_finding(
+            spec, 'DHCP snooping globally disabled',
+            detail='Enable DHCP snooping to prevent rogue DHCP servers'
+                   ' — harden deferred (requires trust model planning)')
+
+    # Build uplink set: LLDP neighbors + MRP ring ports
+    uplinks = set()
+    neighbors = state.get('get_lldp_neighbors')
+    if neighbors:
+        uplinks.update(neighbors.keys())
+    mrp = state.get('get_mrp')
+    if mrp:
+        for domain in mrp.values() if isinstance(mrp, dict) else [mrp]:
+            for key in ('ring_port_1', 'ring_port_2'):
+                rp = domain.get(key, {}) if isinstance(domain, dict) else {}
+                iface = rp.get('interface', '') if isinstance(rp, dict) else ''
+                if iface:
+                    uplinks.add(iface)
+
+    issues = []
+    # Uplinks should be trusted
+    for port in sorted(uplinks):
+        pcfg = ports.get(port, {})
+        if not pcfg.get('trusted', False):
+            issues.append(f"uplink {port} not trusted")
+
+    # Access ports should NOT be trusted
+    trusted_access = []
+    for port, pcfg in sorted(ports.items()):
+        if port in uplinks:
+            continue
+        if pcfg.get('trusted', False):
+            trusted_access.append(port)
+
+    if trusted_access:
+        sample = ', '.join(trusted_access[:5])
+        suffix = (f' (+{len(trusted_access) - 5} more)'
+                  if len(trusted_access) > 5 else '')
+        issues.append(
+            f"access port(s) trusted (should be untrusted): "
+            f"{sample}{suffix}")
+
+    if issues:
+        return _make_finding(
+            spec,
+            f"DHCP snooping enabled but trust model issues: "
+            f"{'; '.join(issues)}",
+            detail='Trust uplinks, untrust access ports'
+                   ' — harden deferred (requires trust model planning)')
+
+    return _make_finding(
+        spec,
+        f"DHCP snooping enabled with correct trust model",
+        passed=True)
+
+
+# --- ns-dai ---------------------------------------------------------------
+
+@register_check('ns-dai')
+def check_dai(state, spec, config):
+    dai = state.get('get_arp_inspection')
+    if dai is None:
+        return _unable(spec)
+    ports = dai.get('ports', {})
+    if not ports:
+        return _unable(spec)
+
+    # DAI is per-VLAN enabled — check if ANY VLAN has it on
+    vlans = dai.get('vlans', {})
+    any_vlan_enabled = any(v.get('enabled', False)
+                           for v in vlans.values())
+
+    if not any_vlan_enabled:
+        return _make_finding(
+            spec, 'DAI not enabled on any VLAN',
+            detail='Enable DAI on VLANs to validate ARP packets'
+                   ' — harden deferred (requires DHCP snooping first)')
+
+    # Build uplink set: LLDP neighbors + MRP ring ports
+    uplinks = set()
+    neighbors = state.get('get_lldp_neighbors')
+    if neighbors:
+        uplinks.update(neighbors.keys())
+    mrp = state.get('get_mrp')
+    if mrp:
+        for domain in mrp.values() if isinstance(mrp, dict) else [mrp]:
+            for key in ('ring_port_1', 'ring_port_2'):
+                rp = domain.get(key, {}) if isinstance(domain, dict) else {}
+                iface = rp.get('interface', '') if isinstance(rp, dict) else ''
+                if iface:
+                    uplinks.add(iface)
+
+    issues = []
+    # Uplinks should be trusted
+    for port in sorted(uplinks):
+        pcfg = ports.get(port, {})
+        if not pcfg.get('trusted', False):
+            issues.append(f"uplink {port} not trusted")
+
+    # Access ports should NOT be trusted
+    trusted_access = []
+    for port, pcfg in sorted(ports.items()):
+        if port in uplinks:
+            continue
+        if pcfg.get('trusted', False):
+            trusted_access.append(port)
+
+    if trusted_access:
+        sample = ', '.join(trusted_access[:5])
+        suffix = (f' (+{len(trusted_access) - 5} more)'
+                  if len(trusted_access) > 5 else '')
+        issues.append(
+            f"access port(s) trusted (should be untrusted): "
+            f"{sample}{suffix}")
+
+    if issues:
+        return _make_finding(
+            spec,
+            f"DAI enabled but trust model issues: "
+            f"{'; '.join(issues)}",
+            detail='Trust uplinks, untrust access ports'
+                   ' — harden deferred (requires trust model planning)')
+
+    return _make_finding(
+        spec,
+        f"DAI enabled with correct trust model",
+        passed=True)
+
+
+# --- ns-ipsg --------------------------------------------------------------
+
+@register_check('ns-ipsg')
+def check_ipsg(state, spec, config):
+    ipsg = state.get('get_ip_source_guard')
+    if ipsg is None:
+        return _unable(spec)
+    ports = ipsg.get('ports', {})
+    if not ports:
+        return _unable(spec)
+
+    # Build uplink set: LLDP neighbors + MRP ring ports
+    uplinks = set()
+    neighbors = state.get('get_lldp_neighbors')
+    if neighbors:
+        uplinks.update(neighbors.keys())
+    mrp = state.get('get_mrp')
+    if mrp:
+        for domain in mrp.values() if isinstance(mrp, dict) else [mrp]:
+            for key in ('ring_port_1', 'ring_port_2'):
+                rp = domain.get(key, {}) if isinstance(domain, dict) else {}
+                iface = rp.get('interface', '') if isinstance(rp, dict) else ''
+                if iface:
+                    uplinks.add(iface)
+
+    # Check access ports (non-uplinks) have verify_source enabled
+    unprotected = []
+    for port, pcfg in sorted(ports.items()):
+        if port in uplinks:
+            continue  # uplinks don't need IPSG
+        if not pcfg.get('verify_source', False):
+            unprotected.append(port)
+
+    if unprotected:
+        sample = ', '.join(unprotected[:5])
+        suffix = (f' (+{len(unprotected) - 5} more)'
+                  if len(unprotected) > 5 else '')
+        return _make_finding(
+            spec,
+            f"IPSG disabled on access port(s): {sample}{suffix}",
+            detail='Enable IP Source Guard on access ports to prevent'
+                   ' IP spoofing — harden deferred'
+                   ' (requires DHCP snooping first)')
+
+    return _make_finding(
+        spec,
+        'IPSG enabled on all access ports',
+        passed=True)
+
+
+# --- sec-password-policy (SL2 — complexity requirements) ------------------
+
+@register_check('sec-password-policy')
+def check_password_policy(state, spec, config):
+    lp = state.get('get_login_policy')
+    if lp is None:
+        return _unable(spec)
+    fields = {
+        'min_uppercase': ('uppercase', lp.get('min_uppercase', 0)),
+        'min_lowercase': ('lowercase', lp.get('min_lowercase', 0)),
+        'min_numeric': ('numeric', lp.get('min_numeric', 0)),
+        'min_special': ('special', lp.get('min_special', 0)),
+    }
+    weak = [label for _, (label, val) in fields.items() if val < 1]
+    if weak:
+        return _make_finding(
+            spec,
+            f"Password complexity missing: {', '.join(weak)}",
+            detail='IEC 62443-4-2 SL2 requires minimum 1 of each character class',
+            fix_cmd="set_login_policy(min_uppercase=1, min_lowercase=1, "
+                    "min_numeric=1, min_special=1)")
+    return _make_finding(
+        spec,
+        f"Password complexity enforced (upper>={lp.get('min_uppercase', 0)}, "
+        f"lower>={lp.get('min_lowercase', 0)}, "
+        f"digit>={lp.get('min_numeric', 0)}, "
+        f"special>={lp.get('min_special', 0)})",
+        passed=True)
+
+
+# --- sec-login-banner (pre-login authorised-use notice) -------------------
+
+@register_check('sec-login-banner')
+def check_login_banner(state, spec, config):
+    banner = state.get('get_banner')
+    if banner is None:
+        return _unable(spec)
+    pre = banner.get('pre_login', {})
+    if pre.get('enabled') and pre.get('text', '').strip():
+        return _make_finding(
+            spec,
+            f"Pre-login banner configured ({len(pre['text'])} chars)",
+            passed=True)
+    issues = []
+    if not pre.get('enabled'):
+        issues.append('pre-login banner disabled')
+    if not pre.get('text', '').strip():
+        issues.append('no banner text configured')
+    return _make_finding(
+        spec, '; '.join(issues).capitalize(),
+        detail='Authorised-use warning banner deters unauthorised access',
+        fix_cmd="set_banner(pre_login_enabled=True, "
+                "pre_login_text='Authorized use only')")
+
+
+# --- sec-signal-contact (relay monitors device/security status) -----------
+
+@register_check('sec-signal-contact')
+def check_signal_contact(state, spec, config):
+    sc = state.get('get_signal_contact')
+    if sc is None:
+        return _unable(spec)
+    # Check contact 1 (primary)
+    c1 = sc.get(1, {})
+    mode = c1.get('mode', 'manual')
+    good_modes = ('deviceState', 'deviceSecurity', 'deviceStateAndSecurity')
+    if mode in good_modes:
+        return _make_finding(
+            spec,
+            f"Signal contact 1 mode: {mode}",
+            passed=True)
+    return _make_finding(
+        spec,
+        f"Signal contact 1 mode: {mode} (should monitor device/security status)",
+        detail='Recommended: deviceStateAndSecurity for comprehensive fault relay',
+        fix_cmd="set_signal_contact(contact_id=1, "
+                "mode='deviceStateAndSecurity')")
+
+
+# --- sec-session-timeouts (idle timeouts on all mgmt interfaces) -----------
+
+@register_check('sec-session-timeouts')
+def check_session_timeouts(state, spec, config):
+    sc = state.get('get_session_config')
+    if sc is None:
+        return _unable(spec)
+    zero_timeouts = []
+    for proto in ('ssh', 'telnet', 'web', 'serial'):
+        t = sc.get(proto, {}).get('timeout', 0)
+        if t == 0:
+            zero_timeouts.append(proto)
+    if not zero_timeouts:
+        return _make_finding(
+            spec, "All management session timeouts configured",
+            passed=True)
+    return _make_finding(
+        spec,
+        f"Session timeout disabled for: {', '.join(zero_timeouts)}",
+        detail='Idle sessions without timeout risk unauthorised access',
+        fix_cmd="set_session_config(ssh_timeout=5, telnet_timeout=5, "
+                "web_timeout=5, serial_timeout=5)")
+
+
+# --- sec-ip-restrict (management access restricted by IP) ------------------
+
+@register_check('sec-ip-restrict')
+def check_ip_restrict(state, spec, config):
+    rma = state.get('get_ip_restrict')
+    if rma is None:
+        return _unable(spec)
+    if rma.get('enabled') and len(rma.get('rules', [])) > 0:
+        n = len(rma['rules'])
+        return _make_finding(
+            spec,
+            f"IP restriction enabled with {n} rule(s)",
+            passed=True)
+    issues = []
+    if not rma.get('enabled'):
+        issues.append('IP restriction disabled')
+    if not rma.get('rules'):
+        issues.append('no rules configured')
+    return _make_finding(
+        spec, '; '.join(issues).capitalize(),
+        detail='Restrict management access to trusted subnets',
+        fix_cmd="add_ip_restrict_rule(1, ip=<net>, prefix_length=<len>) "
+                "+ set_ip_restrict(enabled=True)")
+
+
+# --- sec-dns-client (DNS enabled with no servers = pointless) ---------------
+
+@register_check('sec-dns-client')
+def check_dns_client(state, spec, config):
+    dns = state.get('get_dns')
+    if dns is None:
+        return _unable(spec)
+    if not dns.get('enabled'):
+        return _make_finding(
+            spec, "DNS client disabled", passed=True)
+    if dns.get('servers'):
+        return _make_finding(
+            spec, "DNS active (servers configured)", passed=True)
+    return _make_finding(
+        spec,
+        "DNS enabled with no servers configured",
+        detail='Pointless attack surface — DNS queries go nowhere, '
+               'port open for no reason',
+        fix_cmd="set_dns(enabled=False)")
+
+
+# --- sec-poe (PoE on linkless ports) ----------------------------------------
+
+@register_check('sec-poe')
+def check_poe(state, spec, config):
+    poe = state.get('get_poe')
+    if poe is None:
+        return _unable(spec)
+    if not poe.get('enabled'):
+        return _make_finding(
+            spec, "PoE globally disabled", passed=True)
+    ports = poe.get('ports', {})
+    if not ports:
+        return _make_finding(
+            spec, "PoE enabled but no PoE ports on device",
+            passed=True)
+    # Cross-reference with interface link state
+    ifaces = state.get('get_interfaces', {})
+    linkless = []
+    for port, cfg in ports.items():
+        if not cfg.get('enabled'):
+            continue
+        iface = ifaces.get(port, {})
+        if not iface.get('is_up', True):
+            linkless.append(port)
+    if linkless:
+        return _make_finding(
+            spec,
+            f"PoE enabled on {len(linkless)} linkless port(s): "
+            + ', '.join(sorted(linkless)),
+            detail='Wasted power + physical attack surface — '
+                   'plug in a rogue device and it gets powered',
+            fix_cmd="set_poe(interface=<port>, enabled=False)")
+    return _make_finding(
+        spec, "PoE active on linked ports only", passed=True)
+
+
+# --- sec-unused-ports (admin-enabled ports with no link/neighbor) ----------
+
+@register_check('sec-unused-ports')
+def check_unused_ports(state, spec, config):
+    ifaces = state.get('get_interfaces')
+    if ifaces is None:
+        return _unable(spec)
+    # Build exclusion set: LLDP neighbors + MRP ring ports
+    exclude = set()
+    neighbors = state.get('get_lldp_neighbors')
+    if neighbors:
+        exclude.update(neighbors.keys())
+    mrp = state.get('get_mrp')
+    if mrp:
+        for domain in mrp.values() if isinstance(mrp, dict) else [mrp]:
+            for key in ('ring_port_1', 'ring_port_2'):
+                rp = domain.get(key, {}) if isinstance(domain, dict) else {}
+                iface = rp.get('interface', '') if isinstance(rp, dict) else ''
+                if iface:
+                    exclude.add(iface)
+    # Unused = admin-enabled, no link, no LLDP neighbor, not ring port
+    unused = []
+    for port, pcfg in sorted(ifaces.items()):
+        if port in exclude:
+            continue
+        if not pcfg.get('is_enabled', True):
+            continue  # already admin-disabled — good
+        if pcfg.get('is_up', False):
+            continue  # has link — in use
+        unused.append(port)
+    if unused:
+        sample = ', '.join(unused[:8])
+        suffix = (f' (+{len(unused) - 8} more)'
+                  if len(unused) > 8 else '')
+        return _make_finding(
+            spec,
+            f"{len(unused)} unused port(s) admin-enabled: {sample}{suffix}",
+            detail='Admin-disable unused ports to reduce attack surface '
+                   '— harden deferred (requires site-specific port plan)')
+    return _make_finding(
+        spec, 'No unused admin-enabled ports detected', passed=True)
+
+
+# --- sec-console-port (physical diagnostic port control) -------------------
+
+# Hardware profile: model prefix → physical port capabilities
+# Derived from Hirschy family_props.json (oob, console, aca fields)
+_HW_PROFILES = {
+    'BRS':     {'console': 'usb_c',     'aca': 'usb_c',    'oob': 'usb_c'},
+    'GRS10x':  {'console': 'usb_c',     'aca': 'usb_c',    'oob': 'usb_c'},
+    'DRAGON':  {'console': 'v24_rj45',  'aca': 'usb_a_sd', 'oob': 'ethernet_rj45'},
+    'GRS1042': {'console': 'v24_rj45',  'aca': 'usb_a_sd', 'oob': 'ethernet_rj45'},
+    'GRS10x0': {'console': 'v24_rj45',  'aca': 'usb',      'oob': None},
+    'GRS2000': {'console': 'v24_rj45',  'aca': 'microsd',  'oob': None},
+    'RSPE':    {'console': 'v24_rj11',  'aca': 'usb_a_sd', 'oob': None},
+    'RSP':     {'console': 'v24_rj11',  'aca': 'sd',       'oob': None},
+    'MSP':     {'console': 'v24_rj45',  'aca': 'usb_a_sd', 'oob': None},
+    'EAGLE40': {'console': 'v24_rj45',  'aca': 'usb',      'oob': None},
+    'OS':      {'console': 'v24_m12',   'aca': 'm12_usb',  'oob': None},
+    'OS3':     {'console': 'v24_m12',   'aca': 'm12_usb',  'oob': None},
+}
+
+
+def _resolve_hw_profile(model):
+    """Resolve model string to hardware profile via longest-prefix match."""
+    if not model:
+        return None
+    best = None
+    best_len = 0
+    for prefix, profile in _HW_PROFILES.items():
+        if model.upper().startswith(prefix.upper()) and len(prefix) > best_len:
+            best = profile
+            best_len = len(prefix)
+    return best
+
+
+@register_check('sec-console-port')
+def check_console_port(state, spec, config):
+    sc = state.get('get_session_config')
+    if sc is None:
+        return _unable(spec)
+
+    # Resolve hardware profile from model
+    device_info = config.get('_device_info', {})
+    model = device_info.get('model', '')
+    hw = _resolve_hw_profile(model)
+
+    issues = []
+
+    # Serial console: timeout should be > 0 (auto-logout)
+    serial_timeout = sc.get('serial', {}).get('timeout', 0)
+    if serial_timeout == 0:
+        issues.append('serial timeout disabled (infinite session)')
+
+    # ENVM (external non-volatile memory): should be disabled
+    envm = sc.get('envm', {})
+    if envm.get('enabled', False):
+        aca_type = hw.get('aca', 'unknown') if hw else 'unknown'
+        issues.append(f'external storage enabled ({aca_type})')
+
+    if not issues:
+        parts = [f'serial timeout={serial_timeout}m']
+        if not envm.get('enabled', True):
+            parts.append('ENVM disabled')
+        hw_note = f' [{model}]' if model else ''
+        return _make_finding(
+            spec,
+            f"Physical ports secured ({', '.join(parts)}){hw_note}",
+            passed=True)
+
+    return _make_finding(
+        spec,
+        '; '.join(issues).capitalize(),
+        detail='EDR 2.13: physical diagnostic ports must be secured — '
+               'configure serial timeout and disable external storage',
+        fix_cmd="set_session_config(serial_timeout=5, envm_enabled=False)")
+
+
+# --- sec-remote-auth (any remote auth configured?) -------------------------
+
+@register_check('sec-remote-auth')
+def check_remote_auth(state, spec, config):
+    auth = state.get('get_remote_auth')
+    if auth is None:
+        return _unable(spec)
+    active = [name for name in ('radius', 'tacacs', 'ldap')
+              if auth.get(name, {}).get('enabled')]
+    if active:
+        return _make_finding(
+            spec,
+            f"Remote authentication active: {', '.join(active).upper()}",
+            passed=True)
+    return _make_finding(
+        spec,
+        "No remote authentication configured",
+        detail='Local-only authentication — no RADIUS, TACACS+, or LDAP. '
+               'IEC 62443 CR 1.1 SL2 requires centralized authentication '
+               'for accountability and lifecycle management',
+        fix_cmd=None)
+
+
+# --- sec-user-review (local account lifecycle advisory) ---------------------
+
+@register_check('sec-user-review')
+def check_user_review(state, spec, config):
+    users = state.get('get_users')
+    if users is None:
+        return _unable(spec)
+    names = [u['name'] for u in users]
+    inactive = [u['name'] for u in users if not u.get('active')]
+    locked = [u['name'] for u in users if u.get('locked')]
+    parts = [f"{len(names)} local account(s): {', '.join(names)}"]
+    if inactive:
+        parts.append(f"inactive: {', '.join(inactive)}")
+    if locked:
+        parts.append(f"locked: {', '.join(locked)}")
+    return _make_finding(
+        spec, '; '.join(parts), passed=True,
+        detail='Advisory — review for dormant/unnecessary accounts. '
+               'IEC 62443 CR 1.3/1.4 requires account lifecycle management')
+
+
+# --- sec-user-roles (RBAC check) -------------------------------------------
+
+@register_check('sec-user-roles')
+def check_user_roles(state, spec, config):
+    users = state.get('get_users')
+    if users is None:
+        return _unable(spec)
+    # If remote auth is active, local admin-only is fine (break-glass)
+    auth = state.get('get_remote_auth')
+    if auth:
+        remote_active = any(
+            auth.get(p, {}).get('enabled')
+            for p in ('radius', 'tacacs', 'ldap'))
+        if remote_active:
+            return _make_finding(
+                spec,
+                'Remote authentication active — local accounts are '
+                'break-glass only',
+                passed=True)
+    # No remote auth: check that not ALL local users are admin
+    active_users = [u for u in users if u.get('active')]
+    if not active_users:
+        return _make_finding(
+            spec, 'No active local users found',
+            detail='Cannot assess role diversity without active users')
+    roles = {u['role'] for u in active_users}
+    all_admin = roles == {'administrator'}
+    if all_admin and len(active_users) > 1:
+        return _make_finding(
+            spec,
+            f"All {len(active_users)} active users are administrators",
+            detail='Principle of least privilege: create operator/guest '
+                   'accounts for non-admin functions',
+            fix_cmd=None)
+    if all_admin:
+        return _make_finding(
+            spec,
+            'Single admin account — consider adding operator account',
+            detail='RBAC requires role separation; add non-admin accounts '
+                   'for day-to-day operations',
+            fix_cmd=None)
+    return _make_finding(
+        spec,
+        f"Role diversity OK: {', '.join(sorted(roles))}",
+        passed=True)
+
+
+# --- sec-snmpv3-auth (all v3 users should use SHA) -------------------------
+
+@register_check('sec-snmpv3-auth')
+def check_snmpv3_auth(state, spec, config):
+    snmp = state.get('get_snmp_config')
+    if snmp is None:
+        return _unable(spec)
+    users = snmp.get('v3_users', [])
+    if not users:
+        return _make_finding(
+            spec, 'No SNMPv3 users found',
+            detail='Cannot assess authentication without user data')
+    weak = [u['name'] for u in users
+            if u.get('auth_type', '') in ('', 'md5')]
+    if not weak:
+        return _make_finding(
+            spec, "All SNMPv3 users use SHA authentication",
+            passed=True)
+    return _make_finding(
+        spec,
+        f"Weak/no auth: {', '.join(weak)}",
+        detail='MD5 is deprecated; use SHA for SNMPv3 authentication',
+        fix_cmd="snmp user <name> auth sha <pass>")
+
+
+# --- sec-snmpv3-encrypt (all v3 users should use AES) ----------------------
+
+@register_check('sec-snmpv3-encrypt')
+def check_snmpv3_encrypt(state, spec, config):
+    snmp = state.get('get_snmp_config')
+    if snmp is None:
+        return _unable(spec)
+    users = snmp.get('v3_users', [])
+    if not users:
+        return _make_finding(
+            spec, 'No SNMPv3 users found',
+            detail='Cannot assess encryption without user data')
+    weak = [u['name'] for u in users
+            if u.get('enc_type', 'none') in ('none', 'des')]
+    if not weak:
+        return _make_finding(
+            spec, "All SNMPv3 users use AES encryption",
+            passed=True)
+    return _make_finding(
+        spec,
+        f"Weak/no encryption: {', '.join(weak)}",
+        detail='DES is deprecated; use AES for SNMPv3 privacy',
+        fix_cmd="snmp user <name> auth sha <pass> priv aes <pass>")
+
+
+# --- sec-snmpv3-traps (trap service + v3 authpriv destination) --------------
+
+@register_check('sec-snmpv3-traps')
+def check_snmpv3_traps(state, spec, config):
+    snmp = state.get('get_snmp_config')
+    if snmp is None:
+        return _unable(spec)
+    issues = []
+    if not snmp.get('trap_service'):
+        issues.append('trap service disabled')
+    dests = snmp.get('trap_destinations', [])
+    v3_authpriv = [d for d in dests
+                   if d.get('security_model') == 'v3'
+                   and d.get('security_level') == 'authpriv']
+    if not v3_authpriv:
+        issues.append('no SNMPv3 authPriv trap destination')
+    if not issues:
+        return _make_finding(
+            spec,
+            f"Trap service enabled with {len(v3_authpriv)} "
+            f"v3 authPriv destination(s)",
+            passed=True)
+    return _make_finding(
+        spec, '; '.join(issues).capitalize(),
+        detail='SNMPv3 traps provide encrypted event notification',
+        fix_cmd="snmp trap add <name> <ip> auth sha <pass> priv aes <pass>")
+
+
+# --- sec-concurrent-sessions (SL2 — session limit per interface) -----------
+
+@register_check('sec-concurrent-sessions')
+def check_concurrent_sessions(state, spec, config):
+    sc = state.get('get_session_config')
+    if sc is None:
+        return _unable(spec)
+    unlimited = []
+    for proto in ('ssh', 'ssh_outbound', 'telnet', 'netconf'):
+        ms = sc.get(proto, {}).get('max_sessions')
+        if ms is not None and ms > 5:
+            unlimited.append(f"{proto}={ms}")
+    if not unlimited:
+        return _make_finding(
+            spec, "Concurrent session limits configured",
+            passed=True)
+    return _make_finding(
+        spec,
+        f"High session limits: {', '.join(unlimited)}",
+        detail='SL2 CR 2.7 requires ability to limit concurrent sessions',
+        fix_cmd="set_session_config(ssh_max_sessions=5, telnet_max_sessions=5)")
+
+
+# --- sec-crypto-ciphers (CR 4.3 — cipher depth) ----------------------------
+
+# Weak algorithm sets — anything here should be disabled for SL2 compliance
+_WEAK_TLS_VERSIONS = {'tlsv1.0', 'tlsv1.1'}
+_WEAK_TLS_CIPHERS = {
+    'tls-rsa-with-rc4-128-sha',       # RC4 — broken
+    'tls-rsa-with-aes-128-cbc-sha',   # no PFS + CBC
+}
+_WEAK_SSH_KEX = {
+    'diffie-hellman-group1-sha1',      # 768-bit DH + SHA1
+}
+_WEAK_SSH_HOST_KEY = {
+    'ssh-dss',                         # DSA deprecated
+    'ssh-rsa',                         # SHA1-based RSA
+    'ssh-rsa-cert-v01@openssh.com',    # SHA1-based RSA cert
+}
+
+
+@register_check('sec-crypto-ciphers')
+def check_crypto_ciphers(state, spec, config):
+    svc = state.get('get_services')
+    if svc is None:
+        return _unable(spec)
+    https = svc.get('https', {})
+    ssh_cfg = svc.get('ssh', {})
+    # Empty lists = SSH backend or older firmware — can't assess
+    tls_vers = https.get('tls_versions', [])
+    tls_cs = https.get('tls_cipher_suites', [])
+    ssh_kex = ssh_cfg.get('kex_algorithms', [])
+    ssh_hk = ssh_cfg.get('host_key_algorithms', [])
+    if not tls_vers and not tls_cs and not ssh_kex and not ssh_hk:
+        return _make_finding(
+            spec, 'Cipher data unavailable (SSH backend returns empty)',
+            detail='Use MOPS or SNMP protocol to assess cipher configuration')
+    issues = []
+    weak_tv = _WEAK_TLS_VERSIONS & set(tls_vers)
+    if weak_tv:
+        issues.append(f"TLS {', '.join(sorted(weak_tv))} enabled")
+    weak_tc = _WEAK_TLS_CIPHERS & set(tls_cs)
+    if weak_tc:
+        issues.append(f"weak TLS ciphers: {', '.join(sorted(weak_tc))}")
+    weak_kex = _WEAK_SSH_KEX & set(ssh_kex)
+    if weak_kex:
+        issues.append(f"weak SSH KEX: {', '.join(sorted(weak_kex))}")
+    weak_hk = _WEAK_SSH_HOST_KEY & set(ssh_hk)
+    if weak_hk:
+        issues.append(f"weak SSH host key: {', '.join(sorted(weak_hk))}")
+    if issues:
+        return _make_finding(
+            spec, '; '.join(issues),
+            detail='CR 4.3 requires strong cryptographic configuration',
+            fix_cmd="set_services(tls_versions=['tlsv1.2'], ...)")
+    return _make_finding(
+        spec, 'Strong cryptographic configuration', passed=True)
+
+
+# --- sec-https-cert (DevSec trap cause #23) --------------------------------
+
+@register_check('sec-https-cert')
+def check_https_cert(state, spec, config):
+    ds = state.get('get_devsec_status')
+    if ds is None:
+        return _unable(spec)
+    events = ds.get('status', {}).get('events', [])
+    cert_warn = any(
+        e.get('cause') == 'https-certificate-warning' for e in events)
+    if not cert_warn:
+        monitoring = ds.get('monitoring', {})
+        if not monitoring.get('https_certificate_warning', False):
+            return _make_finding(
+                spec,
+                'HTTPS cert monitor disabled — enable to assess',
+                detail='Enable hm2DevSecSenseHttpsCertWarning to detect '
+                       'factory-default certificates')
+        return _make_finding(
+            spec, "HTTPS certificate OK (no DevSec warning)",
+            passed=True)
+    return _make_finding(
+        spec,
+        'Factory-default or self-signed HTTPS certificate detected',
+        detail='Generate a device-specific certificate or install a '
+               'CA-signed certificate',
+        fix_cmd="https certificate generate")
+
+
+# --- sec-dev-mode (DevSec trap cause #32) ----------------------------------
+
+@register_check('sec-dev-mode')
+def check_dev_mode(state, spec, config):
+    ds = state.get('get_devsec_status')
+    if ds is None:
+        return _unable(spec)
+    events = ds.get('status', {}).get('events', [])
+    dev_active = any(
+        e.get('cause') == 'dev-mode-enabled' for e in events)
+    if not dev_active:
+        monitoring = ds.get('monitoring', {})
+        if not monitoring.get('dev_mode_enabled', False):
+            return _make_finding(
+                spec,
+                'Dev-mode monitor disabled — enable to assess',
+                detail='Enable hm2DevSecSenseDevModeEnabled to detect')
+        return _make_finding(
+            spec, "Development mode disabled", passed=True)
+    return _make_finding(
+        spec,
+        'Development/debug mode is enabled',
+        detail='Disable dev-mode for production deployment')
+
+
+# --- sec-secure-boot (DevSec trap cause #31) -------------------------------
+
+@register_check('sec-secure-boot')
+def check_secure_boot(state, spec, config):
+    ds = state.get('get_devsec_status')
+    if ds is None:
+        return _unable(spec)
+    events = ds.get('status', {}).get('events', [])
+    boot_warn = any(
+        e.get('cause') == 'secure-boot-disabled' for e in events)
+    if not boot_warn:
+        monitoring = ds.get('monitoring', {})
+        if not monitoring.get('secure_boot_disabled', False):
+            return _make_finding(
+                spec,
+                'Secure-boot monitor disabled — enable to assess',
+                detail='Enable hm2DevSecSenseSecureBootDisabled to detect')
+        return _make_finding(
+            spec, "Secure boot enabled", passed=True)
+    return _make_finding(
+        spec,
+        'Secure boot is disabled',
+        detail='Hardware-dependent — may require firmware reinstall')
+
+
+# --- cert-inherent helpers -------------------------------------------------
+
+def _cert_pass(state, spec, config, capability):
+    """Auto-pass for hardware capabilities proven by TÜV SL-C 2 cert.
+
+    References the device's cert from certs.json (not a copy — just
+    the cert ID and SL-C level as evidence).
+    """
+    device_info = config.get('_device_info', {})
+    model = device_info.get('model', '?')
+    certs = load_certs()
+    cert_info = resolve_cert(certs, model) if certs else None
+    if cert_info and cert_info.get('cert'):
+        cert_ref = f"{cert_info['cert']} SL-C {cert_info['sl_c']}"
+        return _make_finding(
+            spec,
+            f"{capability} — certified ({cert_ref})",
+            passed=True,
+            detail=f"Evidence: {cert_ref} covers {spec['clause']}")
+    return _make_finding(
+        spec,
+        f"{capability} — no cert found for {model}",
+        detail='Device family not in certs.json — cannot verify')
+
+
+# --- cert-hw-authenticator (CR 1.5 SL2 — certified capability) ------------
+
+@register_check('cert-hw-authenticator')
+def check_cert_hw_authenticator(state, spec, config):
+    return _cert_pass(state, spec, config,
+                      'Hardware-protected authenticator storage')
+
+
+# --- cert-hw-pubkey (CR 1.9 SL2 — certified capability) -------------------
+
+@register_check('cert-hw-pubkey')
+def check_cert_hw_pubkey(state, spec, config):
+    return _cert_pass(state, spec, config,
+                      'Hardware-protected private key storage')
+
+
+# --- cert-hw-symkey (CR 1.14 SL2 — certified capability) ------------------
+
+@register_check('cert-hw-symkey')
+def check_cert_hw_symkey(state, spec, config):
+    return _cert_pass(state, spec, config,
+                      'Hardware-protected shared key storage')
+
+
+# --- cert-memory-purge (CR 4.2 SL2 — certified capability) ----------------
+
+@register_check('cert-memory-purge')
+def check_cert_memory_purge(state, spec, config):
+    return _cert_pass(state, spec, config,
+                      'Non-persistent memory purge capability')
+
+
 # ---------------------------------------------------------------------------
 # Run all checks
 # ---------------------------------------------------------------------------
@@ -602,13 +1756,17 @@ def run_checks(state, check_defs, config, color=C, quiet=False):
     for check_id, spec in check_defs.items():
         fn = CHECK_FNS.get(check_id)
         if fn is None:
-            logging.warning("No check function for %s", check_id)
+            # Stub check — not yet implemented
+            finding = _make_finding(
+                spec, 'Not yet implemented',
+                detail=f"Requires driver method: {spec.get('getter', '?')}()")
+            findings.append(finding)
             continue
         if not quiet:
-            sl_tag = f"SL{spec.get('sl', '?')}"
             clause = spec['clause']
-            _progress(f"  {color.DIM}[{sl_tag}] {clause:<8s}"
-                      f"Checking {spec['clause_title']} ({check_id}) ...{color.RST}")
+            _log(f"CHECK {check_id}",
+                 f"{color.DIM}{clause} {spec['clause_title']}{color.RST}",
+                 color=color)
         finding = fn(state, spec, config)
         findings.append(finding)
     # Sort: failures first (by severity), then passes
@@ -663,7 +1821,8 @@ def _box_header(title, width, color):
     print(f"  {color.MG}{color.BOLD}╚{'═' * (width - 2)}╝{color.RST}")
 
 
-def print_report(findings, device_info=None, color=C):
+def print_report(findings, device_info=None, color=C, level='sl1',
+                 certs=None):
     """Print a full, nicely-formatted audit report to console."""
     W = 80  # report width
 
@@ -679,7 +1838,19 @@ def print_report(findings, device_info=None, color=C):
         print(f"  {color.BOLD}Device:{color.RST}  {ip} ({model}, {fw})")
         if hostname and hostname != ip:
             print(f"  {color.BOLD}Name:{color.RST}    {hostname}")
-    print(f"  {color.BOLD}Level:{color.RST}   SL1")
+        # Cert context
+        if certs:
+            cert_info = resolve_cert(certs, model)
+            if cert_info and cert_info.get('cert'):
+                valid = cert_info.get('valid_until', '')
+                valid_str = f", valid to {valid}" if valid else ''
+                print(f"  {color.BOLD}Cert:{color.RST}    "
+                      f"{color.CYN}{cert_info['cert']} "
+                      f"(SL-C {cert_info['sl_c']}{valid_str}){color.RST}")
+            elif cert_info and cert_info.get('note'):
+                print(f"  {color.BOLD}Cert:{color.RST}    "
+                      f"{color.DIM}{cert_info['note']}{color.RST}")
+    print(f"  {color.BOLD}Level:{color.RST}   {level}")
     print(f"  {color.BOLD}Date:{color.RST}    {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print()
 
@@ -699,8 +1870,11 @@ def print_report(findings, device_info=None, color=C):
     total = len(findings)
     passed = sum(1 for f in findings if f.passed)
     failed = total - passed
-    assessed = sum(1 for f in findings
-                   if 'Unable to assess' not in f.desc)
+    not_impl = sum(1 for f in findings
+                   if 'Not yet implemented' in f.desc)
+    assessed = total - not_impl
+    unable = sum(1 for f in findings
+                 if 'Unable to assess' in f.desc)
 
     print(f"  {'─' * W}")
     print()
@@ -709,11 +1883,14 @@ def print_report(findings, device_info=None, color=C):
                        for f in findings)
         sc = color.RED if has_crit else (color.YEL if failed else color.GRN)
         pct = passed * 100 // total
+        not_impl_str = (f" ({not_impl} not yet implemented)"
+                        if not_impl else '')
         print(f"  {color.BOLD}Score:{color.RST}  "
-              f"{sc}{passed}/{total} passed{color.RST} (SL1)")
+              f"{sc}{passed}/{total} passed{color.RST} ({level})"
+              f"{color.DIM}{not_impl_str}{color.RST}")
         print(_score_bar(passed, total, color=color))
-        if total != assessed:
-            print(f"  {color.DIM}{total - assessed} check(s) could not be "
+        if unable:
+            print(f"  {color.DIM}{unable} check(s) could not be "
                   f"assessed (driver extension needed){color.RST}")
 
     # Recommendations section
@@ -724,8 +1901,11 @@ def print_report(findings, device_info=None, color=C):
 
         auto_fixable = [f for f in failures if f.fix_cmd]
         advisory = [f for f in failures if not f.fix_cmd
-                     and 'Unable to assess' not in f.desc]
+                     and 'Unable to assess' not in f.desc
+                     and 'Not yet implemented' not in f.desc]
         unable = [f for f in failures if 'Unable to assess' in f.desc]
+        not_impl = [f for f in failures
+                     if 'Not yet implemented' in f.desc]
 
         if auto_fixable:
             print(f"  {color.BOLD}│{color.RST}")
@@ -757,6 +1937,13 @@ def print_report(findings, device_info=None, color=C):
             ids = ', '.join(f.check_id for f in unable)
             print(f"  {color.BOLD}│{color.RST}    {color.DIM}{ids}{color.RST}")
 
+        if not_impl:
+            print(f"  {color.BOLD}│{color.RST}")
+            print(f"  {color.BOLD}│  {color.DIM}Not yet implemented "
+                  f"({len(not_impl)}) — requires new driver methods:{color.RST}")
+            ids = ', '.join(f.check_id for f in not_impl)
+            print(f"  {color.BOLD}│{color.RST}    {color.DIM}{ids}{color.RST}")
+
         print(f"  {color.BOLD}│{color.RST}")
         print(f"  {color.BOLD}└{'─' * (W - 1)}┘{color.RST}")
     elif total > 0 and failed == 0:
@@ -767,7 +1954,7 @@ def print_report(findings, device_info=None, color=C):
 
 
 def print_fleet_report(all_results, failures, elapsed, color=C,
-                       numbered=False):
+                       numbered=False, level='sl1'):
     """Print fleet-wide summary report.
 
     If numbered=True, shows compact format with [N] device indices and
@@ -781,14 +1968,14 @@ def print_fleet_report(all_results, failures, elapsed, color=C,
     print()
     if numbered:
         _box_header("JUSTIN — IEC 62443-4-2 Fleet Audit", W, color)
-        print(f"  {color.DIM}{n_ok} devices  SL1  "
+        print(f"  {color.DIM}{n_ok} devices  {level}  "
               f"{datetime.now().strftime('%Y-%m-%d %H:%M')}{color.RST}")
     else:
         _box_header("JUSTIN — IEC 62443-4-2 Fleet Audit", W, color)
         print(f"  {color.BOLD}Devices:{color.RST} {n_ok} audited"
               + (f", {color.RED}{n_fail} unreachable{color.RST}"
                  if n_fail else ""))
-        print(f"  {color.BOLD}Level:{color.RST}   SL1")
+        print(f"  {color.BOLD}Level:{color.RST}   {level}")
         print(f"  {color.BOLD}Date:{color.RST}    "
               f"{datetime.now().strftime('%Y-%m-%d %H:%M')}")
     print()
@@ -923,35 +2110,64 @@ def print_fleet_report(all_results, failures, elapsed, color=C,
 # JSON / report file output
 # ---------------------------------------------------------------------------
 
-def to_json(findings, device_info=None):
-    """Return findings as JSON-serialisable dict."""
+def to_json(findings, device_info=None, level='sl1', check_defs=None,
+            evidence=None):
+    """Return findings as JSON-serialisable dict.
+
+    When check_defs is provided, enriches each finding with source,
+    vendor_ref, fix_cli, fix_webui, fix_tool, and evidence_key from
+    the spec. When evidence is provided, includes the full timestamped
+    getter results for the audit trail.
+    """
+    enriched = []
+    for f in findings:
+        d = f.to_dict()
+        if check_defs:
+            spec = check_defs.get(f.check_id, {})
+            d['source'] = spec.get('source', 'iec')
+            if spec.get('vendor_ref'):
+                d['vendor_ref'] = spec['vendor_ref']
+            if spec.get('fix_cli'):
+                d['fix_cli'] = spec['fix_cli']
+            if spec.get('fix_tool'):
+                d['fix_tool'] = spec['fix_tool']
+            if spec.get('getter'):
+                d['evidence_key'] = spec['getter']
+        enriched.append(d)
     result = {
-        'findings': [f.to_dict() for f in findings],
+        'findings': enriched,
         'timestamp': datetime.now().isoformat(),
-        'level': 'SL1',
+        'level': level,
     }
     if device_info:
         result['device'] = device_info
+    if evidence:
+        result['evidence'] = evidence
     total = len(findings)
     passed = sum(1 for f in findings if f.passed)
+    not_impl = sum(1 for f in findings
+                   if 'Not yet implemented' in f.desc)
     result['score'] = {
         'total': total,
         'passed': passed,
         'failed': total - passed,
+        'not_implemented': not_impl,
     }
     return result
 
 
-def fleet_to_json(all_results, failures):
+def fleet_to_json(all_results, failures, level='sl1', check_defs=None):
     """Return full fleet results as JSON-serialisable dict."""
     output = {
         'fleet': {},
         'failures': {ip: err for ip, err in failures},
         'timestamp': datetime.now().isoformat(),
-        'level': 'SL1',
+        'level': level,
     }
     for ip, data in all_results.items():
-        output['fleet'][ip] = to_json(data['findings'], data['device'])
+        output['fleet'][ip] = to_json(
+            data['findings'], data['device'], level, check_defs,
+            evidence=data.get('evidence'))
     return output
 
 
@@ -960,6 +2176,24 @@ def save_report(report_dict, output_path):
     os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     with open(output_path, 'w') as f:
         json.dump(report_dict, f, indent=2)
+
+
+def save_html_report(report_data, output_path, certs=None):
+    """Write a self-contained HTML report file.
+
+    Embeds report JSON and certs data into the HTML template.
+    The template uses inline CSS and JS — no external dependencies.
+    """
+    from _html_template import HTML_TEMPLATE
+    json_data = json.dumps(report_data, indent=2, default=str)
+    certs_data = json.dumps(certs or {})
+    html = HTML_TEMPLATE.format(
+        json_data=json_data,
+        certs_data=certs_data,
+        timestamp=datetime.now().strftime('%Y-%m-%d %H:%M'))
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
+    with open(output_path, 'w') as f:
+        f.write(html)
 
 
 def auto_report_path(ip=None, suffix='audit'):
@@ -994,7 +2228,7 @@ class SessionLog:
     def __init__(self, ip, output_dir=None):
         self.data = {
             'tool': 'JUSTIN',
-            'version': '0.1',
+            'version': '0.2',
             'ip': ip,
             'started': datetime.now().isoformat(),
             'device': {},
@@ -1053,23 +2287,37 @@ def check_config_saved(device, color=C):
         return True, {'saved': True, 'nvm': 'unknown'}
 
 
-def enforce_clean_config(device, ip, mode, color=C):
-    """Refuse to harden a dirty switch. Audit gets a warning. Returns True if OK."""
+def enforce_clean_config(device, ip, mode, color=C, config=None):
+    """Refuse to harden a dirty switch. Audit gets a warning. Returns True if OK.
+
+    When config['dirty_guard'] is False, dirty switches get a warning
+    instead of a hard refusal.
+    """
     saved, status = check_config_saved(device, color)
     if saved:
-        _progress(f"  {color.GRN}Config status: saved{color.RST}")
+        _log('CONFIG', f"{color.GRN}Config status: saved{color.RST}",
+             color=color)
         return True
 
     nvm_state = status.get('nvm', 'unknown')
-    if mode == 'harden':
-        print(f"\n  {color.RED}{color.BOLD}REFUSED:{color.RST} "
-              f"{ip} has unsaved config changes (NVM: {nvm_state})")
-        print(f"  {color.RED}JUSTIN will not modify an unsaved switch.{color.RST}")
-        print(f"  {color.DIM}Save the config first, then re-run.{color.RST}\n")
+    dirty_guard = True if config is None else config.get('dirty_guard', True)
+    if mode == 'harden' and dirty_guard:
+        _log('CONFIG', f"{color.RED}{color.BOLD}REFUSED: "
+             f"{ip} has unsaved config changes "
+             f"(NVM: {nvm_state}){color.RST}", color=color)
+        _log('CONFIG', f"{color.RED}JUSTIN will not modify an "
+             f"unsaved switch.{color.RST}", color=color)
+        _log('CONFIG', f"{color.DIM}Save the config first, "
+             f"then re-run.{color.RST}", color=color)
         return False
+    elif mode == 'harden':
+        _log('CONFIG', f"{color.YEL}WARNING: {ip} has unsaved changes "
+             f"(NVM: {nvm_state}) — dirty-config guard OFF, "
+             f"proceeding{color.RST}", color=color)
+        return True
     else:
-        print(f"  {color.YEL}WARNING:{color.RST} "
-              f"{ip} has unsaved config changes (NVM: {nvm_state})")
+        _log('CONFIG', f"{color.YEL}WARNING: {ip} has unsaved config "
+             f"changes (NVM: {nvm_state}){color.RST}", color=color)
         return True
 
 # ---------------------------------------------------------------------------
@@ -1189,6 +2437,230 @@ def harden_gmrp_mmrp(device, spec, config, color=C):
     return "set_services(mmrp=False)"
 
 
+@register_harden('sec-industrial-protocols')
+def harden_industrial_protocols(device, spec, config, color=C):
+    svc = device.get_services('industrial')
+    ind = svc.get('industrial', {})
+    kwargs = {}
+    for proto in ('profinet', 'modbus', 'ethernet_ip', 'iec61850'):
+        if ind.get(proto):
+            kwargs[proto] = False
+    if not kwargs:
+        return None
+    device.set_services(**kwargs)
+    return f"set_services({', '.join(f'{k}=False' for k in kwargs)})"
+
+
+@register_harden('sec-password-policy')
+def harden_password_policy(device, spec, config, color=C):
+    defaults = spec.get('harden_defaults', {})
+    device.set_login_policy(
+        min_uppercase=defaults.get('min_uppercase', 1),
+        min_lowercase=defaults.get('min_lowercase', 1),
+        min_numeric=defaults.get('min_numeric', 1),
+        min_special=defaults.get('min_special', 1),
+    )
+    return ("set_login_policy(min_uppercase=1, min_lowercase=1, "
+            "min_numeric=1, min_special=1)")
+
+
+@register_harden('sec-login-banner')
+def harden_login_banner(device, spec, config, color=C):
+    banner_text = config.get('login_banner',
+                             'This system is for authorized use only.')
+    device.set_banner(pre_login_enabled=True, pre_login_text=banner_text)
+    return f"set_banner(pre_login_enabled=True, pre_login_text='{banner_text}')"
+
+
+@register_harden('sec-signal-contact')
+def harden_signal_contact(device, spec, config, color=C):
+    device.set_signal_contact(contact_id=1, mode='deviceStateAndSecurity')
+    return "set_signal_contact(contact_id=1, mode='deviceStateAndSecurity')"
+
+
+@register_harden('sec-session-timeouts')
+def harden_session_timeouts(device, spec, config, color=C):
+    t = spec.get('harden_defaults', {}).get('timeout', 5)
+    device.set_session_config(
+        ssh_timeout=t, ssh_outbound_timeout=t,
+        telnet_timeout=t, web_timeout=t, serial_timeout=t)
+    return (f"set_session_config(ssh_timeout={t}, ssh_outbound_timeout={t}, "
+            f"telnet_timeout={t}, web_timeout={t}, serial_timeout={t})")
+
+
+@register_harden('sec-ip-restrict')
+def harden_ip_restrict(device, spec, config, color=C):
+    subnet = config.get('mgmt_subnet')
+    if not subnet:
+        logger.warning(
+            "Set mgmt_subnet in config to enable "
+            "IP restriction hardening")
+        return None
+    if '/' in subnet:
+        net, prefix = subnet.rsplit('/', 1)
+        prefix_len = int(prefix)
+    else:
+        net = subnet
+        prefix_len = 24
+    device.add_ip_restrict_rule(
+        index=1, ip=net, prefix_length=prefix_len)
+    device.set_ip_restrict(enabled=True)
+    return (f"add_ip_restrict_rule(1, ip='{net}', "
+            f"prefix_length={prefix_len}) + "
+            f"set_ip_restrict(enabled=True)")
+
+
+@register_harden('sec-dns-client')
+def harden_dns_client(device, spec, config, color=C):
+    device.set_dns(enabled=False)
+    return "set_dns(enabled=False)"
+
+
+@register_harden('sec-poe')
+def harden_poe(device, spec, config, color=C):
+    poe = device.get_poe()
+    ifaces = device.get_interfaces()
+    disabled = []
+    for port, cfg in poe.get('ports', {}).items():
+        if cfg.get('enabled') and not ifaces.get(port, {}).get('is_up', True):
+            device.set_poe(interface=port, enabled=False)
+            disabled.append(port)
+    if disabled:
+        return f"set_poe(enabled=False) on {', '.join(sorted(disabled))}"
+    return "no linkless PoE ports found"
+
+
+@register_harden('sec-concurrent-sessions')
+def harden_concurrent_sessions(device, spec, config, color=C):
+    ms = spec.get('harden_defaults', {}).get('max_sessions', 5)
+    device.set_session_config(
+        ssh_max_sessions=ms, telnet_max_sessions=ms)
+    return (f"set_session_config(ssh_max_sessions={ms}, "
+            f"telnet_max_sessions={ms})")
+
+
+@register_harden('sec-crypto-ciphers')
+def harden_crypto_ciphers(device, spec, config, color=C):
+    svc = device.get_services()
+    https = svc.get('https', {})
+    ssh_cfg = svc.get('ssh', {})
+    kwargs = {}
+    # TLS versions — keep only 1.2+
+    tls_vers = https.get('tls_versions', [])
+    if tls_vers:
+        strong_tv = [v for v in tls_vers if v not in _WEAK_TLS_VERSIONS]
+        if len(strong_tv) < len(tls_vers):
+            kwargs['tls_versions'] = strong_tv if strong_tv else ['tlsv1.2']
+    # TLS cipher suites — remove weak
+    tls_cs = https.get('tls_cipher_suites', [])
+    if tls_cs:
+        strong_tc = [c for c in tls_cs if c not in _WEAK_TLS_CIPHERS]
+        if len(strong_tc) < len(tls_cs):
+            kwargs['tls_cipher_suites'] = strong_tc
+    # SSH KEX — remove weak
+    ssh_kex = ssh_cfg.get('kex_algorithms', [])
+    if ssh_kex:
+        strong_kex = [k for k in ssh_kex if k not in _WEAK_SSH_KEX]
+        if len(strong_kex) < len(ssh_kex):
+            kwargs['ssh_kex'] = strong_kex
+    # SSH host key — remove weak
+    ssh_hk = ssh_cfg.get('host_key_algorithms', [])
+    if ssh_hk:
+        strong_hk = [k for k in ssh_hk if k not in _WEAK_SSH_HOST_KEY]
+        if len(strong_hk) < len(ssh_hk):
+            kwargs['ssh_host_key'] = strong_hk
+    if not kwargs:
+        return None
+    device.set_services(**kwargs)
+    parts = []
+    for k, v in kwargs.items():
+        parts.append(f"{k}={v}")
+    return f"set_services({', '.join(parts)})"
+
+
+@register_harden('sys-default-passwords')
+def harden_default_passwords(device, spec, config, color=C):
+    new_pw = config.get('harden_password')
+    if not new_pw:
+        return None  # requires harden_password config key
+    users = device.get_users()
+    defaults = [u['name'] for u in users if u.get('default_password')]
+    if not defaults:
+        return "no default-password users found"
+    changed = []
+    for name in defaults:
+        device.set_user(name, password=new_pw)
+        changed.append(name)
+    return f"set_user(password=<new>) on {', '.join(changed)}"
+
+
+@register_harden('sec-snmpv3-auth')
+def harden_snmpv3_auth(device, spec, config, color=C):
+    snmp_pw = config.get('snmp_password')
+    if not snmp_pw:
+        return None  # requires snmp_password config key
+    users = device.get_users()
+    weak = [u['name'] for u in users
+            if u.get('snmp_auth') in ('', 'md5') and u.get('active')]
+    if not weak:
+        return "all active users already use SHA authentication"
+    upgraded = []
+    for name in weak:
+        device.set_user(name, snmp_auth_type='sha',
+                        snmp_auth_password=snmp_pw)
+        upgraded.append(name)
+    return (f"set_user(snmp_auth_type='sha') on "
+            f"{', '.join(upgraded)}")
+
+
+@register_harden('sec-snmpv3-encrypt')
+def harden_snmpv3_encrypt(device, spec, config, color=C):
+    snmp_pw = config.get('snmp_password')
+    if not snmp_pw:
+        return None  # requires snmp_password config key
+    users = device.get_users()
+    weak = [u['name'] for u in users
+            if u.get('snmp_enc') in ('none', 'des') and u.get('active')]
+    if not weak:
+        return "all active users already use AES encryption"
+    upgraded = []
+    for name in weak:
+        device.set_user(name, snmp_enc_type='aes128',
+                        snmp_enc_password=snmp_pw)
+        upgraded.append(name)
+    return (f"set_user(snmp_enc_type='aes128') on "
+            f"{', '.join(upgraded)}")
+
+
+@register_harden('sec-snmpv3-traps')
+def harden_snmpv3_traps(device, spec, config, color=C):
+    trap_ip = config.get('trap_dest_ip')
+    if not trap_ip:
+        return None  # requires trap_dest_ip config key
+    snmp = device.get_snmp_config()
+    # Check if trap service is enabled
+    if not snmp.get('trap_service'):
+        device.set_snmp_config(trap_service=True)
+    # Check for existing v3 authpriv destination to this IP
+    dests = snmp.get('trap_destinations', [])
+    existing = [d for d in dests
+                if d.get('security_model') == 'v3'
+                and d.get('security_level') == 'authpriv'
+                and trap_ip in d.get('address', '')]
+    if existing:
+        svc_msg = " (trap service was disabled)" if not snmp.get('trap_service') else ""
+        return (f"v3 authPriv destination to {trap_ip} already "
+                f"exists{svc_msg}")
+    # Add v3 authpriv trap destination
+    name = f"justin_{trap_ip.replace('.', '_')}"
+    device.add_snmp_trap_dest(
+        name, trap_ip, security_model='v3',
+        security_name='admin', security_level='authpriv')
+    svc_msg = " + enabled trap service" if not snmp.get('trap_service') else ""
+    return (f"add_snmp_trap_dest('{name}', '{trap_ip}', "
+            f"v3/admin/authpriv){svc_msg}")
+
+
 def _make_state_snapshot(state):
     """Deep-copy state dict for before/after comparison (JSON-safe)."""
     try:
@@ -1227,6 +2699,7 @@ def _do_snapshot(device, name):
 
     Downloads the active NVM profile, uploads it under a new name.
     Collision-avoidant (appends -1, -2, etc. if name exists).
+    Retry with escalating delays if NVM hasn't settled after save.
     Returns the final snapshot name.
     """
     profiles = device.get_profiles()
@@ -1245,8 +2718,34 @@ def _do_snapshot(device, name):
         final = f'{name}-{n}'
 
     nvm_cfg = device.get_config(profile=active_name, source='nvm')
-    device.load_config(nvm_cfg['running'], profile=final, destination='nvm')
-    return final
+
+    # NVM may still be settling after save_config(). Retry with
+    # escalating delays: 0s → 5s → 7.5s → ask user.
+    delays = [0, 5, 7.5]
+    last_err = None
+    for i, delay in enumerate(delays):
+        if delay:
+            time.sleep(delay)
+        try:
+            device.load_config(nvm_cfg['running'], profile=final,
+                               destination='nvm')
+            return final
+        except Exception as e:
+            last_err = e
+            if i < len(delays) - 1:
+                logging.debug("Snapshot upload attempt %d failed, "
+                              "retrying in %.0fs", i + 1, delays[i + 1])
+
+    # All retries failed — ask user
+    print(f"\n  NVM still busy after {sum(delays):.0f}s.")
+    ans = input("  Wait 15s and retry? [Y/n]: ").strip().lower()
+    if ans in ('', 'y', 'yes'):
+        time.sleep(15)
+        nvm_cfg = device.get_config(profile=active_name, source='nvm')
+        device.load_config(nvm_cfg['running'], profile=final,
+                           destination='nvm')
+        return final
+    raise last_err
 
 
 def _worker_save_connect(driver, config, ip):
@@ -1281,12 +2780,18 @@ def _worker_snapshot_connect(driver, config, ip, name):
 
 def harden_device(device, findings, check_defs, config, dry_run=True,
                   save=False, color=C, state_before=None,
-                  gather_fn=None, watchdog_seconds=None, session=None):
+                  gather_fn=None, watchdog_seconds=None, session=None,
+                  snapshot_name=None):
     """Apply remediation for failed findings. Returns (applied, changes_log, state_diff).
 
     The JUSTIN way: record everything. Before/after state. Every call logged.
     Watchdog safety net: start timer before changes, stop on success,
     auto-revert on failure/timeout.
+
+    When snapshot_name is provided and protocol is MOPS, creates a
+    pre-harden snapshot ({name}-pre) before applying any changes so the
+    exact state before JUSTIN touched the switch is preserved.
+    The caller creates the post-harden snapshot ({name}-post) after save.
     """
     fixable = [f for f in findings
                if not f.passed and f.check_id in HARDEN_DISPATCH]
@@ -1298,14 +2803,38 @@ def harden_device(device, findings, check_defs, config, dry_run=True,
     if not dry_run:
         try:
             config_backup = device.get_config()
-            _progress(f"  {color.DIM}Config backup captured{color.RST}")
+            _log('CONFIG', f"{color.DIM}Config backup captured{color.RST}",
+                 color=color)
             if session:
                 session.update(config_backup='captured (get_config)')
         except Exception:
-            _progress(f"  {color.DIM}Config backup not available "
-                      f"(SSH-only feature){color.RST}")
+            _log('CONFIG', f"{color.DIM}Config backup not available "
+                 f"(SSH-only feature){color.RST}", color=color)
             if session:
                 session.update(config_backup='unavailable')
+
+    # Pre-harden snapshot (the "before" in before/after)
+    if (snapshot_name and not dry_run
+            and config.get('protocol') == 'mops'
+            and _is_valid_profile_name(snapshot_name)):
+        pre_name = f'{snapshot_name}-pre'
+        _log('SNAPSHOT', f"'{pre_name}' (pre-harden) ... ",
+             end='', flush=True, color=color)
+        try:
+            pre_final = _do_snapshot(device, pre_name)
+            if pre_final != pre_name:
+                print(f"{color.GRN}OK (as '{pre_final}'){color.RST}")
+            else:
+                print(f"{color.GRN}OK{color.RST}")
+            if session:
+                session.add_change({
+                    'check_id': '_snapshot_pre',
+                    'action': f"snapshot('{pre_final}')",
+                    'result': 'applied',
+                    'timestamp': datetime.now().isoformat(),
+                })
+        except Exception as e:
+            print(f"{color.RED}FAIL ({e}){color.RST}")
 
     # Watchdog safety net
     watchdog_active = False
@@ -1313,14 +2842,15 @@ def harden_device(device, findings, check_defs, config, dry_run=True,
         try:
             device.start_watchdog(watchdog_seconds)
             watchdog_active = True
-            print(f"  {color.CYN}Watchdog started: {watchdog_seconds}s "
-                  f"rollback timer{color.RST}")
+            _log('WATCHDOG', f"{color.CYN}Started: {watchdog_seconds}s "
+                 f"rollback timer{color.RST}", color=color)
             if session:
                 session.update(watchdog={
                     'started': True, 'seconds': watchdog_seconds,
                     'stopped': False})
         except Exception as e:
-            print(f"  {color.YEL}Watchdog unavailable: {e}{color.RST}")
+            _log('WATCHDOG', f"{color.YEL}Unavailable: {e}{color.RST}",
+                 color=color)
             if session:
                 session.update(watchdog={'started': False, 'error': str(e)})
 
@@ -1334,8 +2864,9 @@ def harden_device(device, findings, check_defs, config, dry_run=True,
         ts = datetime.now().isoformat()
 
         if dry_run:
-            print(f"    {color.CYN}[DRY-RUN]{color.RST} "
-                  f"{f.check_id}: {f.fix_cmd or '?'}")
+            _log(f"HARDEN {f.check_id}",
+                 f"{color.CYN}[DRY-RUN]{color.RST} {f.fix_cmd or '?'}",
+                 color=color)
             entry = {
                 'check_id': f.check_id,
                 'action': f.fix_cmd or '?',
@@ -1348,7 +2879,8 @@ def harden_device(device, findings, check_defs, config, dry_run=True,
                 session.add_change(entry)
             continue
 
-        print(f"    {f.check_id}: ", end='', flush=True)
+        _log(f"HARDEN {f.check_id}", '', end='', flush=True,
+             color=color)
         try:
             result = fn(device, spec, config, color)
             if result is None:
@@ -1389,32 +2921,49 @@ def harden_device(device, findings, check_defs, config, dry_run=True,
     # Before/after state diff
     state_diff = []
     if not dry_run and applied and state_before is not None and gather_fn:
-        _progress(f"\n  {color.DIM}Re-gathering state for before/after diff ...{color.RST}")
+        _log('REGATHER', f"{color.DIM}Re-gathering state for "
+             f"before/after diff ...{color.RST}", color=color)
         state_after = gather_fn()
         snap_after = _make_state_snapshot(state_after)
         state_diff = _diff_states(state_before, snap_after)
         if state_diff:
-            print(f"\n  {color.BOLD}State changes:{color.RST}")
             for d in state_diff:
-                print(f"    {color.CYN}{d['getter']}{color.RST}: changed")
+                _log('DIFF', f"{color.CYN}{d['getter']}{color.RST}: "
+                     f"changed", color=color)
+        elif applied:
+            _log('DIFF', f"{color.YEL}WARNING: {len(applied)} fix(es) "
+                 f"reported OK but no state change detected{color.RST}",
+                 color=color)
         if session:
             session.update(state_after=snap_after, state_diff=state_diff)
 
-    # Stop watchdog on success (confirmed changes)
-    if watchdog_active and applied:
+    # Stop watchdog — only if no failures occurred (partial config = rollback)
+    has_failures = any(e.get('result') == 'failed' for e in changes_log)
+    if watchdog_active and applied and not has_failures:
         try:
             device.stop_watchdog()
-            print(f"  {color.GRN}Watchdog stopped (changes confirmed){color.RST}")
+            _log('WATCHDOG', f"{color.GRN}Stopped (changes "
+                 f"confirmed){color.RST}", color=color)
             if session:
                 session.update(watchdog={
                     'started': True, 'seconds': watchdog_seconds,
                     'stopped': True})
         except Exception as e:
-            print(f"  {color.YEL}WARNING: Watchdog stop failed: {e} "
-                  f"— timer still running!{color.RST}")
+            _log('WATCHDOG', f"{color.YEL}WARNING: Stop failed: {e} "
+                 f"— timer still running!{color.RST}", color=color)
+    elif watchdog_active and has_failures:
+        n_failed = sum(1 for e in changes_log
+                       if e.get('result') == 'failed')
+        _log('WATCHDOG', f"{color.YEL}NOT stopped — {n_failed} fix(es) "
+             f"failed, allowing rollback{color.RST}", color=color)
+        if session:
+            session.update(watchdog={
+                'started': True, 'seconds': watchdog_seconds,
+                'stopped': False, 'reason': 'partial_failure'})
 
     if save and not dry_run and applied:
-        print(f"\n  Saving config to NVM ... ", end='', flush=True)
+        _log('SAVE', 'Saving config to NVM ... ', end='', flush=True,
+             color=color)
         try:
             device.save_config()
             print(f"{color.GRN}OK{color.RST}")
@@ -1450,7 +2999,7 @@ def harden_device(device, findings, check_defs, config, dry_run=True,
 def audit_device(driver, config, ip, check_defs, color=C):
     """Connect to a single device, gather state, run checks.
 
-    Returns (ip, device, device_info, findings, state, error).
+    Returns (ip, device, device_info, findings, state, evidence, error).
     Device is left open so callers can harden after audit.
     """
     device = None
@@ -1476,17 +3025,19 @@ def audit_device(driver, config, ip, check_defs, color=C):
             'os_version': facts.get('os_version', '?'),
         }
 
-        state = gather(device, check_defs, color)
+        state, evidence = gather(device, check_defs, color)
+        # Inject device/cert context for cert-inherent check functions
+        config['_device_info'] = device_info
         findings = run_checks(state, check_defs, config, color)
 
-        return ip, device, device_info, findings, state, None
+        return ip, device, device_info, findings, state, evidence, None
     except Exception as e:
         if device:
             try:
                 device.close()
             except Exception:
                 pass
-        return ip, None, None, None, None, str(e)
+        return ip, None, None, None, None, None, str(e)
 
 
 def worker_audit(driver, config, ip, check_defs):
@@ -1520,11 +3071,21 @@ def worker_audit(driver, config, ip, check_defs):
             if spec.get('getter'):
                 getters.add(spec['getter'])
         state = {}
+        evidence = {}
         for getter_name in sorted(getters):
+            ts = datetime.now().isoformat()
             try:
-                state[getter_name] = getattr(device, getter_name)()
+                result = getattr(device, getter_name)()
+                state[getter_name] = result
+                evidence[getter_name] = {
+                    'gathered_at': ts,
+                    'data': json.loads(json.dumps(result, default=str)),
+                }
             except Exception:
                 state[getter_name] = None
+                evidence[getter_name] = {
+                    'gathered_at': ts, 'error': 'getter failed',
+                }
 
         # Run checks silently
         findings = []
@@ -1532,13 +3093,18 @@ def worker_audit(driver, config, ip, check_defs):
             fn = CHECK_FNS.get(check_id)
             if fn:
                 findings.append(fn(state, spec, config))
+            else:
+                findings.append(_make_finding(
+                    spec, 'Not yet implemented',
+                    detail=f"Requires driver method: "
+                           f"{spec.get('getter', '?')}()"))
         findings.sort(key=lambda f: (
             f.passed, SEVERITY_ORDER.get(f.severity, 9), f.check_id))
 
         device.close()
-        return ip, device_info, findings, None
+        return ip, device_info, findings, evidence, None
     except Exception as e:
-        return ip, None, None, str(e)
+        return ip, None, None, None, str(e)
     finally:
         if device:
             try:
@@ -1588,34 +3154,36 @@ def harden_from_report(driver, config, report_data, check_defs,
 
             # Dirty-config guard
             if not dry_run:
-                if not enforce_clean_config(device, ip, 'harden', color):
+                if not enforce_clean_config(device, ip, 'harden', color, config=config):
                     continue
 
             # Gather state for before/after
-            state = gather(device, check_defs, color)
+            state, _ev = gather(device, check_defs, color)
             snap_before = _make_state_snapshot(state)
-            gather_fn = lambda d=device: gather(d, check_defs, color)
+            gather_fn = lambda d=device: gather(d, check_defs, color)[0]
 
             session = SessionLog(ip)
-            session.update(mode='harden-from-report')
+            session.update(mode='harden-from-report', evidence=_ev)
 
             applied, changes_log, state_diff = harden_device(
                 device, findings, check_defs, config,
                 dry_run=dry_run, save=save, color=color,
                 state_before=snap_before, gather_fn=gather_fn,
-                watchdog_seconds=watchdog_seconds, session=session)
+                watchdog_seconds=watchdog_seconds, session=session,
+                snapshot_name=snapshot_name)
 
-            # Snapshot per device
+            # Post-harden snapshot per device
             if (snapshot_name and not dry_run and applied
                     and save and config['protocol'] == 'mops'
                     and _is_valid_profile_name(snapshot_name)):
-                print(f"  Snapshot '{snapshot_name}' ... ",
-                      end='', flush=True)
+                post_name = f'{snapshot_name}-post'
+                _log('SNAPSHOT', f"'{post_name}' (post-harden) ... ",
+                     end='', flush=True, color=color)
                 try:
-                    final = _do_snapshot(device, snapshot_name)
+                    final = _do_snapshot(device, post_name)
                     print(f"{color.GRN}OK{color.RST}")
                     session.add_change({
-                        'check_id': '_snapshot',
+                        'check_id': '_snapshot_post',
                         'action': f"snapshot('{final}')",
                         'result': 'applied',
                         'timestamp': datetime.now().isoformat(),
@@ -1624,10 +3192,12 @@ def harden_from_report(driver, config, report_data, check_defs,
                     print(f"{color.RED}FAIL ({e}){color.RST}")
 
             session.finish()
-            _progress(f"  {color.DIM}Session: {session.path}{color.RST}")
+            _log('SESSION', f"{color.DIM}{session.path}{color.RST}",
+                 color=color)
             device.close()
         except Exception as e:
-            print(f"  {color.RED}FAIL: {e}{color.RST}")
+            _log('CONNECT', f"{color.RED}FAIL: {e}{color.RST}",
+                 color=color)
         finally:
             if device:
                 try:
@@ -1690,18 +3260,221 @@ def _parse_selection(raw, max_val):
     return indices
 
 
+# ---------------------------------------------------------------------------
+# Interactive harden input collection
+# ---------------------------------------------------------------------------
+
+# Maps check_id → list of required inputs.  Each input dict:
+#   config_key: key in config dict to store the value
+#   label:      prompt text shown to operator
+#   secret:     True → getpass (no echo) + double-confirm
+#   shared:     True → same config_key used by multiple checks (prompt once)
+HARDEN_PROMPTS = {
+    'sys-default-passwords': [{
+        'config_key': 'harden_password',
+        'label': 'New password for default-password users',
+        'secret': True,
+    }],
+    'sec-snmpv3-auth': [{
+        'config_key': 'snmp_password',
+        'label': 'SNMPv3 rekey password (auth + encrypt)',
+        'secret': True,
+        'shared': True,
+    }],
+    'sec-snmpv3-encrypt': [{
+        'config_key': 'snmp_password',
+        'label': 'SNMPv3 rekey password (auth + encrypt)',
+        'secret': True,
+        'shared': True,
+    }],
+    'sec-logging': [{
+        'config_key': 'syslog_server',
+        'label': 'Syslog server IP(s)',
+        'secret': False,
+    }],
+    'sec-time-sync': [{
+        'config_key': 'ntp_server',
+        'label': 'NTP server IP(s)',
+        'secret': False,
+    }],
+    'sec-snmpv3-traps': [{
+        'config_key': 'trap_dest_ip',
+        'label': 'SNMPv3 trap destination IP',
+        'secret': False,
+    }],
+}
+
+
+def _prompt_value(label, secret=False, color=C):
+    """Prompt for a single value.  Returns value or None on empty/quit.
+
+    For secrets: getpass (no echo) + double-confirm.  Mismatch re-prompts
+    once, then skips.  Empty input = skip.
+    For plain text: input() with empty = skip.
+    """
+    if secret:
+        val = getpass.getpass(
+            f'  {color.GRN}\u25b8{color.RST} {label} '
+            f'{color.DIM}(empty=skip){color.RST}: ')
+        if not val:
+            return None
+        confirm = getpass.getpass(
+            f'  {color.GRN}\u25b8{color.RST} Confirm: ')
+        if val != confirm:
+            print(f'  {color.YEL}Mismatch — try again.{color.RST}')
+            val = getpass.getpass(
+                f'  {color.GRN}\u25b8{color.RST} {label}: ')
+            if not val:
+                return None
+            confirm = getpass.getpass(
+                f'  {color.GRN}\u25b8{color.RST} Confirm: ')
+            if val != confirm:
+                print(f'  {color.RED}Mismatch — skipping.{color.RST}')
+                return None
+        return val
+    else:
+        val = input(
+            f'  {color.GRN}\u25b8{color.RST} {label} '
+            f'{color.DIM}(empty=skip){color.RST}: ').strip()
+        return val or None
+
+
+def _collect_harden_inputs(to_fix, config, device_ips=None, color=C):
+    """Collect config values needed by fixable findings.
+
+    Interactive S/P/Q flow for checks that need operator input.
+    Populates config dict (site-wide) or returns per_device dict.
+
+    Args:
+        to_fix: list of Finding objects (or check_id strings) to harden.
+        config: config dict — site-wide values are stored here directly.
+        device_ips: list of IP strings for per-device mode (None = single).
+        color: ANSI color object.
+
+    Returns:
+        (skip_checks, per_device) where:
+        - skip_checks: set of check_ids the operator chose to skip entirely.
+        - per_device: dict of {ip: {config_key: value}} for per-device values.
+          Empty if site-wide or single-device mode.
+    """
+    check_ids = set()
+    for f in to_fix:
+        cid = f if isinstance(f, str) else f.check_id
+        check_ids.add(cid)
+
+    # Figure out which config keys we need to prompt for
+    needed = []  # list of (check_id, prompt_dict)
+    prompted_keys = set()  # avoid duplicate prompts for shared keys
+    for cid in sorted(check_ids):
+        prompts = HARDEN_PROMPTS.get(cid, [])
+        for p in prompts:
+            key = p['config_key']
+            if config.get(key):
+                continue  # already have it (from CLI or previous prompt)
+            if key in prompted_keys:
+                continue  # shared key already collected this round
+            needed.append((cid, p))
+            prompted_keys.add(key)
+
+    if not needed:
+        return set(), {}
+
+    skip_checks = set()
+    per_device = {}
+
+    # Group by config_key for display
+    print(f'\n  {color.MG}{color.BOLD}\u2500\u2500 Input Required '
+          f'\u2500\u2500{color.RST}')
+
+    for cid, p in needed:
+        key = p['config_key']
+        label = p['label']
+        secret = p.get('secret', False)
+
+        # Find all check_ids that share this key (including deduplicated)
+        related = [c for c in check_ids
+                   if any(pp['config_key'] == key
+                          for pp in HARDEN_PROMPTS.get(c, []))]
+        if len(related) > 1:
+            check_label = ' + '.join(related)
+        else:
+            check_label = cid
+
+        print(f'\n  {color.CYN}{check_label}{color.RST}'
+              f' \u2014 {label}')
+
+        if device_ips and len(device_ips) > 1:
+            # Fleet mode: offer S/P/Q
+            scope = input(
+                f'  {color.GRN}\u25b8{color.RST} '
+                f'{color.CYN}[S]{color.RST}ite-wide  '
+                f'{color.CYN}[P]{color.RST}er-device  '
+                f'{color.CYN}[Q]{color.RST}uit?  '
+            ).strip().lower()
+
+            if scope in ('q', 'quit'):
+                # Skip all checks that depend on this key
+                for rc in related:
+                    skip_checks.add(rc)
+                print(f'  {color.DIM}Skipped.{color.RST}')
+                continue
+
+            if scope in ('p', 'per-device'):
+                # Prompt per device with Q to skip individual
+                for ip in device_ips:
+                    print(f'    {color.DIM}{ip}{color.RST}')
+                    val = _prompt_value(label, secret, color)
+                    if val is None:
+                        # Empty input = skip this device
+                        print(f'    {color.DIM}Skipped {ip}.{color.RST}')
+                        continue
+                    per_device.setdefault(ip, {})[key] = val
+                continue
+
+            # Default: site-wide (S or anything else)
+            val = _prompt_value(label, secret, color)
+            if val:
+                config[key] = val
+            else:
+                for rc in related:
+                    skip_checks.add(rc)
+                print(f'  {color.DIM}Skipped.{color.RST}')
+        else:
+            # Single device: prompt with Q = empty/skip
+            val = _prompt_value(label, secret, color)
+            if val:
+                config[key] = val
+            else:
+                for rc in related:
+                    skip_checks.add(rc)
+                print(f'  {color.DIM}Skipped.{color.RST}')
+
+    return skip_checks, per_device
+
+
 def _igather(device, check_defs):
-    """Gather state with interactive progress bar. Returns state dict."""
+    """Gather state with interactive progress bar.
+
+    Returns (state, evidence) — same contract as gather().
+    """
     getters = sorted(set(
         s['getter'] for s in check_defs.values() if s.get('getter')))
     state = {}
+    evidence = {}
     for i, g in enumerate(getters, 1):
         _ibar(i, len(getters), g + '()')
+        ts = datetime.now().isoformat()
         try:
-            state[g] = getattr(device, g)()
+            result = getattr(device, g)()
+            state[g] = result
+            evidence[g] = {
+                'gathered_at': ts,
+                'data': json.loads(json.dumps(result, default=str)),
+            }
         except Exception:
             state[g] = None
-    return state
+            evidence[g] = {'gathered_at': ts, 'error': 'getter failed'}
+    return state, evidence
 
 
 def _phase4_exit(device, session, config, color=C):
@@ -1721,15 +3494,19 @@ def _phase4_exit(device, session, config, color=C):
     print(f'  {color.DIM}{len(applied)} change(s) applied{color.RST}')
 
     # Save to NVM
-    save_raw = input(
-        f'  {color.GRN}▸{color.RST} Save to NVM? '
-        f'{color.DIM}[Y/n]{color.RST}: ').strip().lower()
+    if config.get('auto_save'):
+        print(f'  {color.CYN}Auto-save enabled{color.RST}')
+        save_raw = 'y'
+    else:
+        save_raw = input(
+            f'  {color.GRN}▸{color.RST} Save to NVM? '
+            f'{color.DIM}[Y/n]{color.RST}: ').strip().lower()
     if save_raw in ('n', 'no'):
         print(f'  {color.YEL}Changes NOT saved — '
               f'will revert on reboot{color.RST}')
         return
 
-    print(f'  Saving to NVM ... ', end='', flush=True)
+    _log('SAVE', 'Saving config to NVM ... ', end='', flush=True, color=color)
     try:
         device.save_config()
         print(f'{color.GRN}OK{color.RST}')
@@ -1747,14 +3524,35 @@ def _phase4_exit(device, session, config, color=C):
     if config.get('protocol') != 'mops':
         return
 
-    snap_raw = input(
-        f'  {color.GRN}▸{color.RST} Create snapshot? '
-        f'{color.DIM}[Y/n]{color.RST}: ').strip().lower()
-    if snap_raw in ('n', 'no'):
-        return
+    snapshot_mode = config.get('snapshot', 'off')
 
-    ts = datetime.now().strftime('%Y%m%d')
-    default_name = f'SL1-{ts}'
+    # If snapshot mode was set in setup, skip the prompt
+    if snapshot_mode == 'off':
+        snap_raw = input(
+            f'  {color.GRN}▸{color.RST} Create snapshot? '
+            f'{color.DIM}[n]{color.RST} '
+            f'{color.CYN}y{color.RST}/{color.CYN}n{color.RST}: '
+            ).strip().lower()
+        if snap_raw not in ('y', 'yes'):
+            return
+        # Ask mode since they opted in manually
+        print(f'  {color.DIM}post = after changes, '
+              f'pre+post = before AND after{color.RST}')
+        mode_raw = input(
+            f'  {color.GRN}▸{color.RST} Snapshot mode '
+            f'{color.DIM}[post]{color.RST} '
+            f'post/pre+post: ').strip().lower()
+        snapshot_mode = mode_raw if mode_raw in ('post', 'pre+post') else 'post'
+    else:
+        print(f'  {color.CYN}Snapshot: {snapshot_mode}{color.RST}')
+
+    # Use the pre-snapshot base name if one was created, so
+    # pre+post pairs always share the same base name.
+    default_name = config.get('_snapshot_base')
+    if not default_name:
+        ts = datetime.now().strftime('%Y%m%d')
+        level = config.get('level', 'sl1').upper().replace(',', '-')
+        default_name = f'{level}-{ts}'
     name = input(
         f'  {color.GRN}▸{color.RST} Snapshot name '
         f'{color.DIM}[{default_name}]{color.RST}: ').strip()
@@ -1766,15 +3564,18 @@ def _phase4_exit(device, session, config, color=C):
               f'hyphens, underscores){color.RST}')
         return
 
-    print(f"  Snapshot '{name}' ... ", end='', flush=True)
+    # Post-harden snapshot (after changes — the saved state)
+    post_name = f'{name}-post'
+    _log('SNAPSHOT', f"'{post_name}' (post-harden) ... ",
+         end='', flush=True, color=color)
     try:
-        final = _do_snapshot(device, name)
-        if final != name:
+        final = _do_snapshot(device, post_name)
+        if final != post_name:
             print(f"{color.GRN}OK (as '{final}'){color.RST}")
         else:
             print(f'{color.GRN}OK{color.RST}')
         session.add_change({
-            'check_id': '_snapshot',
+            'check_id': '_snapshot_post',
             'action': f"snapshot('{final}')",
             'result': 'applied',
             'timestamp': datetime.now().isoformat(),
@@ -1784,13 +3585,13 @@ def _phase4_exit(device, session, config, color=C):
 
 
 def _print_fleet_live(all_ips, all_results, failures, completed,
-                      total, color=C):
+                      total, color=C, level='sl1'):
     """Print live fleet audit screen — devices fill in as they complete."""
     _cls()
     W = 60
     ts = datetime.now().strftime('%Y-%m-%d %H:%M')
     title = "JUSTIN — IEC 62443-4-2 Fleet Audit"
-    sub = f"{total} devices  SL1  {ts}"
+    sub = f"{total} devices  {level}  {ts}"
     print()
     print(f"  {color.MG}{color.BOLD}╔{'═' * W}╗{color.RST}")
     tpad = max(W - len(title) - 2, 0)
@@ -1967,7 +3768,7 @@ def _interactive_single(driver, config, ip, check_defs, color=C):
         # Connect
         _cls()
         print(_IBANNER)
-        print(f'  {C.BOLD}Connecting to {ip} ...{C.RST}\n')
+        _log('CONNECT', ip, color=C)
 
         device = driver(
             hostname=ip,
@@ -1994,8 +3795,9 @@ def _interactive_single(driver, config, ip, check_defs, color=C):
         session.update(device=device_info)
 
         # Gather with progress bar
-        state = _igather(device, check_defs)
-        session.update(state_before=_make_state_snapshot(state))
+        state, i_evidence = _igather(device, check_defs)
+        session.update(state_before=_make_state_snapshot(state),
+                       evidence=i_evidence)
 
         # Run checks quietly (progress bar was the visual)
         findings = run_checks(state, check_defs, config, color, quiet=True)
@@ -2035,10 +3837,11 @@ def _interactive_single(driver, config, ip, check_defs, color=C):
                 if not os.path.isabs(path):
                     path = os.path.join(
                         os.path.dirname(default_path), path)
-                report = to_json(findings, device_info)
+                report = to_json(findings, device_info,
+                                 evidence=i_evidence)
                 save_report(report, path)
                 print(f'  Saved to {path}')
-                break
+                continue
             if choice not in ('h', 'harden') or not fixable:
                 continue
 
@@ -2052,27 +3855,51 @@ def _interactive_single(driver, config, ip, check_defs, color=C):
                 continue
             to_fix = [fixable[i] for i in sorted(sel)]
 
-            # Prompt for missing config-dependent values
-            for f in to_fix:
-                if (f.check_id == 'sec-logging'
-                        and not config.get('syslog_server')):
-                    val = input(f'  {C.GRN}▸{C.RST} '
-                                f'Syslog server IP: ').strip()
-                    if val:
-                        config['syslog_server'] = val
-                if (f.check_id == 'sec-time-sync'
-                        and not config.get('ntp_server')):
-                    val = input(f'  {C.GRN}▸{C.RST} '
-                                f'NTP server IP: ').strip()
-                    if val:
-                        config['ntp_server'] = val
+            # Collect config values interactively (S/P/Q)
+            skip_checks, _per_dev = _collect_harden_inputs(
+                to_fix, config, color=color)
+            to_fix = [f for f in to_fix
+                      if f.check_id not in skip_checks]
+            if not to_fix:
+                continue
+
+            # Pre-harden snapshot (interactive, before first fix)
+            snap_mode = config.get('snapshot', 'off')
+            if (snap_mode == 'pre+post'
+                    and config.get('protocol') == 'mops'):
+                ts = datetime.now().strftime('%Y%m%d')
+                lvl = config.get('level', 'sl1').upper().replace(',', '-')
+                snap_base = f'{lvl}-{ts}'
+                config['_snapshot_base'] = snap_base
+                pre_name = f'{snap_base}-pre'
+                # Only create once per session
+                pre_done = any(
+                    c.get('check_id') == '_snapshot_pre'
+                    for c in session.data.get('changes', []))
+                if not pre_done:
+                    _log('SNAPSHOT', f"'{pre_name}' (pre-harden) ... ",
+                         end='', flush=True)
+                    try:
+                        pre_final = _do_snapshot(device, pre_name)
+                        if pre_final != pre_name:
+                            print(f"{C.GRN}OK (as '{pre_final}'){C.RST}")
+                        else:
+                            print(f'{C.GRN}OK{C.RST}')
+                        session.add_change({
+                            'check_id': '_snapshot_pre',
+                            'action': f"snapshot('{pre_final}')",
+                            'result': 'applied',
+                            'timestamp': datetime.now().isoformat(),
+                        })
+                    except Exception as e:
+                        print(f'{C.RED}FAIL ({e}){C.RST}')
 
             # Apply fixes
             print()
             for f in to_fix:
                 fn = HARDEN_DISPATCH[f.check_id]
                 spec = check_defs.get(f.check_id, {})
-                print(f'    {f.check_id}: ', end='', flush=True)
+                _log(f'HARDEN {f.check_id}', '', end='', flush=True)
                 try:
                     result = fn(device, spec, config, color)
                     if result is None:
@@ -2097,8 +3924,8 @@ def _interactive_single(driver, config, ip, check_defs, color=C):
                     })
 
             # Re-gather + re-check (verify)
-            print(f'\n  {C.DIM}Verifying ...{C.RST}')
-            state = _igather(device, check_defs)
+            _log('REGATHER', f'{C.DIM}Verifying ...{C.RST}')
+            state, i_evidence = _igather(device, check_defs)
             findings = run_checks(
                 state, check_defs, config, color, quiet=True)
 
@@ -2119,11 +3946,11 @@ def _interactive_single(driver, config, ip, check_defs, color=C):
 
         # ── Auto-save report on exit ──
         path = auto_report_path(ip)
-        report = to_json(findings, device_info)
+        report = to_json(findings, device_info, evidence=i_evidence)
         save_report(report, path)
         session.finish()
-        print(f'  {C.DIM}Report: {path}{C.RST}')
-        print(f'  {C.DIM}Session: {session.path}{C.RST}\n')
+        _log('SESSION', f'{C.DIM}Report: {path}{C.RST}')
+        _log('SESSION', f'{C.DIM}{session.path}{C.RST}')
 
     except (KeyboardInterrupt, EOFError):
         print(f'\n\n  {C.DIM}Interrupted.{C.RST}\n')
@@ -2174,7 +4001,7 @@ def _fleet_device_view(driver, config, ip, data, check_defs, color=C):
             report = to_json(data['findings'], data['device'])
             save_report(report, path)
             print(f'  Saved to {path}')
-            return data, changed
+            continue
         if choice not in ('h', 'harden') or not fixable:
             continue
 
@@ -2221,7 +4048,7 @@ def _fleet_device_view(driver, config, ip, data, check_defs, color=C):
             for f in to_fix:
                 fn = HARDEN_DISPATCH[f.check_id]
                 spec = check_defs.get(f.check_id, {})
-                print(f'    {f.check_id}: ', end='', flush=True)
+                _log(f'HARDEN {f.check_id}', '', end='', flush=True)
                 try:
                     result = fn(device, spec, config, color)
                     if result is None:
@@ -2243,8 +4070,8 @@ def _fleet_device_view(driver, config, ip, data, check_defs, color=C):
                     pass
 
         # Re-audit to verify
-        print(f'\n  {C.DIM}Verifying ...{C.RST}')
-        rip, rdi, rfindings, rerr = worker_audit(
+        _log('REGATHER', f'{C.DIM}Verifying ...{C.RST}')
+        rip, rdi, rfindings, _rev, rerr = worker_audit(
             driver, config, ip, check_defs)
         if not rerr:
             data = {'device': rdi, 'findings': rfindings}
@@ -2282,6 +4109,7 @@ def interactive_mode():
                       f'+{len(config["devices"]) - 6} more{C.RST}')
             print(f'    Protocol:  {config["protocol"]}')
             print(f'    User:      {config["username"]}')
+            print(f'    Level:     {config.get("level", "sl1")}')
             if config.get('syslog_server'):
                 print(f'    Syslog:    {config["syslog_server"]}:'
                       f'{config.get("syslog_port", 514)}')
@@ -2323,21 +4151,101 @@ def interactive_mode():
             password = input(
                 f'  {C.GRN}▸{C.RST} Password '
                 f'{C.DIM}[private]{C.RST}: ').strip() or 'private'
+            level_input = input(
+                f'  {C.GRN}▸{C.RST} Level '
+                f'{C.DIM}[sl1] (sl1,sl2,vendor,highest){C.RST}: '
+                ).strip().lower() or 'sl1'
             config = {
                 'username': username, 'password': password,
                 'protocol': 'mops', 'devices': devices,
                 'syslog_server': None, 'syslog_port': 514,
-                'ntp_server': None, 'banner': None, 'level': 'SL1',
+                'ntp_server': None, 'banner': None, 'level': level_input,
             }
 
         if not config['devices']:
             print(f'\n  {C.YEL}No devices in config.{C.RST}\n')
             return
 
+        # ── Safety & Save Settings ──
+        # Defaults: dirty-config guard ON, auto-save OFF, snapshot OFF
+        dirty_guard = config.get('dirty_guard', True)
+        auto_save = config.get('auto_save', False)
+        snapshot_mode = config.get('snapshot', 'off')  # off/post/pre+post
+
+        print(f'\n  {C.BOLD}SAFETY{C.RST}')
+        print(f'    Dirty-config guard:  '
+              f'{C.GRN}ON{C.RST}  '
+              f'{C.DIM}(refuse to touch unsaved switches){C.RST}')
+        print(f'    Auto-save after:     '
+              f'{C.YEL}OFF{C.RST} '
+              f'{C.DIM}(prompt before saving to NVM){C.RST}')
+        print(f'    Snapshot:            '
+              f'{C.DIM}OFF{C.RST} '
+              f'{C.DIM}(no NVM profiles created){C.RST}')
+        print()
+        tweak = input(
+            f'  {C.GRN}▸{C.RST} Change defaults? '
+            f'{C.DIM}[n]{C.RST} '
+            f'{C.CYN}y{C.RST}/{C.CYN}n{C.RST}: ').strip().lower()
+        if tweak in ('y', 'yes'):
+            # Dirty-config guard
+            dg = input(
+                f'  {C.GRN}▸{C.RST} Dirty-config guard '
+                f'{C.DIM}[ON]{C.RST} '
+                f'on/off: ').strip().lower()
+            if dg in ('off', 'false', 'no', '0'):
+                dirty_guard = False
+                print(f'    {C.YEL}Dirty-config guard OFF — '
+                      f'will harden unsaved switches{C.RST}')
+
+            # Auto-save
+            asv = input(
+                f'  {C.GRN}▸{C.RST} Auto-save after changes '
+                f'{C.DIM}[OFF]{C.RST} '
+                f'on/off: ').strip().lower()
+            if asv in ('on', 'true', 'yes', '1'):
+                auto_save = True
+                print(f'    {C.CYN}Auto-save ON — '
+                      f'NVM save after each device{C.RST}')
+
+            # Snapshot
+            print(f'  {C.DIM}Snapshot modes:{C.RST}')
+            print(f'    {C.DIM}off      — no snapshots (default){C.RST}')
+            print(f'    {C.DIM}post     — save profile after changes{C.RST}')
+            print(f'    {C.DIM}pre+post — save before AND after '
+                  f'(full audit trail){C.RST}')
+            snap = input(
+                f'  {C.GRN}▸{C.RST} Snapshot '
+                f'{C.DIM}[off]{C.RST} '
+                f'off/post/pre+post: ').strip().lower()
+            if snap in ('post', 'pre+post'):
+                snapshot_mode = snap
+                if snap == 'pre+post':
+                    print(f'    {C.CYN}Snapshot pre+post — '
+                          f'full before/after profiles{C.RST}')
+                else:
+                    print(f'    {C.CYN}Snapshot post — '
+                          f'profile saved after changes{C.RST}')
+
+        config['dirty_guard'] = dirty_guard
+        config['auto_save'] = auto_save
+        config['snapshot'] = snapshot_mode
+
         # Import driver
         from napalm import get_network_driver
         driver = get_network_driver('hios')
         check_defs = load_checks()
+
+        # Apply level filter
+        i_level = config.get('level', 'sl1').lower()
+        try:
+            check_defs = filter_checks_by_level(check_defs, i_level)
+        except ValueError:
+            print(f'  {C.YEL}Invalid level "{i_level}", '
+                  f'using sl1{C.RST}')
+            i_level = 'sl1'
+            check_defs = filter_checks_by_level(
+                load_checks(), i_level)
 
         # ── Single device ──
         if len(config['devices']) == 1:
@@ -2355,7 +4263,7 @@ def interactive_mode():
 
         # Show initial screen (all devices pending)
         _print_fleet_live(all_ips, all_results, failures,
-                          0, total_devs)
+                          0, total_devs, level=i_level)
 
         with ThreadPoolExecutor(max_workers=min(total_devs, 8)) as pool:
             futures = {
@@ -2365,15 +4273,16 @@ def interactive_mode():
             }
             for future in as_completed(futures):
                 completed += 1
-                ip_r, di, ffindings, err = future.result()
+                ip_r, di, ffindings, fev, err = future.result()
                 if err:
                     failures.append((ip_r, err))
                 else:
                     all_results[ip_r] = {
-                        'device': di, 'findings': ffindings}
+                        'device': di, 'findings': ffindings,
+                        'evidence': fev}
                 # Redraw with updated results
                 _print_fleet_live(all_ips, all_results, failures,
-                                  completed, total_devs)
+                                  completed, total_devs, level=i_level)
 
         elapsed = time.time() - start
 
@@ -2385,7 +4294,8 @@ def interactive_mode():
             # CLS → fleet report with indices
             _cls()
             ordered_fixable = print_fleet_report(
-                all_results, failures, elapsed, numbered=True)
+                all_results, failures, elapsed, numbered=True,
+                level=i_level)
 
             # Action prompt
             if ordered_fixable:
@@ -2435,7 +4345,7 @@ def interactive_mode():
                 report = fleet_to_json(all_results, failures)
                 save_report(report, path)
                 print(f'  Saved to {path}')
-                break
+                continue
 
             if (choice not in ('h', 'harden')
                     or not ordered_fixable):
@@ -2465,30 +4375,26 @@ def interactive_mode():
             selected_checks = [ordered_fixable[i]
                                for i in sorted(fix_sel)]
 
-            # Prompt for missing config-dependent values
-            if ('sec-logging' in selected_checks
-                    and not config.get('syslog_server')):
-                val = input(
-                    f'  {C.GRN}▸{C.RST} '
-                    f'Syslog server IP: ').strip()
-                if val:
-                    config['syslog_server'] = val
-            if ('sec-time-sync' in selected_checks
-                    and not config.get('ntp_server')):
-                val = input(
-                    f'  {C.GRN}▸{C.RST} '
-                    f'NTP server IP: ').strip()
-                if val:
-                    config['ntp_server'] = val
+            # Collect config values interactively (S/P/Q)
+            skip_checks, per_device = _collect_harden_inputs(
+                selected_checks, config,
+                device_ips=selected_ips_list, color=color)
+            selected_checks = [c for c in selected_checks
+                               if c not in skip_checks]
+            if not selected_checks:
+                continue
 
-            print(f'\n  {C.BOLD}Fixing '
-                  f'{len(selected_checks)} finding(s) on '
-                  f'{len(selected_ips_list)} device(s) '
-                  f'...{C.RST}\n')
+            _log('HARDEN', f'{C.BOLD}Fixing '
+                 f'{len(selected_checks)} finding(s) on '
+                 f'{len(selected_ips_list)} device(s){C.RST}')
 
             # Apply fixes per device
             fixed_ips = []
             for sip in selected_ips_list:
+                # Merge per-device overrides into a device-local config
+                dev_config = dict(config)
+                if sip in per_device:
+                    dev_config.update(per_device[sip])
                 data = all_results[sip]
                 device_fixable = [
                     f for f in data['findings']
@@ -2513,12 +4419,12 @@ def interactive_mode():
                     )
                     device.open()
 
-                    print(f'    {sip}: ', end='', flush=True)
+                    _log(f'HARDEN {sip}', '', end='', flush=True)
                     for f in device_fixable:
                         fn = HARDEN_DISPATCH[f.check_id]
                         spec = check_defs.get(f.check_id, {})
                         try:
-                            result = fn(device, spec, config)
+                            result = fn(device, spec, dev_config)
                             if result:
                                 print(f'{C.GRN}{f.check_id}'
                                       f'{C.RST} ',
@@ -2548,8 +4454,8 @@ def interactive_mode():
 
             # Re-audit affected devices in parallel
             if fixed_ips:
-                print(f'\n  {C.DIM}Verifying '
-                      f'{len(fixed_ips)} device(s) ...{C.RST}')
+                _log('REGATHER', f'{C.DIM}Verifying '
+                     f'{len(fixed_ips)} device(s) ...{C.RST}')
                 re_done = 0
                 with ThreadPoolExecutor(
                         max_workers=min(len(fixed_ips), 8)
@@ -2564,7 +4470,7 @@ def interactive_mode():
                         re_done += 1
                         rfip = futs[fut]
                         _ibar(re_done, len(fixed_ips), rfip)
-                        rip, rdi, rfindings, rerr = (
+                        rip, rdi, rfindings, _rev, rerr = (
                             fut.result())
                         if not rerr:
                             all_results[rip] = {
@@ -2599,12 +4505,12 @@ def interactive_mode():
                     for fut in as_completed(futs):
                         sip, status, err = fut.result()
                         if status == 'OK':
-                            print(f'    {sip}: '
-                                  f'{C.GRN}saved{C.RST}')
+                            _log('SAVE', f'{sip}: '
+                                 f'{C.GRN}saved{C.RST}')
                             save_ok += 1
                         else:
-                            print(f'    {sip}: '
-                                  f'{C.RED}{err}{C.RST}')
+                            _log('SAVE', f'{sip}: '
+                                 f'{C.RED}{err}{C.RST}')
 
                 # Snapshot (MOPS only)
                 if (save_ok
@@ -2617,7 +4523,10 @@ def interactive_mode():
                         ).strip().lower()
                     if snap_raw not in ('n', 'no'):
                         ts = datetime.now().strftime('%Y%m%d')
-                        default_name = f'SL1-{ts}'
+                        lvl = config.get(
+                            'level', 'sl1'
+                            ).upper().replace(',', '-')
+                        default_name = f'{lvl}-{ts}'
                         name = input(
                             f'  {C.GRN}▸{C.RST} Snapshot '
                             f'name {C.DIM}[{default_name}]'
@@ -2625,6 +4534,8 @@ def interactive_mode():
                         if not name:
                             name = default_name
                         if _is_valid_profile_name(name):
+                            # Post-harden snapshot
+                            post_name = f'{name}-post'
                             with ThreadPoolExecutor(
                                     max_workers=min(
                                         len(changed_ips), 8)
@@ -2633,24 +4544,24 @@ def interactive_mode():
                                     pool.submit(
                                         _worker_snapshot_connect,
                                         driver, config,
-                                        cip, name): cip
+                                        cip, post_name): cip
                                     for cip in changed_ips
                                 }
                                 for fut in as_completed(futs):
                                     sip, status, result = (
                                         fut.result())
                                     if status == 'OK':
-                                        print(
-                                            f'    {sip}: '
-                                            f'{C.GRN}'
-                                            f'{result}'
-                                            f'{C.RST}')
+                                        _log('SNAPSHOT',
+                                             f'{sip}: '
+                                             f'{C.GRN}'
+                                             f'{result}'
+                                             f'{C.RST}')
                                     else:
-                                        print(
-                                            f'    {sip}: '
-                                            f'{C.RED}'
-                                            f'{result}'
-                                            f'{C.RST}')
+                                        _log('SNAPSHOT',
+                                             f'{sip}: '
+                                             f'{C.RED}'
+                                             f'{result}'
+                                             f'{C.RST}')
                         else:
                             print(f'  {C.RED}Invalid name'
                                   f'{C.RST}')
@@ -2662,7 +4573,7 @@ def interactive_mode():
         path = auto_report_path(suffix='fleet')
         report = fleet_to_json(all_results, failures)
         save_report(report, path)
-        print(f'  {C.DIM}Report: {path}{C.RST}\n')
+        _log('SESSION', f'{C.DIM}Report: {path}{C.RST}')
 
     except (KeyboardInterrupt, EOFError):
         print(f'\n\n  {C.DIM}Interrupted.{C.RST}\n')
@@ -2685,13 +4596,14 @@ def fleet_audit(driver, config, check_defs, color=C):
             for ip in devices
         }
         for future in as_completed(futures):
-            ip, device_info, findings, err = future.result()
+            ip, device_info, findings, ev, err = future.result()
             if err:
                 failures.append((ip, err))
             else:
                 all_results[ip] = {
                     'device': device_info,
                     'findings': findings,
+                    'evidence': ev,
                 }
 
     elapsed = time.time() - start
@@ -2744,10 +4656,12 @@ def parse_arguments():
                         help='config watchdog rollback timer in seconds '
                              '(30-600, auto-reverts on failure)')
     parser.add_argument('--snapshot', metavar='NAME', default=None,
-                        help='create named NVM snapshot after harden+save '
-                             '(MOPS only, requires --save)')
-    parser.add_argument('--level', default='SL1', choices=['SL1', 'SL2'],
-                        help='security level (default: SL1)')
+                        help='create named NVM snapshots: NAME-pre before '
+                             'changes, NAME-post after (MOPS only, '
+                             'requires --save)')
+    parser.add_argument('--level', default='sl1',
+                        help='sl1,sl2,vendor,highest — comma-separated '
+                             '(default: sl1)')
 
     # Output
     parser.add_argument('-j', '--json', action='store_true',
@@ -2793,13 +4707,19 @@ def main():
     for lib in ('paramiko', 'napalm', 'netmiko', 'urllib3', 'requests'):
         logging.getLogger(lib).setLevel(log_level)
 
-    # Load checks
+    # Load checks and certs
     check_defs = load_checks()
+    certs = load_certs()
 
-    # Filter by SL
-    sl_num = int(args.level.replace('SL', ''))
-    check_defs = {k: v for k, v in check_defs.items()
-                  if v.get('sl', 1) <= sl_num}
+    # Resolve effective level: CLI arg > script.cfg > default
+    level_str = args.level.lower()
+
+    # Filter by composable level
+    try:
+        check_defs = filter_checks_by_level(check_defs, level_str)
+    except ValueError as e:
+        print(f"\n  {color.RED}ERROR: {e}{color.RST}\n")
+        sys.exit(1)
 
     # Filter by severity
     if args.severity:
@@ -2820,7 +4740,7 @@ def main():
                 'syslog_port': 514,
                 'ntp_server': None,
                 'banner': None,
-                'level': args.level,
+                'level': level_str,
             }
             # Read hardening targets from script.cfg if it exists
             cfg_path = args.c
@@ -2847,7 +4767,7 @@ def main():
                 'syslog_port': 514,
                 'ntp_server': None,
                 'banner': None,
-                'level': args.level,
+                'level': level_str,
             }
             # Try loading supplementary config for hardening targets
             cfg_path = args.c
@@ -2874,6 +4794,24 @@ def main():
     except (FileNotFoundError, ValueError) as e:
         print(f"\n  {color.RED}ERROR: {e}{color.RST}\n")
         sys.exit(1)
+
+    # Resolve level: CLI --level overrides script.cfg level.
+    # If user didn't change --level from default but script.cfg has one, use it.
+    cfg_level = config.get('level', 'sl1').lower()
+    if args.level == 'sl1' and cfg_level != 'sl1':
+        # script.cfg had a non-default level and user didn't override
+        level_str = cfg_level
+        config['level'] = level_str
+        try:
+            check_defs_all = load_checks()
+            check_defs = filter_checks_by_level(check_defs_all, level_str)
+            if args.severity:
+                max_sev = SEVERITY_ORDER.get(args.severity, 9)
+                check_defs = {k: v for k, v in check_defs.items()
+                              if SEVERITY_ORDER.get(v['severity'], 9) <= max_sev}
+        except ValueError as e:
+            print(f"\n  {color.RED}ERROR: {e}{color.RST}\n")
+            sys.exit(1)
 
     # ---- Interactive: wizard handles everything, shells out ----
     if args.interactive:
@@ -2911,14 +4849,15 @@ def main():
         report_data = load_report(args.from_report)
         dry_run = not args.commit
         if dry_run:
-            print(f"\n  {color.BOLD}Dry-run mode "
-                  f"(use --commit to apply){color.RST}")
+            _log('HARDEN', f"{color.BOLD}Dry-run mode "
+                 f"(use --commit to apply){color.RST}", color=color)
         harden_from_report(driver, config, report_data, check_defs,
                            dry_run=dry_run, save=args.save, color=color,
                            watchdog_seconds=args.watchdog,
                            snapshot_name=args.snapshot)
         elapsed = time.time() - start_time
-        print(f"  {color.DIM}Completed in {elapsed:.1f}s{color.RST}\n")
+        _log('SESSION', f"{color.DIM}Completed in "
+             f"{elapsed:.1f}s{color.RST}", color=color)
         return
 
     # ---- Fleet mode (multiple devices) ----
@@ -2927,15 +4866,21 @@ def main():
             driver, config, check_defs, color)
 
         if args.json:
-            report = fleet_to_json(all_results, failures)
+            report = fleet_to_json(all_results, failures, level_str,
+                                   check_defs)
             print(json.dumps(report, indent=2))
         else:
-            print_fleet_report(all_results, failures, elapsed, color)
+            print_fleet_report(all_results, failures, elapsed, color,
+                               level=level_str)
 
         # Save report if requested
         if args.output:
-            report = fleet_to_json(all_results, failures)
-            save_report(report, args.output)
+            report = fleet_to_json(all_results, failures, level_str,
+                                   check_defs)
+            if args.output.endswith('.html'):
+                save_html_report(report, args.output, certs)
+            else:
+                save_report(report, args.output)
             print(f"  Report saved to {args.output}\n")
 
         # Fleet harden
@@ -2968,34 +4913,39 @@ def main():
                                 device, ip, 'harden', color):
                             continue
 
-                    state = gather(device, check_defs, color)
+                    state, _ev = gather(device, check_defs, color)
                     snap_before = _make_state_snapshot(state)
-                    gather_fn = lambda d=device: gather(d, check_defs, color)
+                    gather_fn = lambda d=device: gather(d, check_defs, color)[0]
                     session = SessionLog(ip)
                     session.update(device=data['device'],
-                                   state_before=snap_before)
+                                   state_before=snap_before,
+                                   evidence=_ev)
 
                     applied, changes_log, state_diff = harden_device(
                         device, data['findings'], check_defs, config,
                         dry_run=dry_run, save=args.save, color=color,
                         state_before=snap_before, gather_fn=gather_fn,
-                        watchdog_seconds=args.watchdog, session=session)
+                        watchdog_seconds=args.watchdog, session=session,
+                        snapshot_name=args.snapshot)
 
-                    # Snapshot per device
+                    # Post-harden snapshot per device
                     if (args.snapshot and not dry_run and applied
                             and args.save
                             and config['protocol'] == 'mops'
                             and _is_valid_profile_name(
                                 args.snapshot)):
-                        print(f"  Snapshot '{args.snapshot}'"
-                              f" ... ", end='', flush=True)
+                        post_name = f'{args.snapshot}-post'
+                        _log('SNAPSHOT',
+                             f"'{post_name}' (post-harden)"
+                             f" ... ", end='', flush=True,
+                             color=color)
                         try:
                             final = _do_snapshot(
-                                device, args.snapshot)
+                                device, post_name)
                             print(f"{color.GRN}OK"
                                   f"{color.RST}")
                             session.add_change({
-                                'check_id': '_snapshot',
+                                'check_id': '_snapshot_post',
                                 'action':
                                     f"snapshot('{final}')",
                                 'result': 'applied',
@@ -3007,8 +4957,9 @@ def main():
                                   f"({e}){color.RST}")
 
                     session.finish()
-                    _progress(f"  {color.DIM}Session: "
-                              f"{session.path}{color.RST}")
+                    _log('SESSION',
+                         f"{color.DIM}{session.path}{color.RST}",
+                         color=color)
                     device.close()
                 except Exception as e:
                     print(f"  {color.RED}FAIL: {e}{color.RST}")
@@ -3022,19 +4973,21 @@ def main():
 
     # ---- Single device ----
     ip = config['devices'][0]
-    _progress(f"\n  Connecting to {ip} ...")
+    _log('CONNECT', ip, color=color)
 
-    ip, device, device_info, findings, state, err = audit_device(
+    ip, device, device_info, findings, state, evidence, err = audit_device(
         driver, config, ip, check_defs, color)
 
     if err:
-        print(f"  {color.RED}FAIL: {err}{color.RST}\n")
+        _log('CONNECT', f"{color.RED}FAIL: {err}{color.RST}",
+             color=color)
         sys.exit(1)
 
     # Session log — written incrementally (the JUSTIN way)
     session = SessionLog(ip)
     snap_before = _make_state_snapshot(state)
-    session.update(device=device_info, state_before=snap_before)
+    session.update(device=device_info, state_before=snap_before,
+                   evidence=evidence)
 
     # Config status check
     saved, cfg_status = check_config_saved(device, color)
@@ -3042,10 +4995,14 @@ def main():
 
     # JSON output
     if args.json:
-        report = to_json(findings, device_info)
+        report = to_json(findings, device_info, level_str, check_defs,
+                         evidence=evidence)
         print(json.dumps(report, indent=2))
         if args.output:
-            save_report(report, args.output)
+            if args.output.endswith('.html'):
+                save_html_report(report, args.output, certs)
+            else:
+                save_report(report, args.output)
         total = len(findings)
         passed = sum(1 for f in findings if f.passed)
         session.update(
@@ -3053,13 +5010,15 @@ def main():
             score={'total': total, 'passed': passed,
                    'failed': total - passed})
         session.finish()
-        _progress(f"  {color.DIM}Session: {session.path}{color.RST}")
+        _log('SESSION', f"{color.DIM}{session.path}{color.RST}",
+             color=color)
         if device:
             device.close()
         return
 
     # Console report
-    print_report(findings, device_info, color)
+    print_report(findings, device_info, color, level=level_str,
+                 certs=certs)
 
     total = len(findings)
     passed = sum(1 for f in findings if f.passed)
@@ -3070,54 +5029,61 @@ def main():
 
     # Save report if requested
     if args.output:
-        report = to_json(findings, device_info)
-        save_report(report, args.output)
+        report = to_json(findings, device_info, level_str, check_defs,
+                         evidence=evidence)
+        if args.output.endswith('.html'):
+            save_html_report(report, args.output, certs)
+        else:
+            save_report(report, args.output)
         print(f"  Report saved to {args.output}")
 
     # Harden
     if args.harden:
         # Dirty-config guard — refuse to harden unsaved switch
-        if not enforce_clean_config(device, ip, 'harden', color):
+        if not enforce_clean_config(device, ip, 'harden', color, config=config):
             session.update(refused='unsaved config')
             session.finish()
-            _progress(f"  {color.DIM}Session: {session.path}{color.RST}")
+            _log('SESSION', f"{color.DIM}{session.path}{color.RST}",
+                 color=color)
             if device:
                 device.close()
             return
 
         dry_run = not args.commit
         if dry_run:
-            print(f"  {color.BOLD}Dry-run mode "
-                  f"(use --commit to apply){color.RST}")
+            _log('HARDEN', f"{color.BOLD}Dry-run mode "
+                 f"(use --commit to apply){color.RST}", color=color)
 
-        gather_fn = lambda: gather(device, check_defs, color)
+        gather_fn = lambda: gather(device, check_defs, color)[0]
         applied, changes_log, state_diff = harden_device(
             device, findings, check_defs, config,
             dry_run=dry_run, save=args.save, color=color,
             state_before=snap_before, gather_fn=gather_fn,
-            watchdog_seconds=args.watchdog, session=session)
+            watchdog_seconds=args.watchdog, session=session,
+            snapshot_name=args.snapshot)
 
-        # Snapshot after harden+save
+        # Post-harden snapshot (pre-harden is inside harden_device)
         if (args.snapshot and not dry_run and applied
                 and args.save):
+            post_name = f'{args.snapshot}-post'
             if config['protocol'] != 'mops':
-                print(f"  {color.YEL}Snapshot requires MOPS "
-                      f"protocol{color.RST}")
+                _log('SNAPSHOT', f"{color.YEL}Requires MOPS "
+                     f"protocol{color.RST}", color=color)
             elif not _is_valid_profile_name(args.snapshot):
-                print(f"  {color.RED}Invalid snapshot name"
-                      f"{color.RST}")
+                _log('SNAPSHOT', f"{color.RED}Invalid snapshot "
+                     f"name{color.RST}", color=color)
             else:
-                print(f"  Snapshot '{args.snapshot}' ... ",
-                      end='', flush=True)
+                _log('SNAPSHOT', f"'{post_name}' (post-harden)"
+                     f" ... ", end='', flush=True, color=color)
                 try:
-                    final = _do_snapshot(device, args.snapshot)
-                    if final != args.snapshot:
+                    final = _do_snapshot(device, post_name)
+                    if final != post_name:
                         print(f"{color.GRN}OK "
                               f"(as '{final}'){color.RST}")
                     else:
                         print(f"{color.GRN}OK{color.RST}")
                     session.add_change({
-                        'check_id': '_snapshot',
+                        'check_id': '_snapshot_post',
                         'action': f"snapshot('{final}')",
                         'result': 'applied',
                         'timestamp': datetime.now().isoformat(),
@@ -3127,8 +5093,10 @@ def main():
 
     elapsed = time.time() - start_time
     session.finish()
-    _progress(f"  {color.DIM}Session: {session.path}{color.RST}")
-    print(f"  {color.DIM}Completed in {elapsed:.1f}s{color.RST}\n")
+    _log('SESSION', f"{color.DIM}{session.path}{color.RST}",
+         color=color)
+    _log('SESSION', f"{color.DIM}Completed in "
+         f"{elapsed:.1f}s{color.RST}", color=color)
 
     if device:
         device.close()

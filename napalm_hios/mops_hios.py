@@ -253,6 +253,114 @@ def _prefix_to_mask(prefix):
     return '.'.join(str(int(bits[i:i+8], 2)) for i in range(0, 32, 8))
 
 
+def _decode_bits_hex(hex_str, bit_map):
+    """Decode SNMP BITS hex string to list of enabled names.
+
+    BITS encoding: MSB-first, bit 0 = 0x80 of first byte.
+    ``bit_map`` is {bit_position: name}.  Returns sorted list of names
+    for all set bits.
+    """
+    if not hex_str or not hex_str.strip():
+        return []
+    try:
+        octets = bytes.fromhex(hex_str.replace(" ", ""))
+    except ValueError:
+        return []
+    enabled = []
+    for byte_idx, byte_val in enumerate(octets):
+        for bit_idx in range(8):
+            if byte_val & (0x80 >> bit_idx):
+                bit_num = byte_idx * 8 + bit_idx
+                name = bit_map.get(bit_num)
+                if name:
+                    enabled.append(name)
+    return enabled
+
+
+def _encode_bits_hex(names, bit_map):
+    """Encode list of algorithm names to BITS hex string.
+
+    Reverse of ``_decode_bits_hex``.  ``bit_map`` is {bit_position: name}.
+    Returns space-separated hex bytes.
+    """
+    rev = {v: k for k, v in bit_map.items()}
+    max_bit = max(bit_map.keys()) if bit_map else 0
+    num_bytes = (max_bit // 8) + 1
+    octets = [0] * num_bytes
+    for name in names:
+        bit = rev.get(name)
+        if bit is not None:
+            octets[bit // 8] |= (0x80 >> (bit % 8))
+    return ' '.join(f'{b:02x}' for b in octets)
+
+
+# -- Cipher / TLS / SSH algorithm BITS mappings (HM2-MGMTACCESS-MIB) ------
+
+_TLS_VERSIONS = {
+    0: 'tlsv1.0',
+    1: 'tlsv1.1',
+    2: 'tlsv1.2',
+}
+
+_TLS_CIPHER_SUITES = {
+    0: 'tls-rsa-with-rc4-128-sha',
+    1: 'tls-rsa-with-aes-128-cbc-sha',
+    2: 'tls-dhe-rsa-with-aes-128-cbc-sha',
+    3: 'tls-dhe-rsa-with-aes-256-cbc-sha',
+    4: 'tls-ecdhe-rsa-with-aes-128-cbc-sha',
+    5: 'tls-ecdhe-rsa-with-aes-256-cbc-sha',
+    6: 'tls-ecdhe-rsa-with-aes-128-gcm-sha256',
+    7: 'tls-ecdhe-rsa-with-aes-256-gcm-sha384',
+}
+
+_SSH_HMAC = {
+    0: 'hmac-sha1',
+    1: 'hmac-sha2-256',
+    2: 'hmac-sha2-512',
+    3: 'hmac-sha1-etm@openssh.com',
+    4: 'hmac-sha2-256-etm@openssh.com',
+    5: 'hmac-sha2-512-etm@openssh.com',
+}
+
+_SSH_KEX = {
+    0: 'diffie-hellman-group1-sha1',
+    1: 'diffie-hellman-group14-sha1',
+    2: 'diffie-hellman-group14-sha256',
+    3: 'diffie-hellman-group16-sha512',
+    4: 'diffie-hellman-group18-sha512',
+    5: 'diffie-hellman-group-exchange-sha256',
+    6: 'ecdh-sha2-nistp256',
+    7: 'ecdh-sha2-nistp384',
+}
+
+_SSH_ENCRYPTION = {
+    0: 'aes128-ctr',
+    1: 'aes192-ctr',
+    2: 'aes256-ctr',
+    3: 'aes128-gcm@openssh.com',
+    4: 'aes256-gcm@openssh.com',
+    5: 'chacha20-poly1305@openssh.com',
+}
+
+_SSH_HOST_KEY = {
+    0: 'ecdsa-sha2-nistp256',
+    1: 'ecdsa-sha2-nistp384',
+    2: 'ecdsa-sha2-nistp521',
+    3: 'ecdsa-sha2-nistp256-cert-v01@openssh.com',
+    4: 'ecdsa-sha2-nistp384-cert-v01@openssh.com',
+    5: 'ecdsa-sha2-nistp521-cert-v01@openssh.com',
+    6: 'rsa-sha2-256',
+    7: 'rsa-sha2-512',
+    8: 'rsa-sha2-256-cert-v01@openssh.com',
+    9: 'rsa-sha2-512-cert-v01@openssh.com',
+    10: 'ssh-dss',
+    11: 'ssh-ed25519',
+    12: 'ssh-ed25519-cert-v01@openssh.com',
+    13: 'ssh-rsa',
+    14: 'ssh-rsa-cert-v01@openssh.com',
+}
+
+
 def _decode_portlist_hex(hex_str, ifindex_map):
     """Decode PortList hex string to interface names.
 
@@ -3813,6 +3921,201 @@ class MOPSHIOS:
             self._apply_mutations(mutations)
 
     # ------------------------------------------------------------------
+    # PoE (Power over Ethernet)
+    # ------------------------------------------------------------------
+
+    _POE_STATUS = {
+        '1': 'disabled', '2': 'searching', '3': 'delivering',
+        '4': 'fault', '5': 'test', '6': 'other-fault',
+    }
+    _POE_PRIORITY = {'1': 'critical', '2': 'high', '3': 'low'}
+    _POE_PRIORITY_REV = {'critical': '1', 'high': '2', 'low': '3'}
+    _POE_CLASS = {
+        '1': 'class0', '2': 'class1', '3': 'class2', '4': 'class3',
+        '5': 'class4', '6': 'class5', '7': 'class6', '8': 'class7',
+        '9': 'class8',
+    }
+    _POE_SOURCE = {'0': 'internal', '1': 'external'}
+
+    def get_poe(self):
+        """Return PoE global state, per-module budgets, and per-port config.
+
+        Returns:
+            dict with:
+                'enabled': bool (global admin state)
+                'power_w': int (reserved system power, watts)
+                'delivered_current_ma': int (system delivered current, mA)
+                'modules': {unit/slot: {budget_w, max_w, reserved_w,
+                    delivered_w, source, threshold_pct, notifications}}
+                'ports': {port_name: {enabled, status, priority,
+                    classification, consumption_mw, power_limit_mw,
+                    name, fast_startup}}
+        """
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("HM2-POE-MIB", "hm2PoeMgmtGlobalGroup", [
+                "hm2PoeMgmtAdminStatus",
+                "hm2PoeMgmtReservedPower",
+                "hm2PoeMgmtDeliveredCurrent",
+            ]),
+            ("HM2-POE-MIB", "hm2PoeMgmtPortEntry", [
+                "ifIndex",
+                "hm2PoeMgmtPortAdminEnable",
+                "hm2PoeMgmtPortDetectionStatus",
+                "hm2PoeMgmtPortPowerPriority",
+                "hm2PoeMgmtPortPowerClassification",
+                "hm2PoeMgmtPortConsumptionPower",
+                "hm2PoeMgmtPortPowerLimit",
+                "hm2PoeMgmtPortName",
+                "hm2PoeMgmtPortFastStartup",
+                "hm2PoeMgmtPortClassValid",
+            ]),
+            ("HM2-POE-MIB", "hm2PoeMgmtModuleEntry", [
+                "hm2PoeMgmtModuleUnitIndex",
+                "hm2PoeMgmtModuleSlotIndex",
+                "hm2PoeMgmtModulePower",
+                "hm2PoeMgmtModuleMaximumPower",
+                "hm2PoeMgmtModuleReservedPower",
+                "hm2PoeMgmtModuleDeliveredPower",
+                "hm2PoeMgmtModulePowerSource",
+                "hm2PoeMgmtModuleUsageThreshold",
+                "hm2PoeMgmtModuleNotificationControlEnable",
+            ]),
+            decode_strings=False,
+        )
+
+        poe = mibs.get("HM2-POE-MIB", {})
+        glb = poe.get("hm2PoeMgmtGlobalGroup", [{}])[0]
+
+        # --- modules ---
+        modules = {}
+        for entry in poe.get("hm2PoeMgmtModuleEntry", []):
+            unit = entry.get("hm2PoeMgmtModuleUnitIndex", "1")
+            slot = entry.get("hm2PoeMgmtModuleSlotIndex", "1")
+            key = f"{unit}/{slot}"
+            src_code = entry.get("hm2PoeMgmtModulePowerSource", "0")
+            modules[key] = {
+                'budget_w': _safe_int(
+                    entry.get("hm2PoeMgmtModulePower", "0")),
+                'max_w': _safe_int(
+                    entry.get("hm2PoeMgmtModuleMaximumPower", "0")),
+                'reserved_w': _safe_int(
+                    entry.get("hm2PoeMgmtModuleReservedPower", "0")),
+                'delivered_w': _safe_int(
+                    entry.get("hm2PoeMgmtModuleDeliveredPower", "0")),
+                'source': self._POE_SOURCE.get(src_code, 'internal'),
+                'threshold_pct': _safe_int(
+                    entry.get("hm2PoeMgmtModuleUsageThreshold", "90")),
+                'notifications': entry.get(
+                    "hm2PoeMgmtModuleNotificationControlEnable",
+                    "1") == "1",
+            }
+
+        # --- ports ---
+        ports = {}
+        for entry in poe.get("hm2PoeMgmtPortEntry", []):
+            idx = entry.get("ifIndex", "")
+            name = ifindex_map.get(idx, "")
+            if not name or name.startswith("cpu") or name.startswith("vlan"):
+                continue
+
+            pri_code = entry.get("hm2PoeMgmtPortPowerPriority", "3")
+            status_code = entry.get("hm2PoeMgmtPortDetectionStatus", "1")
+            class_code = entry.get("hm2PoeMgmtPortPowerClassification", "1")
+            class_valid = entry.get("hm2PoeMgmtPortClassValid", "0") == "1"
+            name_hex = entry.get("hm2PoeMgmtPortName", "")
+
+            ports[name] = {
+                'enabled': entry.get(
+                    "hm2PoeMgmtPortAdminEnable", "2") == "1",
+                'status': self._POE_STATUS.get(status_code, 'disabled'),
+                'priority': self._POE_PRIORITY.get(pri_code, 'low'),
+                'classification': (
+                    self._POE_CLASS.get(class_code)
+                    if class_valid else None),
+                'consumption_mw': _safe_int(
+                    entry.get("hm2PoeMgmtPortConsumptionPower", "0")),
+                'power_limit_mw': _safe_int(
+                    entry.get("hm2PoeMgmtPortPowerLimit", "0")),
+                'name': _decode_hex_string(name_hex),
+                'fast_startup': entry.get(
+                    "hm2PoeMgmtPortFastStartup", "2") == "1",
+            }
+
+        return {
+            'enabled': glb.get("hm2PoeMgmtAdminStatus", "2") == "1",
+            'power_w': _safe_int(
+                glb.get("hm2PoeMgmtReservedPower", "0")),
+            'delivered_current_ma': _safe_int(
+                glb.get("hm2PoeMgmtDeliveredCurrent", "0")),
+            'modules': modules,
+            'ports': ports,
+        }
+
+    def set_poe(self, interface=None, enabled=None, priority=None,
+                power_limit_mw=None, name=None, fast_startup=None):
+        """Set PoE configuration.
+
+        If interface is provided, sets per-port values.
+        If interface is None, sets global admin state.
+
+        Args:
+            interface: port name (str), list of port names, or None for global
+            enabled: True/False
+            priority: 'critical', 'high', or 'low' (per-port only)
+            power_limit_mw: int 0-30000, 0=unlimited (per-port only)
+            name: str device label up to 32 chars (per-port only)
+            fast_startup: True/False (per-port only)
+        """
+        if interface is not None:
+            interfaces = ([interface] if isinstance(interface, str)
+                          else list(interface))
+            ifindex_map = self._build_ifindex_map()
+            name_to_idx = {n: idx for idx, n in ifindex_map.items()}
+
+            values = {}
+            if enabled is not None:
+                values["hm2PoeMgmtPortAdminEnable"] = (
+                    "1" if enabled else "2")
+            if priority is not None:
+                val = self._POE_PRIORITY_REV.get(priority)
+                if val is None:
+                    raise ValueError(
+                        f"Invalid priority '{priority}': "
+                        f"use 'critical', 'high', or 'low'")
+                values["hm2PoeMgmtPortPowerPriority"] = val
+            if power_limit_mw is not None:
+                values["hm2PoeMgmtPortPowerLimit"] = str(
+                    int(power_limit_mw))
+            if name is not None:
+                values["hm2PoeMgmtPortName"] = name
+            if fast_startup is not None:
+                values["hm2PoeMgmtPortFastStartup"] = (
+                    "1" if fast_startup else "2")
+
+            if not values:
+                return
+
+            mutations = []
+            for iface in interfaces:
+                ifidx = name_to_idx.get(iface)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                mutations.append((
+                    "HM2-POE-MIB", "hm2PoeMgmtPortEntry",
+                    dict(values), {"ifIndex": ifidx}))
+
+            self._apply_mutations(mutations)
+        else:
+            values = {}
+            if enabled is not None:
+                values["hm2PoeMgmtAdminStatus"] = (
+                    "1" if enabled else "2")
+
+            if values:
+                self._apply_set("HM2-POE-MIB",
+                                "hm2PoeMgmtGlobalGroup", values)
+
+    # ------------------------------------------------------------------
     # QoS (Class of Service)
     # ------------------------------------------------------------------
     _QOS_TRUST_MODE = {
@@ -4784,8 +5087,14 @@ class MOPSHIOS:
 
             {
                 'http': {'enabled': bool, 'port': int},
-                'https': {'enabled': bool, 'port': int},
-                'ssh': {'enabled': bool},
+                'https': {'enabled': bool, 'port': int,
+                          'tls_versions': [str],
+                          'tls_cipher_suites': [str]},
+                'ssh': {'enabled': bool,
+                        'hmac_algorithms': [str],
+                        'kex_algorithms': [str],
+                        'encryption_algorithms': [str],
+                        'host_key_algorithms': [str]},
                 'telnet': {'enabled': bool},
                 'snmp': {'v1': bool, 'v2': bool, 'v3': bool, 'port': int},
                 'industrial': {
@@ -4815,9 +5124,15 @@ class MOPSHIOS:
             result = self.client.get_multi([
                 ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessWebGroup", [
                     "hm2WebHttpAdminStatus", "hm2WebHttpsAdminStatus",
-                    "hm2WebHttpPortNumber", "hm2WebHttpsPortNumber"]),
+                    "hm2WebHttpPortNumber", "hm2WebHttpsPortNumber",
+                    "hm2WebHttpsServerTlsVersions",
+                    "hm2WebHttpsServerTlsCipherSuites"]),
                 ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessSshGroup", [
-                    "hm2SshAdminStatus"]),
+                    "hm2SshAdminStatus",
+                    "hm2SshHmacAlgorithms",
+                    "hm2SshKexAlgorithms",
+                    "hm2SshEncryptionAlgorithms",
+                    "hm2SshHostKeyAlgorithms"]),
                 ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessTelnetGroup", [
                     "hm2TelnetServerAdminStatus"]),
                 ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessSnmpGroup", [
@@ -4841,10 +5156,28 @@ class MOPSHIOS:
                         "hm2WebHttpsAdminStatus", "2")) == 1,
                     'port': _safe_int(web.get(
                         "hm2WebHttpsPortNumber", "443")),
+                    'tls_versions': _decode_bits_hex(
+                        web.get("hm2WebHttpsServerTlsVersions", ""),
+                        _TLS_VERSIONS),
+                    'tls_cipher_suites': _decode_bits_hex(
+                        web.get("hm2WebHttpsServerTlsCipherSuites",
+                                ""), _TLS_CIPHER_SUITES),
                 },
                 'ssh': {
                     'enabled': _safe_int(ssh.get(
                         "hm2SshAdminStatus", "2")) == 1,
+                    'hmac_algorithms': _decode_bits_hex(
+                        ssh.get("hm2SshHmacAlgorithms", ""),
+                        _SSH_HMAC),
+                    'kex_algorithms': _decode_bits_hex(
+                        ssh.get("hm2SshKexAlgorithms", ""),
+                        _SSH_KEX),
+                    'encryption_algorithms': _decode_bits_hex(
+                        ssh.get("hm2SshEncryptionAlgorithms", ""),
+                        _SSH_ENCRYPTION),
+                    'host_key_algorithms': _decode_bits_hex(
+                        ssh.get("hm2SshHostKeyAlgorithms", ""),
+                        _SSH_HOST_KEY),
                 },
                 'telnet': {
                     'enabled': _safe_int(tel.get(
@@ -4980,10 +5313,15 @@ class MOPSHIOS:
                      ethernet_ip=None, opcua=None, modbus=None,
                      unsigned_sw=None, aca_auto_update=None,
                      aca_config_write=None, aca_config_load=None,
-                     mvrp=None, mmrp=None, devsec_monitors=None):
+                     mvrp=None, mmrp=None, devsec_monitors=None,
+                     tls_versions=None, tls_cipher_suites=None,
+                     ssh_hmac=None, ssh_kex=None,
+                     ssh_encryption=None, ssh_host_key=None):
         """Set service enable/disable state.
 
-        Each arg is bool (True=enable, False=disable) or None (no change).
+        Each bool arg is True=enable, False=disable, None=no change.
+        Cipher list args accept a list of algorithm names (see
+        ``get_services()`` for valid names).
         """
         mutations = []
 
@@ -5059,6 +5397,37 @@ class MOPSHIOS:
             mutations.append((
                 "HM2-DIAGNOSTIC-MIB", "hm2DevSecConfigGroup",
                 {a: _en(devsec_monitors) for a in self._DEVSEC_ATTRS}))
+        if tls_versions is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessWebGroup",
+                {"hm2WebHttpsServerTlsVersions":
+                 _encode_bits_hex(tls_versions, _TLS_VERSIONS)}))
+        if tls_cipher_suites is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessWebGroup",
+                {"hm2WebHttpsServerTlsCipherSuites":
+                 _encode_bits_hex(tls_cipher_suites,
+                                  _TLS_CIPHER_SUITES)}))
+        if ssh_hmac is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSshGroup",
+                {"hm2SshHmacAlgorithms":
+                 _encode_bits_hex(ssh_hmac, _SSH_HMAC)}))
+        if ssh_kex is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSshGroup",
+                {"hm2SshKexAlgorithms":
+                 _encode_bits_hex(ssh_kex, _SSH_KEX)}))
+        if ssh_encryption is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSshGroup",
+                {"hm2SshEncryptionAlgorithms":
+                 _encode_bits_hex(ssh_encryption, _SSH_ENCRYPTION)}))
+        if ssh_host_key is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSshGroup",
+                {"hm2SshHostKeyAlgorithms":
+                 _encode_bits_hex(ssh_host_key, _SSH_HOST_KEY)}))
 
         self._apply_mutations(mutations)
 
@@ -5097,8 +5466,13 @@ class MOPSHIOS:
     # SNMP Config (HM2-MGMTACCESS-MIB + SNMP-COMMUNITY-MIB)
     # ------------------------------------------------------------------
 
+    # SNMP auth/enc type enums
+    _SNMP_AUTH_TYPE = {0: '', 1: 'md5', 2: 'sha'}
+    _SNMP_ENC_TYPE = {0: 'none', 1: 'des', 2: 'aes128', 3: 'aes256'}
+
     def get_snmp_config(self):
-        """Read SNMP configuration: versions, port, communities.
+        """Read SNMP configuration: versions, port, communities,
+        trap service, v3 user auth/enc, trap destinations.
 
         Returns::
 
@@ -5106,12 +5480,19 @@ class MOPSHIOS:
                 'versions': {'v1': bool, 'v2': bool, 'v3': bool},
                 'port': int,
                 'communities': [{'name': str, 'access': str}],
+                'trap_service': bool,
+                'v3_users': [{'name': str, 'auth_type': str, 'enc_type': str}],
+                'trap_destinations': [
+                    {'name': str, 'address': str, 'security_model': str,
+                     'security_name': str, 'security_level': str},
+                ],
             }
         """
         snmp_data = self.client.get(
             "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSnmpGroup",
             ["hm2SnmpV1AdminStatus", "hm2SnmpV2AdminStatus",
-             "hm2SnmpV3AdminStatus", "hm2SnmpPortNumber"],
+             "hm2SnmpV3AdminStatus", "hm2SnmpPortNumber",
+             "hm2SnmpTrapServiceAdminStatus"],
             decode_strings=False)
         s = snmp_data[0] if snmp_data else {}
 
@@ -5136,6 +5517,12 @@ class MOPSHIOS:
             access = 'rw' if 'rw' in sec_name.lower() else 'ro'
             communities.append({'name': name, 'access': access})
 
+        # v3 user auth/enc from HM2-USERMGMT-MIB
+        v3_users = self._get_snmp_v3_users()
+
+        # Trap destinations from SNMP-TARGET-MIB
+        trap_destinations = self._get_trap_destinations()
+
         return {
             'versions': {
                 'v1': _safe_int(s.get(
@@ -5147,13 +5534,130 @@ class MOPSHIOS:
             },
             'port': _safe_int(s.get("hm2SnmpPortNumber", "161")),
             'communities': communities,
+            'trap_service': _safe_int(s.get(
+                "hm2SnmpTrapServiceAdminStatus", "2")) == 1,
+            'v3_users': v3_users,
+            'trap_destinations': trap_destinations,
         }
 
-    def set_snmp_config(self, v1=None, v2=None, v3=None):
-        """Set SNMP version enable/disable.
+    def _get_snmp_v3_users(self):
+        """Read SNMPv3 user auth/enc types from HM2-USERMGMT-MIB."""
+        try:
+            entries = self.client.get(
+                "HM2-USERMGMT-MIB", "hm2UserConfigEntry",
+                ["hm2UserName", "hm2UserSnmpAuthType",
+                 "hm2UserSnmpEncType", "hm2UserStatus"],
+                decode_strings=False)
+        except MOPSError:
+            return []
+
+        users = []
+        for entry in entries:
+            status = _safe_int(entry.get("hm2UserStatus", "0"))
+            if status != 1:  # only active users
+                continue
+            name = _decode_hex_string(
+                entry.get("hm2UserName", ""))
+            if not name:
+                continue
+            auth = _safe_int(entry.get("hm2UserSnmpAuthType", "0"))
+            enc = _safe_int(entry.get("hm2UserSnmpEncType", "0"))
+            users.append({
+                'name': name,
+                'auth_type': self._SNMP_AUTH_TYPE.get(auth, ''),
+                'enc_type': self._SNMP_ENC_TYPE.get(enc, 'none'),
+            })
+        return users
+
+    def _get_trap_destinations(self):
+        """Read SNMP trap destinations from SNMP-TARGET-MIB."""
+        _SEC_MODEL = {1: 'v1', 2: 'v2c', 3: 'v3'}
+        _SEC_LEVEL = {1: 'noauth', 2: 'auth', 3: 'authpriv'}
+
+        # Target address table
+        try:
+            addr_entries = self.client.get(
+                "SNMP-TARGET-MIB", "snmpTargetAddrEntry",
+                ["snmpTargetAddrName", "snmpTargetAddrTAddress",
+                 "snmpTargetAddrParams"],
+                decode_strings=False)
+        except MOPSError:
+            return []
+
+        # Target params table
+        try:
+            params_entries = self.client.get(
+                "SNMP-TARGET-MIB", "snmpTargetParamsEntry",
+                ["snmpTargetParamsName",
+                 "snmpTargetParamsSecurityModel",
+                 "snmpTargetParamsSecurityName",
+                 "snmpTargetParamsSecurityLevel"],
+                decode_strings=False)
+        except MOPSError:
+            params_entries = []
+
+        # Build params lookup
+        params_map = {}
+        for pe in params_entries:
+            pname = _decode_hex_string(
+                pe.get("snmpTargetParamsName", ""))
+            if pname:
+                params_map[pname] = {
+                    'security_model': _SEC_MODEL.get(_safe_int(
+                        pe.get("snmpTargetParamsSecurityModel",
+                               "0")), ''),
+                    'security_name': _decode_hex_string(
+                        pe.get("snmpTargetParamsSecurityName", "")),
+                    'security_level': _SEC_LEVEL.get(_safe_int(
+                        pe.get("snmpTargetParamsSecurityLevel",
+                               "0")), ''),
+                }
+
+        destinations = []
+        for ae in addr_entries:
+            name = _decode_hex_string(
+                ae.get("snmpTargetAddrName", ""))
+            taddr = ae.get("snmpTargetAddrTAddress", "")
+            params_ref = _decode_hex_string(
+                ae.get("snmpTargetAddrParams", ""))
+            address = self._decode_taddress(taddr)
+            params = params_map.get(params_ref, {})
+            model = params.get('security_model', '')
+            # v1/v2c don't use security levels — normalise
+            level = ('noauth' if model in ('v1', 'v2c')
+                     else params.get('security_level', ''))
+            destinations.append({
+                'name': name,
+                'address': address,
+                'security_model': model,
+                'security_name': params.get(
+                    'security_name', ''),
+                'security_level': level,
+            })
+        return destinations
+
+    @staticmethod
+    def _decode_taddress(hex_str):
+        """Decode SNMP TAddress (6 hex bytes: 4 IP + 2 port) to ip:port."""
+        if not hex_str:
+            return ''
+        parts = hex_str.strip().split()
+        if len(parts) == 6:
+            try:
+                ip = '.'.join(str(int(p, 16)) for p in parts[:4])
+                port = int(parts[4], 16) * 256 + int(parts[5], 16)
+                return f'{ip}:{port}'
+            except ValueError:
+                pass
+        return hex_str
+
+    def set_snmp_config(self, v1=None, v2=None, v3=None,
+                        trap_service=None):
+        """Set SNMP version enable/disable and trap service.
 
         Args:
             v1, v2, v3: bool or None
+            trap_service: bool or None — enable/disable trap service
         """
         values = {}
         if v1 is not None:
@@ -5162,7 +5666,2662 @@ class MOPSHIOS:
             values["hm2SnmpV2AdminStatus"] = "1" if v2 else "2"
         if v3 is not None:
             values["hm2SnmpV3AdminStatus"] = "1" if v3 else "2"
+        if trap_service is not None:
+            values["hm2SnmpTrapServiceAdminStatus"] = (
+                "1" if trap_service else "2")
         if values:
             self._apply_set(
                 "HM2-MGMTACCESS-MIB", "hm2MgmtAccessSnmpGroup",
                 values)
+
+    # ------------------------------------------------------------------
+    # SNMP Trap Destinations (SNMP-TARGET-MIB)
+    # ------------------------------------------------------------------
+
+    _SEC_MODEL_REV = {'v1': '1', 'v2c': '2', 'v3': '3'}
+    _SEC_LEVEL_REV = {'noauth': '1', 'auth': '2', 'authpriv': '3'}
+
+    @staticmethod
+    def _encode_taddress(ip, port=162):
+        """Encode IP:port to MOPS hex TAddress (6 bytes)."""
+        parts = ip.split('.')
+        if len(parts) != 4:
+            raise ValueError(f"Invalid IP address: {ip}")
+        octets = [int(p) for p in parts]
+        octets.append(port >> 8)
+        octets.append(port & 0xFF)
+        return " ".join(f"{b:02x}" for b in octets)
+
+    def add_snmp_trap_dest(self, name, address, port=162,
+                           security_model='v3', security_name='admin',
+                           security_level='authpriv'):
+        """Add an SNMP trap destination.
+
+        Creates entries in both snmpTargetAddrTable and
+        snmpTargetParamsTable (RFC 3413 SNMP-TARGET-MIB).
+
+        Args:
+            name: Destination name (1-32 chars).
+            address: Destination IP address.
+            port: UDP port (default 162).
+            security_model: 'v1', 'v2c', or 'v3'.
+            security_name: Community (v1/v2c) or username (v3).
+            security_level: 'noauth', 'auth', or 'authpriv'.
+        """
+        if security_model not in self._SEC_MODEL_REV:
+            raise ValueError(
+                f"Invalid security_model '{security_model}': "
+                f"use 'v1', 'v2c', or 'v3'")
+        # v1/v2c only supports noauth — override regardless
+        if security_model in ('v1', 'v2c'):
+            security_level = 'noauth'
+        if security_level not in self._SEC_LEVEL_REV:
+            raise ValueError(
+                f"Invalid security_level '{security_level}': "
+                f"use 'noauth', 'auth', or 'authpriv'")
+
+        hex_name = encode_string(name)
+        idx_addr = {"snmpTargetAddrName": hex_name}
+        idx_params = {"snmpTargetParamsName": hex_name}
+
+        # Create params entry first (addr references it)
+        self._apply_set_indexed(
+            "SNMP-TARGET-MIB", "snmpTargetParamsEntry",
+            index=idx_params,
+            values={
+                "snmpTargetParamsRowStatus": "5",  # createAndWait
+            })
+        self._apply_set_indexed(
+            "SNMP-TARGET-MIB", "snmpTargetParamsEntry",
+            index=idx_params,
+            values={
+                "snmpTargetParamsSecurityModel":
+                    self._SEC_MODEL_REV[security_model],
+                "snmpTargetParamsSecurityName":
+                    encode_string(security_name),
+                "snmpTargetParamsSecurityLevel":
+                    self._SEC_LEVEL_REV[security_level],
+            })
+        self._apply_set_indexed(
+            "SNMP-TARGET-MIB", "snmpTargetParamsEntry",
+            index=idx_params,
+            values={"snmpTargetParamsRowStatus": "1"})  # active
+
+        # Create addr entry
+        taddr = self._encode_taddress(address, port)
+        self._apply_set_indexed(
+            "SNMP-TARGET-MIB", "snmpTargetAddrEntry",
+            index=idx_addr,
+            values={
+                "snmpTargetAddrRowStatus": "5",  # createAndWait
+            })
+        self._apply_set_indexed(
+            "SNMP-TARGET-MIB", "snmpTargetAddrEntry",
+            index=idx_addr,
+            values={
+                "snmpTargetAddrTAddress": taddr,
+                "snmpTargetAddrParams": hex_name,
+            })
+        self._apply_set_indexed(
+            "SNMP-TARGET-MIB", "snmpTargetAddrEntry",
+            index=idx_addr,
+            values={"snmpTargetAddrRowStatus": "1"})  # active
+
+    def delete_snmp_trap_dest(self, name):
+        """Delete an SNMP trap destination.
+
+        Removes entries from both snmpTargetAddrTable and
+        snmpTargetParamsTable.
+
+        Args:
+            name: Destination name to delete.
+        """
+        hex_name = encode_string(name)
+        # Destroy addr first, then params
+        self._apply_set_indexed(
+            "SNMP-TARGET-MIB", "snmpTargetAddrEntry",
+            index={"snmpTargetAddrName": hex_name},
+            values={"snmpTargetAddrRowStatus": "6"})  # destroy
+        self._apply_set_indexed(
+            "SNMP-TARGET-MIB", "snmpTargetParamsEntry",
+            index={"snmpTargetParamsName": hex_name},
+            values={"snmpTargetParamsRowStatus": "6"})  # destroy
+
+    # ------------------------------------------------------------------
+    # Signal Contact (HM2-DIAGNOSTIC-MIB / hm2SignalContactGroup)
+    # ------------------------------------------------------------------
+
+    _SIGCON_MODE = {
+        '1': 'manual', '2': 'monitor', '3': 'deviceState',
+        '4': 'deviceSecurity', '5': 'deviceStateAndSecurity',
+    }
+    _SIGCON_MODE_REV = {v: k for k, v in _SIGCON_MODE.items()}
+
+    _SIGCON_OPER = {'1': 'open', '2': 'close'}
+    _SIGCON_MANUAL = {'1': 'open', '2': 'close'}
+    _SIGCON_MANUAL_REV = {'open': '1', 'close': '2'}
+
+    _SIGCON_TRAP_CAUSE = {
+        '1': 'none', '2': 'power-supply', '3': 'link-failure',
+        '4': 'temperature', '5': 'fan-failure', '6': 'module-removal',
+        '7': 'ext-nvm-removal', '8': 'ext-nvm-not-in-sync',
+        '9': 'ring-redundancy', '10': 'power-fail-imminent',
+        '11': 'invalid-cfg', '12': 'sw-watchdog', '13': 'hw-watchdog',
+        '14': 'ext-nvm-update-enabled', '15': 'hw-failure',
+        '16': 'dev-temp-sensor-failure', '17': 'temp-warning',
+        '18': 'security-incident', '19': 'config-corrupted',
+        '20': 'system-reboot', '21': 'system-poweron',
+        '22': 'system-poweroff', '23': 'license-invalid',
+        '24': 'license-missing', '25': 'pml-enabled',
+        '26': 'profinet-io-enabled', '27': 'ethernet-loops',
+        '28': 'humidity', '29': 'pml-disabled',
+        '30': 'stp-port-blocked', '31': 'secure-boot-disabled',
+        '32': 'dev-mode-enabled',
+    }
+
+    # Sense flag attrs → human-readable key.  Order matches MIB OID order.
+    _SIGCON_SENSE = [
+        ("hm2SigConSenseLinkFailure", "link_failure"),
+        ("hm2SigConSenseTemperature", "temperature"),
+        ("hm2SigConSenseFan", "fan"),
+        ("hm2SigConSenseModuleRemoval", "module_removal"),
+        ("hm2SigConSenseExtNvmRemoval", "envm_removal"),
+        ("hm2SigConSenseExtNvmNotInSync", "envm_not_in_sync"),
+        ("hm2SigConSenseRingRedundancy", "ring_redundancy"),
+        ("hm2SigConSenseEthernetLoops", "ethernet_loops"),
+        ("hm2SigConSenseHumidity", "humidity"),
+        ("hm2SigConSenseStpPortBlock", "stp_port_block"),
+    ]
+    _SIGCON_SENSE_REV = {v: k for k, v in _SIGCON_SENSE}
+
+    def get_signal_contact(self):
+        """Read signal contact configuration and status.
+
+        Returns dict keyed by contact ID (int)::
+
+            {
+                1: {
+                    'mode': 'monitor',
+                    'manual_state': 'close',
+                    'trap_enabled': False,
+                    'monitoring': {
+                        'temperature': True,
+                        'link_failure': False,
+                        ...  # platform-dependent keys
+                    },
+                    'power_supply': {1: True, 2: True},
+                    'link_alarm': {'1/1': False, ...},
+                    'status': {
+                        'oper_state': 'open',
+                        'last_change': '2026-03-10 08:23:09',
+                        'cause': 'power-supply',
+                        'cause_index': 2,
+                        'events': [
+                            {'cause': 'power-supply', 'info': 2,
+                             'timestamp': '...'},
+                        ],
+                    },
+                }
+            }
+        """
+        sense_attrs = [a for a, _ in self._SIGCON_SENSE]
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("HM2-DIAGNOSTIC-MIB", "hm2SigConCommonEntry",
+             ["hm2SigConID", "hm2SigConMode", "hm2SigConOperState",
+              "hm2SigConTrapEnable", "hm2SigConTrapCause",
+              "hm2SigConTrapCauseIndex", "hm2SigConManualActivate",
+              "hm2SigConOperTimeStamp"] + sense_attrs),
+            ("HM2-DIAGNOSTIC-MIB", "hm2SigConPSEntry",
+             ["hm2SigConID", "hm2SigConSensePSState"]),
+            ("HM2-DIAGNOSTIC-MIB", "hm2SigConInterfaceEntry",
+             ["hm2SigConID", "hm2SigConSenseIfLinkAlarm"]),
+            ("HM2-DIAGNOSTIC-MIB", "hm2SigConStatusEntry",
+             ["hm2SigConStatusIndex", "hm2SigConStatusTimeStamp",
+              "hm2SigConStatusTrapCause", "hm2SigConStatusTrapCauseIndex"]),
+            decode_strings=False,
+        )
+
+        diag = mibs.get("HM2-DIAGNOSTIC-MIB", {})
+        common_rows = diag.get("hm2SigConCommonEntry", [])
+        ps_rows = diag.get("hm2SigConPSEntry", [])
+        intf_rows = diag.get("hm2SigConInterfaceEntry", [])
+        status_rows = diag.get("hm2SigConStatusEntry", [])
+
+        result = {}
+        for row in common_rows:
+            cid = _safe_int(row.get("hm2SigConID", "1"))
+            ts = _safe_int(row.get("hm2SigConOperTimeStamp", "0"))
+
+            monitoring = {}
+            for attr, key in self._SIGCON_SENSE:
+                val = row.get(attr)
+                if val is not None:
+                    monitoring[key] = _safe_int(val) == 1
+
+            cause_val = row.get("hm2SigConTrapCause", "1")
+            result[cid] = {
+                'mode': self._SIGCON_MODE.get(
+                    row.get("hm2SigConMode", "2"), "monitor"),
+                'manual_state': self._SIGCON_MANUAL.get(
+                    row.get("hm2SigConManualActivate", "2"), "close"),
+                'trap_enabled': _safe_int(
+                    row.get("hm2SigConTrapEnable", "2")) == 1,
+                'monitoring': monitoring,
+                'power_supply': {},
+                'link_alarm': {},
+                'status': {
+                    'oper_state': self._SIGCON_OPER.get(
+                        row.get("hm2SigConOperState", "2"), "close"),
+                    'last_change': self._format_timestamp(ts),
+                    'cause': self._SIGCON_TRAP_CAUSE.get(
+                        cause_val, cause_val),
+                    'cause_index': _safe_int(
+                        row.get("hm2SigConTrapCauseIndex", "0")),
+                    'events': [],
+                },
+            }
+
+        # Power supply rows: indexed by (SigConID, PSID) — PSID is
+        # implicit row order (1, 2, ...) since MOPS doesn't return it.
+        ps_by_contact = {}
+        for row in ps_rows:
+            cid = _safe_int(row.get("hm2SigConID", "1"))
+            ps_by_contact.setdefault(cid, []).append(row)
+        for cid, rows in ps_by_contact.items():
+            if cid in result:
+                for i, row in enumerate(rows, 1):
+                    result[cid]['power_supply'][i] = (
+                        _safe_int(row.get("hm2SigConSensePSState", "2"))
+                        == 1)
+
+        # Interface rows: indexed by (SigConID, ifIndex)
+        for row in intf_rows:
+            cid = _safe_int(row.get("hm2SigConID", "1"))
+            if cid not in result:
+                continue
+            # Resolve ifIndex — rows arrive in ifIndex order
+            # but ifIndex not always returned as attribute.
+            # We match by position against known ifindex_map.
+        # Re-fetch interface table with ifIndex for proper resolution
+        intf_by_contact = {}
+        for row in intf_rows:
+            cid = _safe_int(row.get("hm2SigConID", "1"))
+            intf_by_contact.setdefault(cid, []).append(row)
+        for cid, rows in intf_by_contact.items():
+            if cid not in result:
+                continue
+            # MOPS returns rows in ifIndex order; match to ifindex_map
+            sorted_idx = sorted(ifindex_map.keys(), key=int)
+            for i, row in enumerate(rows):
+                if i < len(sorted_idx):
+                    port_name = ifindex_map.get(sorted_idx[i], "")
+                    if port_name and not port_name.startswith("cpu"):
+                        result[cid]['link_alarm'][port_name] = (
+                            _safe_int(row.get(
+                                "hm2SigConSenseIfLinkAlarm", "2")) == 1)
+
+        # Status/events rows
+        for row in status_rows:
+            # Status table is under signal contact group but
+            # indexed by (SigConID, StatusIndex).  MOPS returns
+            # all rows — distribute to matching contact.
+            # For single-contact devices, all go to contact 1.
+            cause_val = row.get("hm2SigConStatusTrapCause", "1")
+            ts = _safe_int(row.get("hm2SigConStatusTimeStamp", "0"))
+            cause_idx = _safe_int(
+                row.get("hm2SigConStatusTrapCauseIndex", "0"))
+            event = {
+                'cause': self._SIGCON_TRAP_CAUSE.get(
+                    cause_val, cause_val),
+                'info': cause_idx,
+                'timestamp': self._format_timestamp(ts),
+            }
+            # Assign to first contact (most devices have 1)
+            for cid in result:
+                result[cid]['status']['events'].append(event)
+                break
+
+        return result
+
+    @staticmethod
+    def _format_timestamp(epoch_seconds):
+        """Convert HmTimeSeconds1970 to ISO-ish string."""
+        if not epoch_seconds:
+            return ''
+        try:
+            from datetime import datetime, timezone
+            dt = datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
+            return dt.strftime('%Y-%m-%d %H:%M:%S')
+        except (ValueError, OSError, OverflowError):
+            return str(epoch_seconds)
+
+    def set_signal_contact(self, contact_id=1, mode=None,
+                           manual_state=None, trap_enabled=None,
+                           monitoring=None, power_supply=None,
+                           link_alarm=None):
+        """Configure signal contact relay.
+
+        Args:
+            contact_id: 1 or 2 (most devices only have 1)
+            mode: 'manual'/'monitor'/'deviceState'/'deviceSecurity'/
+                  'deviceStateAndSecurity'
+            manual_state: 'open'/'close' (only effective in manual mode)
+            trap_enabled: bool
+            monitoring: dict of sense flags, e.g.
+                {'temperature': True, 'ring_redundancy': True}
+            power_supply: dict {psu_id: bool}, e.g. {1: True, 2: False}
+            link_alarm: dict {port_name: bool}, e.g. {'1/1': True}
+        """
+        idx = {"hm2SigConID": str(contact_id)}
+        values = {}
+
+        if mode is not None:
+            if mode not in self._SIGCON_MODE_REV:
+                raise ValueError(
+                    f"Invalid mode '{mode}'. Valid: "
+                    f"{', '.join(sorted(self._SIGCON_MODE_REV))}")
+            values["hm2SigConMode"] = self._SIGCON_MODE_REV[mode]
+
+        if manual_state is not None:
+            if manual_state not in self._SIGCON_MANUAL_REV:
+                raise ValueError(
+                    f"Invalid manual_state '{manual_state}'. "
+                    f"Valid: open, close")
+            values["hm2SigConManualActivate"] = (
+                self._SIGCON_MANUAL_REV[manual_state])
+
+        if trap_enabled is not None:
+            values["hm2SigConTrapEnable"] = "1" if trap_enabled else "2"
+
+        if monitoring:
+            for key, enabled in monitoring.items():
+                attr = self._SIGCON_SENSE_REV.get(key)
+                if attr is None:
+                    raise ValueError(
+                        f"Unknown sense flag '{key}'. Valid: "
+                        f"{', '.join(sorted(self._SIGCON_SENSE_REV))}")
+                values[attr] = "1" if enabled else "2"
+
+        mutations = []
+        if values:
+            mutations.append((
+                "HM2-DIAGNOSTIC-MIB", "hm2SigConCommonEntry",
+                values, idx))
+
+        if power_supply:
+            # PS table indexed by (SigConID, PSID) — use set_indexed
+            for ps_id, enabled in power_supply.items():
+                mutations.append((
+                    "HM2-DIAGNOSTIC-MIB", "hm2SigConPSEntry",
+                    {"hm2SigConSensePSState": "1" if enabled else "2"},
+                    {"hm2SigConID": str(contact_id),
+                     "hm2PSID": str(ps_id)}))
+
+        if link_alarm:
+            ifindex_map = self._build_ifindex_map()
+            name_to_idx = {n: i for i, n in ifindex_map.items()}
+            for port, enabled in link_alarm.items():
+                ifidx = name_to_idx.get(port)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{port}'")
+                mutations.append((
+                    "HM2-DIAGNOSTIC-MIB", "hm2SigConInterfaceEntry",
+                    {"hm2SigConSenseIfLinkAlarm":
+                     "1" if enabled else "2"},
+                    {"hm2SigConID": str(contact_id),
+                     "ifIndex": ifidx}))
+
+        self._apply_mutations(mutations)
+
+    # ------------------------------------------------------------------
+    # Device Monitor (HM2-DIAGNOSTIC-MIB / hm2DeviceMonitorGroup)
+    # ------------------------------------------------------------------
+
+    _DEVMON_SENSE = [
+        ("hm2DevMonSenseLinkFailure", "link_failure"),
+        ("hm2DevMonSenseTemperature", "temperature"),
+        ("hm2DevMonSenseFan", "fan"),
+        ("hm2DevMonSenseModuleRemoval", "module_removal"),
+        ("hm2DevMonSenseExtNvmRemoval", "envm_removal"),
+        ("hm2DevMonSenseExtNvmNotInSync", "envm_not_in_sync"),
+        ("hm2DevMonSenseRingRedundancy", "ring_redundancy"),
+        ("hm2DevMonSenseHumidity", "humidity"),
+        ("hm2DevMonSenseStpPortBlock", "stp_port_block"),
+    ]
+    _DEVMON_SENSE_REV = {v: k for k, v in _DEVMON_SENSE}
+
+    # Device monitor trap causes (subset of signal contact causes)
+    _DEVMON_TRAP_CAUSE = {
+        '1': 'none', '2': 'power-supply', '3': 'link-failure',
+        '4': 'temperature', '5': 'fan-failure', '6': 'module-removal',
+        '7': 'ext-nvm-removal', '8': 'ext-nvm-not-in-sync',
+        '9': 'ring-redundancy', '28': 'humidity',
+        '30': 'stp-port-blocked',
+    }
+
+    def get_device_monitor(self):
+        """Read device status monitoring configuration and state.
+
+        Returns::
+
+            {
+                'trap_enabled': True,
+                'monitoring': {
+                    'temperature': True,
+                    'link_failure': False,
+                    ...
+                },
+                'power_supply': {1: True, 2: True},
+                'link_alarm': {'1/1': False, ...},
+                'status': {
+                    'oper_state': 'error',
+                    'last_change': '...',
+                    'cause': 'power-supply',
+                    'cause_index': 2,
+                    'events': [...],
+                },
+            }
+        """
+        sense_attrs = [a for a, _ in self._DEVMON_SENSE]
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("HM2-DIAGNOSTIC-MIB", "hm2DevMonCommonEntry",
+             ["hm2DevMonID", "hm2DevMonTrapEnable",
+              "hm2DevMonTrapCause", "hm2DevMonTrapCauseIndex",
+              "hm2DevMonOperState", "hm2DevMonOperTimeStamp"]
+             + sense_attrs),
+            ("HM2-DIAGNOSTIC-MIB", "hm2DevMonPSEntry",
+             ["hm2DevMonID", "hm2DevMonSensePSState"]),
+            ("HM2-DIAGNOSTIC-MIB", "hm2DevMonInterfaceEntry",
+             ["hm2DevMonID", "hm2DevMonSenseIfLinkAlarm"]),
+            ("HM2-DIAGNOSTIC-MIB", "hm2DevMonStatusEntry",
+             ["hm2DevMonStatusIndex", "hm2DevMonStatusTimeStamp",
+              "hm2DevMonStatusTrapCause",
+              "hm2DevMonStatusTrapCauseIndex"]),
+            decode_strings=False,
+        )
+
+        diag = mibs.get("HM2-DIAGNOSTIC-MIB", {})
+        common_rows = diag.get("hm2DevMonCommonEntry", [])
+        ps_rows = diag.get("hm2DevMonPSEntry", [])
+        intf_rows = diag.get("hm2DevMonInterfaceEntry", [])
+        status_rows = diag.get("hm2DevMonStatusEntry", [])
+
+        row = common_rows[0] if common_rows else {}
+        ts = _safe_int(row.get("hm2DevMonOperTimeStamp", "0"))
+        cause_val = row.get("hm2DevMonTrapCause", "1")
+
+        monitoring = {}
+        for attr, key in self._DEVMON_SENSE:
+            val = row.get(attr)
+            if val is not None:
+                monitoring[key] = _safe_int(val) == 1
+
+        result = {
+            'trap_enabled': _safe_int(
+                row.get("hm2DevMonTrapEnable", "2")) == 1,
+            'monitoring': monitoring,
+            'power_supply': {},
+            'link_alarm': {},
+            'status': {
+                'oper_state': 'error' if _safe_int(
+                    row.get("hm2DevMonOperState", "1")) == 2
+                    else 'ok',
+                'last_change': self._format_timestamp(ts),
+                'cause': self._DEVMON_TRAP_CAUSE.get(
+                    cause_val, cause_val),
+                'cause_index': _safe_int(
+                    row.get("hm2DevMonTrapCauseIndex", "0")),
+                'events': [],
+            },
+        }
+
+        # Power supply
+        for i, ps_row in enumerate(ps_rows, 1):
+            result['power_supply'][i] = (
+                _safe_int(ps_row.get(
+                    "hm2DevMonSensePSState", "2")) == 1)
+
+        # Interface link alarm
+        sorted_idx = sorted(ifindex_map.keys(), key=int)
+        for i, irow in enumerate(intf_rows):
+            if i < len(sorted_idx):
+                port_name = ifindex_map.get(sorted_idx[i], "")
+                if port_name and not port_name.startswith("cpu"):
+                    result['link_alarm'][port_name] = (
+                        _safe_int(irow.get(
+                            "hm2DevMonSenseIfLinkAlarm", "2")) == 1)
+
+        # Events
+        for srow in status_rows:
+            cause_val = srow.get("hm2DevMonStatusTrapCause", "1")
+            ts = _safe_int(srow.get("hm2DevMonStatusTimeStamp", "0"))
+            result['status']['events'].append({
+                'cause': self._DEVMON_TRAP_CAUSE.get(
+                    cause_val, cause_val),
+                'info': _safe_int(
+                    srow.get("hm2DevMonStatusTrapCauseIndex", "0")),
+                'timestamp': self._format_timestamp(ts),
+            })
+
+        return result
+
+    def set_device_monitor(self, trap_enabled=None, monitoring=None,
+                           power_supply=None, link_alarm=None):
+        """Configure device status monitoring.
+
+        Args:
+            trap_enabled: bool
+            monitoring: dict of sense flags
+            power_supply: dict {psu_id: bool}
+            link_alarm: dict {port_name: bool}
+        """
+        idx = {"hm2DevMonID": "1"}
+        values = {}
+
+        if trap_enabled is not None:
+            values["hm2DevMonTrapEnable"] = (
+                "1" if trap_enabled else "2")
+
+        if monitoring:
+            for key, enabled in monitoring.items():
+                attr = self._DEVMON_SENSE_REV.get(key)
+                if attr is None:
+                    raise ValueError(
+                        f"Unknown sense flag '{key}'. Valid: "
+                        f"{', '.join(sorted(self._DEVMON_SENSE_REV))}")
+                values[attr] = "1" if enabled else "2"
+
+        mutations = []
+        if values:
+            mutations.append((
+                "HM2-DIAGNOSTIC-MIB", "hm2DevMonCommonEntry",
+                values, idx))
+
+        if power_supply:
+            for ps_id, enabled in power_supply.items():
+                mutations.append((
+                    "HM2-DIAGNOSTIC-MIB", "hm2DevMonPSEntry",
+                    {"hm2DevMonSensePSState":
+                     "1" if enabled else "2"},
+                    {"hm2DevMonID": "1",
+                     "hm2PSID": str(ps_id)}))
+
+        if link_alarm:
+            ifindex_map = self._build_ifindex_map()
+            name_to_idx = {n: i for i, n in ifindex_map.items()}
+            for port, enabled in link_alarm.items():
+                ifidx = name_to_idx.get(port)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{port}'")
+                mutations.append((
+                    "HM2-DIAGNOSTIC-MIB", "hm2DevMonInterfaceEntry",
+                    {"hm2DevMonSenseIfLinkAlarm":
+                     "1" if enabled else "2"},
+                    {"hm2DevMonID": "1", "ifIndex": ifidx}))
+
+        self._apply_mutations(mutations)
+
+    # ------------------------------------------------------------------
+    # Device Security Status (HM2-DIAGNOSTIC-MIB / hm2DeviceSecurityGroup)
+    # ------------------------------------------------------------------
+
+    _DEVSEC_SENSE = [
+        ("hm2DevSecSensePasswordChange", "password_change"),
+        ("hm2DevSecSensePasswordMinLength", "password_min_length"),
+        ("hm2DevSecSensePasswordStrengthNotConfigured",
+         "password_policy_not_configured"),
+        ("hm2DevSecSenseBypassPasswordStrength",
+         "password_policy_bypass"),
+        ("hm2DevSecSenseTelnetEnabled", "telnet_enabled"),
+        ("hm2DevSecSenseHttpEnabled", "http_enabled"),
+        ("hm2DevSecSenseSnmpUnsecure", "snmp_unsecure"),
+        ("hm2DevSecSenseSysmonEnabled", "sysmon_enabled"),
+        ("hm2DevSecSenseExtNvmUpdateEnabled", "envm_update_enabled"),
+        ("hm2DevSecSenseNoLinkEnabled", "no_link_enabled"),
+        ("hm2DevSecSenseHiDiscoveryEnabled", "hidiscovery_enabled"),
+        ("hm2DevSecSenseExtNvmConfigLoadUnsecure",
+         "envm_config_load_unsecure"),
+        ("hm2DevSecSenseIec61850MmsEnabled", "iec61850_mms_enabled"),
+        ("hm2DevSecSenseHttpsCertificateWarning",
+         "https_cert_warning"),
+        ("hm2DevSecSenseModbusTcpEnabled", "modbus_tcp_enabled"),
+        ("hm2DevSecSenseEtherNetIpEnabled", "ethernet_ip_enabled"),
+        ("hm2DevSecSenseProfinetIOEnabled", "profinet_enabled"),
+        ("hm2DevSecSensePMLDisabled", "pml_disabled"),
+        ("hm2DevSecSenseSecureBootDisabled", "secure_boot_disabled"),
+        ("hm2DevSecSenseDevModeEnabled", "dev_mode_enabled"),
+    ]
+    _DEVSEC_SENSE_REV = {v: k for k, v in _DEVSEC_SENSE}
+
+    _DEVSEC_TRAP_CAUSE = {
+        '1': 'none', '10': 'password-change',
+        '11': 'password-min-length',
+        '12': 'password-policy-not-configured',
+        '13': 'password-policy-inactive',
+        '14': 'telnet-enabled', '15': 'http-enabled',
+        '16': 'snmp-unsecure', '17': 'sysmon-enabled',
+        '18': 'ext-nvm-update-enabled', '19': 'no-link',
+        '20': 'hidiscovery-enabled',
+        '21': 'ext-nvm-config-load-unsecure',
+        '22': 'iec61850-mms-enabled',
+        '23': 'https-certificate-warning',
+        '24': 'modbus-tcp-enabled',
+        '25': 'ethernet-ip-enabled', '26': 'profinet-io-enabled',
+        '29': 'pml-disabled', '31': 'secure-boot-disabled',
+        '32': 'dev-mode-enabled',
+    }
+
+    def get_devsec_status(self):
+        """Read device security monitoring configuration and status.
+
+        Returns::
+
+            {
+                'trap_enabled': False,
+                'monitoring': {
+                    'password_change': True,
+                    'telnet_enabled': True,
+                    'http_enabled': True,
+                    ...  # 20 security sense flags
+                },
+                'no_link': {'1/1': False, ...},
+                'status': {
+                    'oper_state': 'error',
+                    'last_change': '...',
+                    'cause': 'https-certificate-warning',
+                    'cause_index': 0,
+                    'events': [...],
+                },
+            }
+        """
+        sense_attrs = [a for a, _ in self._DEVSEC_SENSE]
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("HM2-DIAGNOSTIC-MIB", "hm2DevSecConfigGroup",
+             ["hm2DevSecTrapEnable", "hm2DevSecTrapCause",
+              "hm2DevSecTrapCauseIndex", "hm2DevSecOperState",
+              "hm2DevSecOperTimeStamp"] + sense_attrs),
+            ("HM2-DIAGNOSTIC-MIB", "hm2DevSecInterfaceEntry",
+             ["hm2DevSecSenseIfNoLink"]),
+            ("HM2-DIAGNOSTIC-MIB", "hm2DevSecStatusEntry",
+             ["hm2DevSecStatusIndex", "hm2DevSecStatusTimeStamp",
+              "hm2DevSecStatusTrapCause",
+              "hm2DevSecStatusTrapCauseIndex"]),
+            decode_strings=False,
+        )
+
+        diag = mibs.get("HM2-DIAGNOSTIC-MIB", {})
+        config_rows = diag.get("hm2DevSecConfigGroup", [])
+        intf_rows = diag.get("hm2DevSecInterfaceEntry", [])
+        status_rows = diag.get("hm2DevSecStatusEntry", [])
+
+        row = config_rows[0] if config_rows else {}
+        ts = _safe_int(row.get("hm2DevSecOperTimeStamp", "0"))
+        cause_val = row.get("hm2DevSecTrapCause", "1")
+
+        monitoring = {}
+        for attr, key in self._DEVSEC_SENSE:
+            val = row.get(attr)
+            if val is not None:
+                monitoring[key] = _safe_int(val) == 1
+
+        result = {
+            'trap_enabled': _safe_int(
+                row.get("hm2DevSecTrapEnable", "2")) == 1,
+            'monitoring': monitoring,
+            'no_link': {},
+            'status': {
+                'oper_state': 'error' if _safe_int(
+                    row.get("hm2DevSecOperState", "1")) == 2
+                    else 'ok',
+                'last_change': self._format_timestamp(ts),
+                'cause': self._DEVSEC_TRAP_CAUSE.get(
+                    cause_val, cause_val),
+                'cause_index': _safe_int(
+                    row.get("hm2DevSecTrapCauseIndex", "0")),
+                'events': [],
+            },
+        }
+
+        # Per-port no-link monitoring
+        sorted_idx = sorted(ifindex_map.keys(), key=int)
+        for i, irow in enumerate(intf_rows):
+            if i < len(sorted_idx):
+                port_name = ifindex_map.get(sorted_idx[i], "")
+                if port_name and not port_name.startswith("cpu"):
+                    result['no_link'][port_name] = (
+                        _safe_int(irow.get(
+                            "hm2DevSecSenseIfNoLink", "2")) == 1)
+
+        # Events
+        for srow in status_rows:
+            cause_val = srow.get("hm2DevSecStatusTrapCause", "1")
+            ts = _safe_int(srow.get("hm2DevSecStatusTimeStamp", "0"))
+            result['status']['events'].append({
+                'cause': self._DEVSEC_TRAP_CAUSE.get(
+                    cause_val, cause_val),
+                'info': _safe_int(
+                    srow.get("hm2DevSecStatusTrapCauseIndex", "0")),
+                'timestamp': self._format_timestamp(ts),
+            })
+
+        return result
+
+    def set_devsec_status(self, trap_enabled=None, monitoring=None,
+                          no_link=None):
+        """Configure device security monitoring.
+
+        Args:
+            trap_enabled: bool
+            monitoring: dict of security sense flags, e.g.
+                {'telnet_enabled': True, 'http_enabled': True}
+            no_link: dict {port_name: bool}
+        """
+        values = {}
+
+        if trap_enabled is not None:
+            values["hm2DevSecTrapEnable"] = (
+                "1" if trap_enabled else "2")
+
+        if monitoring:
+            for key, enabled in monitoring.items():
+                attr = self._DEVSEC_SENSE_REV.get(key)
+                if attr is None:
+                    raise ValueError(
+                        f"Unknown sense flag '{key}'. Valid: "
+                        f"{', '.join(sorted(self._DEVSEC_SENSE_REV))}")
+                values[attr] = "1" if enabled else "2"
+
+        mutations = []
+        if values:
+            mutations.append((
+                "HM2-DIAGNOSTIC-MIB", "hm2DevSecConfigGroup",
+                values))
+
+        if no_link:
+            ifindex_map = self._build_ifindex_map()
+            name_to_idx = {n: i for i, n in ifindex_map.items()}
+            for port, enabled in no_link.items():
+                ifidx = name_to_idx.get(port)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{port}'")
+                mutations.append((
+                    "HM2-DIAGNOSTIC-MIB", "hm2DevSecInterfaceEntry",
+                    {"hm2DevSecSenseIfNoLink":
+                     "1" if enabled else "2"},
+                    {"ifIndex": ifidx}))
+
+        self._apply_mutations(mutations)
+
+    # ------------------------------------------------------------------
+    # Banner (HM2-MGMTACCESS-MIB)
+    # ------------------------------------------------------------------
+
+    def get_banner(self):
+        """Read pre-login and CLI login banner configuration.
+
+        Returns::
+
+            {
+                'pre_login': {'enabled': False, 'text': ''},
+                'cli_login': {'enabled': False, 'text': ''},
+            }
+        """
+        result = self.client.get_multi([
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessPreLoginBannerGroup",
+             ["hm2PreLoginBannerAdminStatus",
+              "hm2PreLoginBannerText"]),
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessCliGroup",
+             ["hm2CliLoginBannerAdminStatus",
+              "hm2CliLoginBannerText"]),
+        ], decode_strings=False)
+
+        mgmt = result["mibs"].get("HM2-MGMTACCESS-MIB", {})
+        pre = (mgmt.get("hm2MgmtAccessPreLoginBannerGroup", [{}])
+               [0] if mgmt.get("hm2MgmtAccessPreLoginBannerGroup")
+               else {})
+        cli = (mgmt.get("hm2MgmtAccessCliGroup", [{}])
+               [0] if mgmt.get("hm2MgmtAccessCliGroup")
+               else {})
+
+        return {
+            'pre_login': {
+                'enabled': _safe_int(pre.get(
+                    "hm2PreLoginBannerAdminStatus", "2")) == 1,
+                'text': _decode_hex_string(
+                    pre.get("hm2PreLoginBannerText", "")),
+            },
+            'cli_login': {
+                'enabled': _safe_int(cli.get(
+                    "hm2CliLoginBannerAdminStatus", "2")) == 1,
+                'text': _decode_hex_string(
+                    cli.get("hm2CliLoginBannerText", "")),
+            },
+        }
+
+    def set_banner(self, pre_login_enabled=None, pre_login_text=None,
+                   cli_login_enabled=None, cli_login_text=None):
+        """Set pre-login and/or CLI login banner.
+
+        Args:
+            pre_login_enabled: bool (NERC CIP-005-1 R2.6 banner)
+            pre_login_text: str (max 512 chars, supports \\n \\t)
+            cli_login_enabled: bool (replaces system overview on CLI)
+            cli_login_text: str (max 1024 chars, supports \\n \\t)
+        """
+        mutations = []
+
+        pre_values = {}
+        if pre_login_enabled is not None:
+            pre_values["hm2PreLoginBannerAdminStatus"] = (
+                "1" if pre_login_enabled else "2")
+        if pre_login_text is not None:
+            pre_values["hm2PreLoginBannerText"] = encode_string(
+                pre_login_text)
+        if pre_values:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB",
+                "hm2MgmtAccessPreLoginBannerGroup", pre_values))
+
+        cli_values = {}
+        if cli_login_enabled is not None:
+            cli_values["hm2CliLoginBannerAdminStatus"] = (
+                "1" if cli_login_enabled else "2")
+        if cli_login_text is not None:
+            cli_values["hm2CliLoginBannerText"] = encode_string(
+                cli_login_text)
+        if cli_values:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB",
+                "hm2MgmtAccessCliGroup", cli_values))
+
+        self._apply_mutations(mutations)
+
+    # ------------------------------------------------------------------
+    # Session Config (HM2-MGMTACCESS-MIB — session timeouts/limits)
+    # ------------------------------------------------------------------
+
+    def get_session_config(self):
+        """Read session timeout and max-sessions for all management protocols.
+
+        Returns::
+
+            {
+                'ssh':          {'timeout': 5, 'max_sessions': 5, 'active_sessions': 1},
+                'ssh_outbound': {'timeout': 5, 'max_sessions': 5, 'active_sessions': 0},
+                'telnet':       {'timeout': 5, 'max_sessions': 5, 'active_sessions': 0},
+                'web':          {'timeout': 5},
+                'serial':       {'timeout': 5},
+                'netconf':      {'timeout': 60, 'max_sessions': 5, 'active_sessions': 0},
+            }
+
+        All timeouts in minutes (0 = disabled).
+        NETCONF stored as seconds on device, normalised to minutes here.
+        active_sessions is read-only runtime counter.
+        """
+        result = self.client.get_multi([
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessSshGroup",
+             ["hm2SshMaxSessionsCount", "hm2SshSessionTimeout",
+              "hm2SshSessionsCount",
+              "hm2SshOutboundMaxSessionsCount",
+              "hm2SshOutboundSessionTimeout",
+              "hm2SshOutboundSessionsCount"]),
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessTelnetGroup",
+             ["hm2TelnetServerMaxSessions",
+              "hm2TelnetServerSessionsTimeOut",
+              "hm2TelnetServerSessionsCount"]),
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessWebGroup",
+             ["hm2WebIntfTimeOut"]),
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessCliGroup",
+             ["hm2CliLoginTimeoutSerial"]),
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessNetconfGroup",
+             ["hm2NetconfMaxSessions", "hm2NetconfSessionTimeout",
+              "hm2NetconfSessionsCount"]),
+            ("HM2-MGMTACCESS-MIB", "hm2MgmtAccessPhysicalIntfGroup",
+             ["hm2MgmtAccessPhysicalIntfSerialAdminStatus",
+              "hm2MgmtAccessPhysicalIntfSerialOperStatus",
+              "hm2MgmtAccessPhysicalIntfEnvmAdminStatus",
+              "hm2MgmtAccessPhysicalIntfEnvmOperStatus"]),
+        ], decode_strings=False)
+
+        mgmt = result["mibs"].get("HM2-MGMTACCESS-MIB", {})
+        ssh = (mgmt.get("hm2MgmtAccessSshGroup", [{}])[0]
+               if mgmt.get("hm2MgmtAccessSshGroup") else {})
+        tel = (mgmt.get("hm2MgmtAccessTelnetGroup", [{}])[0]
+               if mgmt.get("hm2MgmtAccessTelnetGroup") else {})
+        web = (mgmt.get("hm2MgmtAccessWebGroup", [{}])[0]
+               if mgmt.get("hm2MgmtAccessWebGroup") else {})
+        cli_g = (mgmt.get("hm2MgmtAccessCliGroup", [{}])[0]
+                 if mgmt.get("hm2MgmtAccessCliGroup") else {})
+        nc = (mgmt.get("hm2MgmtAccessNetconfGroup", [{}])[0]
+              if mgmt.get("hm2MgmtAccessNetconfGroup") else {})
+        phys = (mgmt.get("hm2MgmtAccessPhysicalIntfGroup", [{}])[0]
+                if mgmt.get("hm2MgmtAccessPhysicalIntfGroup") else {})
+
+        # NETCONF timeout is in seconds on device — normalise to minutes
+        nc_timeout_sec = _safe_int(
+            nc.get("hm2NetconfSessionTimeout", "0"))
+        nc_timeout_min = nc_timeout_sec // 60 if nc_timeout_sec else 0
+
+        return {
+            'ssh': {
+                'timeout': _safe_int(
+                    ssh.get("hm2SshSessionTimeout", "0")),
+                'max_sessions': _safe_int(
+                    ssh.get("hm2SshMaxSessionsCount", "0")),
+                'active_sessions': _safe_int(
+                    ssh.get("hm2SshSessionsCount", "0")),
+            },
+            'ssh_outbound': {
+                'timeout': _safe_int(
+                    ssh.get("hm2SshOutboundSessionTimeout", "0")),
+                'max_sessions': _safe_int(
+                    ssh.get("hm2SshOutboundMaxSessionsCount", "0")),
+                'active_sessions': _safe_int(
+                    ssh.get("hm2SshOutboundSessionsCount", "0")),
+            },
+            'telnet': {
+                'timeout': _safe_int(
+                    tel.get("hm2TelnetServerSessionsTimeOut", "0")),
+                'max_sessions': _safe_int(
+                    tel.get("hm2TelnetServerMaxSessions", "0")),
+                'active_sessions': _safe_int(
+                    tel.get("hm2TelnetServerSessionsCount", "0")),
+            },
+            'web': {
+                'timeout': _safe_int(
+                    web.get("hm2WebIntfTimeOut", "0")),
+            },
+            'serial': {
+                'timeout': _safe_int(
+                    cli_g.get("hm2CliLoginTimeoutSerial", "0")),
+                'enabled': phys.get(
+                    "hm2MgmtAccessPhysicalIntfSerialAdminStatus",
+                    "1") == "1",
+                'oper_status': phys.get(
+                    "hm2MgmtAccessPhysicalIntfSerialOperStatus",
+                    "1") == "1",
+            },
+            'envm': {
+                'enabled': phys.get(
+                    "hm2MgmtAccessPhysicalIntfEnvmAdminStatus",
+                    "1") == "1",
+                'oper_status': phys.get(
+                    "hm2MgmtAccessPhysicalIntfEnvmOperStatus",
+                    "1") == "1",
+            },
+            'netconf': {
+                'timeout': nc_timeout_min,
+                'max_sessions': _safe_int(
+                    nc.get("hm2NetconfMaxSessions", "0")),
+                'active_sessions': _safe_int(
+                    nc.get("hm2NetconfSessionsCount", "0")),
+            },
+        }
+
+    def set_session_config(self, ssh_timeout=None, ssh_max_sessions=None,
+                           ssh_outbound_timeout=None,
+                           ssh_outbound_max_sessions=None,
+                           telnet_timeout=None, telnet_max_sessions=None,
+                           web_timeout=None, serial_timeout=None,
+                           netconf_timeout=None,
+                           netconf_max_sessions=None,
+                           serial_enabled=None, envm_enabled=None):
+        """Set session timeouts and max-sessions.
+
+        All timeouts in minutes (0 = disabled).
+        NETCONF timeout converted to seconds before writing.
+        """
+        mutations = []
+
+        ssh_values = {}
+        if ssh_timeout is not None:
+            ssh_values["hm2SshSessionTimeout"] = str(ssh_timeout)
+        if ssh_max_sessions is not None:
+            ssh_values["hm2SshMaxSessionsCount"] = str(ssh_max_sessions)
+        if ssh_outbound_timeout is not None:
+            ssh_values["hm2SshOutboundSessionTimeout"] = str(
+                ssh_outbound_timeout)
+        if ssh_outbound_max_sessions is not None:
+            ssh_values["hm2SshOutboundMaxSessionsCount"] = str(
+                ssh_outbound_max_sessions)
+        if ssh_values:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB",
+                "hm2MgmtAccessSshGroup", ssh_values))
+
+        tel_values = {}
+        if telnet_timeout is not None:
+            tel_values["hm2TelnetServerSessionsTimeOut"] = str(
+                telnet_timeout)
+        if telnet_max_sessions is not None:
+            tel_values["hm2TelnetServerMaxSessions"] = str(
+                telnet_max_sessions)
+        if tel_values:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB",
+                "hm2MgmtAccessTelnetGroup", tel_values))
+
+        if web_timeout is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB",
+                "hm2MgmtAccessWebGroup",
+                {"hm2WebIntfTimeOut": str(web_timeout)}))
+
+        if serial_timeout is not None:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB",
+                "hm2MgmtAccessCliGroup",
+                {"hm2CliLoginTimeoutSerial": str(serial_timeout)}))
+
+        nc_values = {}
+        if netconf_timeout is not None:
+            # Convert minutes to seconds for device
+            nc_values["hm2NetconfSessionTimeout"] = str(
+                netconf_timeout * 60)
+        if netconf_max_sessions is not None:
+            nc_values["hm2NetconfMaxSessions"] = str(netconf_max_sessions)
+        if nc_values:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB",
+                "hm2MgmtAccessNetconfGroup", nc_values))
+
+        phys_values = {}
+        if serial_enabled is not None:
+            phys_values["hm2MgmtAccessPhysicalIntfSerialAdminStatus"] = (
+                "1" if serial_enabled else "2")
+        if envm_enabled is not None:
+            phys_values["hm2MgmtAccessPhysicalIntfEnvmAdminStatus"] = (
+                "1" if envm_enabled else "2")
+        if phys_values:
+            mutations.append((
+                "HM2-MGMTACCESS-MIB",
+                "hm2MgmtAccessPhysicalIntfGroup", phys_values))
+
+        self._apply_mutations(mutations)
+
+    # ------------------------------------------------------------------
+    # IP Restrict (HM2-MGMTACCESS-MIB — restricted management access)
+    # ------------------------------------------------------------------
+
+    def get_ip_restrict(self):
+        """Read restricted management access configuration.
+
+        Returns::
+
+            {
+                'enabled': False,
+                'logging': False,
+                'rules': [
+                    {
+                        'index': 1,
+                        'ip': '192.168.1.0',
+                        'prefix_length': 24,
+                        'services': {
+                            'http': True, 'https': True, 'snmp': True,
+                            'telnet': True, 'ssh': True, 'iec61850': True,
+                            'modbus': True, 'ethernet_ip': True,
+                            'profinet': True,
+                        },
+                        'interface': '',
+                        'per_rule_logging': False,
+                        'log_counter': 0,
+                    },
+                ],
+            }
+        """
+        # Global scalars
+        try:
+            scalars = self.client.get(
+                "HM2-MGMTACCESS-MIB",
+                "hm2RestrictedMgmtAccessGroup",
+                ["hm2RmaOperation", "hm2RmaLoggingGlobal"],
+                decode_strings=False)
+        except MOPSError:
+            scalars = []
+        s = scalars[0] if scalars else {}
+
+        # Rule table
+        try:
+            entries = self.client.get(
+                "HM2-MGMTACCESS-MIB", "hm2RmaEntry",
+                ["hm2RmaRowStatus", "hm2RmaIpAddr",
+                 "hm2RmaPrefixLength",
+                 "hm2RmaSrvHttp", "hm2RmaSrvHttps",
+                 "hm2RmaSrvSnmp", "hm2RmaSrvTelnet",
+                 "hm2RmaSrvSsh", "hm2RmaSrvIEC61850",
+                 "hm2RmaSrvModbusTcp", "hm2RmaSrvEthernetIP",
+                 "hm2RmaSrvProfinetIO",
+                 "hm2RmaInterface", "hm2RmaLogging"],
+                decode_strings=False)
+        except MOPSError:
+            entries = []
+
+        rules = []
+        for i, entry in enumerate(entries):
+            status = _safe_int(entry.get("hm2RmaRowStatus", "0"))
+            if status not in (1, 3):  # active or notInService
+                continue
+            ip_hex = entry.get("hm2RmaIpAddr", "")
+            ip = self._decode_inet_address(ip_hex)
+            iface = _decode_hex_string(
+                entry.get("hm2RmaInterface", ""))
+            rules.append({
+                'index': i + 1,
+                'ip': ip,
+                'prefix_length': _safe_int(
+                    entry.get("hm2RmaPrefixLength", "0")),
+                'services': {
+                    'http': _safe_int(
+                        entry.get("hm2RmaSrvHttp", "1")) == 1,
+                    'https': _safe_int(
+                        entry.get("hm2RmaSrvHttps", "1")) == 1,
+                    'snmp': _safe_int(
+                        entry.get("hm2RmaSrvSnmp", "1")) == 1,
+                    'telnet': _safe_int(
+                        entry.get("hm2RmaSrvTelnet", "1")) == 1,
+                    'ssh': _safe_int(
+                        entry.get("hm2RmaSrvSsh", "1")) == 1,
+                    'iec61850': _safe_int(
+                        entry.get("hm2RmaSrvIEC61850", "1")) == 1,
+                    'modbus': _safe_int(
+                        entry.get("hm2RmaSrvModbusTcp", "1")) == 1,
+                    'ethernet_ip': _safe_int(
+                        entry.get("hm2RmaSrvEthernetIP", "1")) == 1,
+                    'profinet': _safe_int(
+                        entry.get("hm2RmaSrvProfinetIO", "1")) == 1,
+                },
+                'interface': iface if iface else '',
+                'per_rule_logging': _safe_int(
+                    entry.get("hm2RmaLogging", "2")) == 1,
+                'log_counter': 0,
+            })
+
+        return {
+            'enabled': _safe_int(
+                s.get("hm2RmaOperation", "2")) == 1,
+            'logging': _safe_int(
+                s.get("hm2RmaLoggingGlobal", "2")) == 1,
+            'rules': rules,
+        }
+
+    @staticmethod
+    def _decode_inet_address(hex_str):
+        """Decode MOPS hex InetAddress to dotted-quad string."""
+        if not hex_str:
+            return '0.0.0.0'
+        parts = hex_str.strip().split()
+        if len(parts) == 4:
+            try:
+                return '.'.join(str(int(p, 16)) for p in parts)
+            except ValueError:
+                pass
+        return hex_str
+
+    @staticmethod
+    def _encode_inet_address(ip_str):
+        """Encode dotted-quad IP to MOPS hex InetAddress."""
+        try:
+            octets = ip_str.split('.')
+            return ' '.join(f'{int(o):02x}' for o in octets)
+        except (ValueError, AttributeError):
+            return '00 00 00 00'
+
+    def set_ip_restrict(self, enabled=None, logging=None):
+        """Set global RMA enable/logging.
+
+        Args:
+            enabled: bool — global restricted management access
+            logging: bool — global RMA logging
+        """
+        values = {}
+        if enabled is not None:
+            values["hm2RmaOperation"] = "1" if enabled else "2"
+        if logging is not None:
+            values["hm2RmaLoggingGlobal"] = "1" if logging else "2"
+        if values:
+            self._apply_set(
+                "HM2-MGMTACCESS-MIB",
+                "hm2RestrictedMgmtAccessGroup", values)
+
+    def add_ip_restrict_rule(self, index, ip='0.0.0.0',
+                             prefix_length=0,
+                             http=True, https=True, snmp=True,
+                             telnet=True, ssh=True, iec61850=True,
+                             modbus=True, ethernet_ip=True,
+                             profinet=True,
+                             interface='',
+                             per_rule_logging=False):
+        """Create RMA rule at index 1-16. RowStatus createAndGo."""
+        values = {
+            "hm2RmaRowStatus": "4",  # createAndGo
+            "hm2RmaIpAddrType": "1",  # ipv4
+            "hm2RmaIpAddr": self._encode_inet_address(ip),
+            "hm2RmaPrefixLength": str(prefix_length),
+            "hm2RmaSrvHttp": "1" if http else "2",
+            "hm2RmaSrvHttps": "1" if https else "2",
+            "hm2RmaSrvSnmp": "1" if snmp else "2",
+            "hm2RmaSrvTelnet": "1" if telnet else "2",
+            "hm2RmaSrvSsh": "1" if ssh else "2",
+            "hm2RmaSrvIEC61850": "1" if iec61850 else "2",
+            "hm2RmaSrvModbusTcp": "1" if modbus else "2",
+            "hm2RmaSrvEthernetIP": "1" if ethernet_ip else "2",
+            "hm2RmaSrvProfinetIO": "1" if profinet else "2",
+            "hm2RmaLogging": "1" if per_rule_logging else "2",
+        }
+        if interface:
+            values["hm2RmaInterface"] = encode_string(interface)
+        self.client.set_indexed(
+            "HM2-MGMTACCESS-MIB", "hm2RmaEntry",
+            index={"hm2RmaIndex": str(index)},
+            values=values)
+
+    def delete_ip_restrict_rule(self, index):
+        """Delete RMA rule by index. RowStatus destroy."""
+        self.client.set_indexed(
+            "HM2-MGMTACCESS-MIB", "hm2RmaEntry",
+            index={"hm2RmaIndex": str(index)},
+            values={"hm2RmaRowStatus": "6"})  # destroy
+
+    # ------------------------------------------------------------------
+    # DNS client
+    # ------------------------------------------------------------------
+
+    _DNS_CONFIG_SOURCE = {'1': 'user', '2': 'mgmt-dhcp', '3': 'provider'}
+    _DNS_CONFIG_SOURCE_REV = {v: k for k, v in _DNS_CONFIG_SOURCE.items()}
+
+    def get_dns(self):
+        """Read DNS client configuration.
+
+        Returns::
+
+            {
+                'enabled': False,
+                'config_source': 'mgmt-dhcp',
+                'domain_name': '',
+                'timeout': 3,
+                'retransmits': 2,
+                'cache_enabled': True,
+                'servers': ['10.0.0.1', '10.0.0.2'],
+                'active_servers': ['10.0.0.1'],
+            }
+        """
+        # Scalars: admin state + config source + global settings
+        result = self.client.get_multi([
+            ("HM2-DNS-MIB", "hm2DnsClientGroup",
+             ["hm2DnsClientAdminState",
+              "hm2DnsClientConfigSource"]),
+            ("HM2-DNS-MIB", "hm2DnsClientGlobalGroup",
+             ["hm2DnsClientDefaultDomainName",
+              "hm2DnsClientRequestTimeout",
+              "hm2DnsClientRequestRetransmits",
+              "hm2DnsClientCacheAdminState"]),
+        ], decode_strings=False)
+
+        dns = result["mibs"].get("HM2-DNS-MIB", {})
+        client_grp = (dns.get("hm2DnsClientGroup", [{}])[0]
+                      if dns.get("hm2DnsClientGroup") else {})
+        global_grp = (dns.get("hm2DnsClientGlobalGroup", [{}])[0]
+                      if dns.get("hm2DnsClientGlobalGroup") else {})
+
+        # User-configured server table (up to 4)
+        try:
+            cfg_entries = self.client.get(
+                "HM2-DNS-MIB", "hm2DnsClientServerCfgEntry",
+                ["hm2DnsClientServerIndex",
+                 "hm2DnsClientServerAddressType",
+                 "hm2DnsClientServerAddress",
+                 "hm2DnsClientServerRowStatus"],
+                decode_strings=False)
+        except (MOPSError, ConnectionException):
+            cfg_entries = []
+
+        # Active server table (RO — may include DHCP-provided)
+        try:
+            diag_entries = self.client.get(
+                "HM2-DNS-MIB", "hm2DnsClientServerDiagEntry",
+                ["hm2DnsClientServerDiagIndex",
+                 "hm2DnsClientServerDiagAddressType",
+                 "hm2DnsClientServerDiagAddress"],
+                decode_strings=False)
+        except (MOPSError, ConnectionException):
+            diag_entries = []
+
+        servers = []
+        for entry in cfg_entries:
+            addr = _decode_hex_ip(
+                entry.get("hm2DnsClientServerAddress", ""))
+            rs = entry.get("hm2DnsClientServerRowStatus", "")
+            # Only include active rows with real addresses
+            if addr and addr != '0.0.0.0' and rs != '6':
+                servers.append(addr)
+
+        active_servers = []
+        for entry in diag_entries:
+            addr = _decode_hex_ip(
+                entry.get("hm2DnsClientServerDiagAddress", ""))
+            if addr and addr != '0.0.0.0':
+                active_servers.append(addr)
+
+        return {
+            'enabled': _safe_int(client_grp.get(
+                "hm2DnsClientAdminState", "2")) == 1,
+            'config_source': self._DNS_CONFIG_SOURCE.get(
+                client_grp.get("hm2DnsClientConfigSource", "2"),
+                "mgmt-dhcp"),
+            'domain_name': _decode_hex_string(
+                global_grp.get(
+                    "hm2DnsClientDefaultDomainName", "")),
+            'timeout': _safe_int(global_grp.get(
+                "hm2DnsClientRequestTimeout", "3")),
+            'retransmits': _safe_int(global_grp.get(
+                "hm2DnsClientRequestRetransmits", "2")),
+            'cache_enabled': _safe_int(global_grp.get(
+                "hm2DnsClientCacheAdminState", "2")) == 1,
+            'servers': servers,
+            'active_servers': active_servers,
+        }
+
+    def set_dns(self, enabled=None, config_source=None, domain_name=None,
+                timeout=None, retransmits=None, cache_enabled=None):
+        """Set DNS client global configuration.
+
+        Args:
+            enabled: bool — DNS client admin state
+            config_source: str — 'user' | 'mgmt-dhcp' | 'provider'
+            domain_name: str — default domain for unqualified hostnames
+            timeout: int — request timeout in seconds (0-3600)
+            retransmits: int — retry count (0-100)
+            cache_enabled: bool — DNS client cache
+        """
+        mutations = []
+
+        client_values = {}
+        if enabled is not None:
+            client_values["hm2DnsClientAdminState"] = (
+                "1" if enabled else "2")
+        if config_source is not None:
+            rev = self._DNS_CONFIG_SOURCE_REV.get(config_source)
+            if rev is None:
+                raise ValueError(
+                    f"config_source must be one of "
+                    f"{list(self._DNS_CONFIG_SOURCE.values())}, "
+                    f"got '{config_source}'")
+            client_values["hm2DnsClientConfigSource"] = rev
+        if client_values:
+            mutations.append((
+                "HM2-DNS-MIB", "hm2DnsClientGroup", client_values))
+
+        global_values = {}
+        if domain_name is not None:
+            global_values["hm2DnsClientDefaultDomainName"] = (
+                encode_string(domain_name))
+        if timeout is not None:
+            global_values["hm2DnsClientRequestTimeout"] = str(
+                int(timeout))
+        if retransmits is not None:
+            global_values["hm2DnsClientRequestRetransmits"] = str(
+                int(retransmits))
+        if cache_enabled is not None:
+            global_values["hm2DnsClientCacheAdminState"] = (
+                "1" if cache_enabled else "2")
+        if global_values:
+            mutations.append((
+                "HM2-DNS-MIB", "hm2DnsClientGlobalGroup",
+                global_values))
+
+        self._apply_mutations(mutations)
+
+    def add_dns_server(self, address):
+        """Add a DNS server. Auto-picks next free index (1-4).
+
+        Args:
+            address: str — IPv4 address (e.g. '192.168.3.1')
+        """
+        # Read current servers to find a free index
+        try:
+            cfg_entries = self.client.get(
+                "HM2-DNS-MIB", "hm2DnsClientServerCfgEntry",
+                ["hm2DnsClientServerIndex",
+                 "hm2DnsClientServerRowStatus"],
+                decode_strings=False)
+        except (MOPSError, ConnectionException):
+            cfg_entries = []
+
+        used = set()
+        for entry in cfg_entries:
+            rs = entry.get("hm2DnsClientServerRowStatus", "")
+            if rs not in ('', '6'):  # 6 = destroy
+                idx = _safe_int(
+                    entry.get("hm2DnsClientServerIndex", "0"))
+                if idx:
+                    used.add(idx)
+
+        free_idx = None
+        for i in range(1, 5):
+            if i not in used:
+                free_idx = i
+                break
+        if free_idx is None:
+            raise ValueError(
+                "All 4 DNS server slots are in use")
+
+        self.client.set_indexed(
+            "HM2-DNS-MIB", "hm2DnsClientServerCfgEntry",
+            index={"hm2DnsClientServerIndex": str(free_idx)},
+            values={
+                "hm2DnsClientServerAddressType": "1",  # ipv4
+                "hm2DnsClientServerAddress": _encode_hex_ip(
+                    address),
+                "hm2DnsClientServerRowStatus": "4",  # createAndGo
+            })
+
+    def delete_dns_server(self, address):
+        """Delete a DNS server by IP address.
+
+        Args:
+            address: str — IPv4 address to remove
+        """
+        try:
+            cfg_entries = self.client.get(
+                "HM2-DNS-MIB", "hm2DnsClientServerCfgEntry",
+                ["hm2DnsClientServerIndex",
+                 "hm2DnsClientServerAddress",
+                 "hm2DnsClientServerRowStatus"],
+                decode_strings=False)
+        except (MOPSError, ConnectionException):
+            cfg_entries = []
+
+        target_idx = None
+        for entry in cfg_entries:
+            addr = _decode_hex_ip(
+                entry.get("hm2DnsClientServerAddress", ""))
+            rs = entry.get("hm2DnsClientServerRowStatus", "")
+            if addr == address and rs not in ('', '6'):
+                target_idx = _safe_int(
+                    entry.get("hm2DnsClientServerIndex", "0"))
+                break
+
+        if target_idx is None:
+            raise ValueError(
+                f"DNS server '{address}' not found")
+
+        self.client.set_indexed(
+            "HM2-DNS-MIB", "hm2DnsClientServerCfgEntry",
+            index={"hm2DnsClientServerIndex": str(target_idx)},
+            values={"hm2DnsClientServerRowStatus": "6"})  # destroy
+
+    # ------------------------------------------------------------------
+    # Remote Authentication
+    # ------------------------------------------------------------------
+
+    def get_remote_auth(self):
+        """Check whether remote authentication services are configured.
+
+        Returns::
+
+            {
+                'radius': {'enabled': True},
+                'tacacs': {'enabled': False},
+                'ldap': {'enabled': False},
+            }
+
+        RADIUS/TACACS+: enabled if any server row has RowStatus active(1).
+        LDAP: enabled if global admin state is enable(1).
+        """
+        # LDAP global admin state (scalar)
+        result = self.client.get_multi([
+            ("HM2-REMOTE-AUTHENTICATION-MIB", "hm2LdapConfigGroup",
+             ["hm2LdapClientAdminState"]),
+        ], decode_strings=False)
+        ldap_grp = (result["mibs"]
+                    .get("HM2-REMOTE-AUTHENTICATION-MIB", {})
+                    .get("hm2LdapConfigGroup", [{}])[0])
+        ldap_enabled = ldap_grp.get(
+            "hm2LdapClientAdminState", "2") == "1"
+
+        # RADIUS auth server table — any active row?
+        try:
+            radius_entries = self.client.get(
+                "HM2-PLATFORM-RADIUS-MIB",
+                "hm2AgentRadiusServerConfigEntry",
+                ["hm2AgentRadiusServerRowStatus"],
+                decode_strings=False)
+        except (MOPSError, ConnectionException):
+            radius_entries = []
+
+        radius_enabled = any(
+            e.get("hm2AgentRadiusServerRowStatus") == "1"
+            for e in radius_entries)
+
+        # TACACS+ server table — any active row?
+        try:
+            tacacs_entries = self.client.get(
+                "HM2-PLATFORM-TACACSCLIENT-MIB",
+                "hm2AgentTacacsServerEntry",
+                ["hm2AgentTacacsServerStatus"],
+                decode_strings=False)
+        except (MOPSError, ConnectionException):
+            tacacs_entries = []
+
+        tacacs_enabled = any(
+            e.get("hm2AgentTacacsServerStatus") == "1"
+            for e in tacacs_entries)
+
+        return {
+            'radius': {'enabled': radius_enabled},
+            'tacacs': {'enabled': tacacs_enabled},
+            'ldap': {'enabled': ldap_enabled},
+        }
+
+    # ------------------------------------------------------------------
+    # User Management
+    # ------------------------------------------------------------------
+
+    _ROLE_MAP = {
+        '0': 'unauthorized', '1': 'guest', '2': 'auditor',
+        '5': 'custom1', '6': 'custom2', '7': 'custom3',
+        '13': 'operator', '15': 'administrator',
+    }
+    _ROLE_REV = {v: k for k, v in _ROLE_MAP.items()}
+
+    _AUTH_MAP = {'1': 'md5', '2': 'sha'}
+    _ENC_MAP = {'0': 'none', '1': 'des', '2': 'aes128', '3': 'aes256'}
+    _AUTH_REV = {v: k for k, v in _AUTH_MAP.items()}
+    _ENC_REV = {v: k for k, v in _ENC_MAP.items()}
+
+    def get_users(self):
+        """Get local user accounts.
+
+        Returns::
+
+            [
+                {
+                    'name': 'admin',
+                    'role': 'administrator',
+                    'locked': False,
+                    'policy_check': False,
+                    'snmp_auth': 'md5',
+                    'snmp_enc': 'des',
+                    'active': True,
+                    'default_password': True,
+                },
+            ]
+        """
+        entries = self.client.get(
+            "HM2-USERMGMT-MIB",
+            "hm2UserConfigEntry",
+            ["hm2UserName", "hm2UserAccessRole", "hm2UserLockoutStatus",
+             "hm2UserPwdPolicyChk", "hm2UserSnmpAuthType",
+             "hm2UserSnmpEncType", "hm2UserStatus"],
+            decode_strings=False)
+
+        # Default password status table
+        default_pwd_users = set()
+        try:
+            pwd_entries = self.client.get(
+                "HM2-USERMGMT-MIB",
+                "hm2PwdMgmtDefaultPwdStatusEntry",
+                ["hm2PwdMgmtDefaultPwdStatusUserName"],
+                decode_strings=False)
+            for pe in pwd_entries:
+                raw = pe.get("hm2PwdMgmtDefaultPwdStatusUserName", "")
+                default_pwd_users.add(
+                    bytes.fromhex(raw.replace(" ", "")).decode(
+                        "ascii", errors="replace"))
+        except (MOPSError, ConnectionException):
+            pass
+
+        users = []
+        for e in entries:
+            raw_name = e.get("hm2UserName", "")
+            name = bytes.fromhex(raw_name.replace(" ", "")).decode(
+                "ascii", errors="replace")
+            role_val = e.get("hm2UserAccessRole", "1")
+            users.append({
+                'name': name,
+                'role': self._ROLE_MAP.get(role_val, f'unknown({role_val})'),
+                'locked': e.get("hm2UserLockoutStatus", "2") == "1",
+                'policy_check': e.get("hm2UserPwdPolicyChk", "2") == "1",
+                'snmp_auth': self._AUTH_MAP.get(
+                    e.get("hm2UserSnmpAuthType", "1"), 'md5'),
+                'snmp_enc': self._ENC_MAP.get(
+                    e.get("hm2UserSnmpEncType", "1"), 'des'),
+                'active': e.get("hm2UserStatus", "1") == "1",
+                'default_password': name in default_pwd_users,
+            })
+        return users
+
+    def set_user(self, name, password=None, role=None,
+                 snmp_auth_type=None, snmp_enc_type=None,
+                 snmp_auth_password=None, snmp_enc_password=None,
+                 policy_check=None, locked=None):
+        """Create or update a local user account.
+
+        Creates the user if it doesn't exist (createAndGo with password).
+        Updates fields on an existing user.
+
+        Args:
+            name: Username (1-32 chars).
+            password: Login password (required for new users).
+            role: 'administrator', 'operator', 'guest', 'auditor',
+                  'unauthorized', 'custom1', 'custom2', 'custom3'.
+            snmp_auth_type: 'md5' or 'sha'.
+            snmp_enc_type: 'none', 'des', 'aes128', or 'aes256'.
+            snmp_auth_password: SNMPv3 authentication password.
+            snmp_enc_password: SNMPv3 encryption password.
+            policy_check: bool — per-user password policy enforcement.
+            locked: bool — account lockout (set False to unlock).
+        """
+        # Check if user exists
+        existing = self.client.get(
+            "HM2-USERMGMT-MIB",
+            "hm2UserConfigEntry",
+            ["hm2UserName", "hm2UserStatus"],
+            decode_strings=False)
+        existing_names = set()
+        for e in existing:
+            raw = e.get("hm2UserName", "")
+            existing_names.add(
+                bytes.fromhex(raw.replace(" ", "")).decode(
+                    "ascii", errors="replace"))
+
+        # Validate enum args early
+        if role is not None and role not in self._ROLE_REV:
+            raise ValueError(
+                f"Invalid role '{role}': use one of "
+                f"{list(self._ROLE_REV.keys())}")
+        if snmp_auth_type is not None and snmp_auth_type not in self._AUTH_REV:
+            raise ValueError(
+                f"Invalid snmp_auth_type '{snmp_auth_type}': "
+                f"use 'md5' or 'sha'")
+        if snmp_enc_type is not None and snmp_enc_type not in self._ENC_REV:
+            raise ValueError(
+                f"Invalid snmp_enc_type '{snmp_enc_type}': "
+                f"use 'none', 'des', 'aes128', or 'aes256'")
+
+        hex_name = encode_string(name)
+        idx = {"hm2UserName": hex_name}
+
+        if name not in existing_names:
+            # Create new user: three-step RowStatus sequence.
+            # createAndGo(4) bundles password with creation but
+            # leaves the row in notInService — HiOS requires
+            # password to be set as a SEPARATE operation after
+            # row creation before it can transition to active(1).
+            if password is None:
+                raise ValueError(
+                    "password is required when creating a new user")
+            # Step 1: createAndWait — allocate the row
+            self._apply_set_indexed(
+                "HM2-USERMGMT-MIB", "hm2UserConfigEntry",
+                index=idx,
+                values={"hm2UserStatus": "5"})  # createAndWait
+            # Step 2: set password (must be separate from creation)
+            self._apply_set_indexed(
+                "HM2-USERMGMT-MIB", "hm2UserConfigEntry",
+                index=idx,
+                values={"hm2UserPassword": encode_string(password)})
+            # Step 3: set attributes + activate
+            update = {"hm2UserStatus": "1"}  # active
+            if role is not None:
+                update["hm2UserAccessRole"] = self._ROLE_REV[role]
+            if snmp_auth_type is not None:
+                update["hm2UserSnmpAuthType"] = (
+                    self._AUTH_REV[snmp_auth_type])
+            if snmp_enc_type is not None:
+                update["hm2UserSnmpEncType"] = (
+                    self._ENC_REV[snmp_enc_type])
+            if snmp_auth_password is not None:
+                update["hm2UserSnmpAuthPassword"] = encode_string(
+                    snmp_auth_password)
+            if snmp_enc_password is not None:
+                update["hm2UserSnmpEncPassword"] = encode_string(
+                    snmp_enc_password)
+            if policy_check is not None:
+                update["hm2UserPwdPolicyChk"] = (
+                    "1" if policy_check else "2")
+            if locked is not None:
+                update["hm2UserLockoutStatus"] = (
+                    "1" if locked else "2")
+            self._apply_set_indexed(
+                "HM2-USERMGMT-MIB", "hm2UserConfigEntry",
+                index=idx, values=update)
+        else:
+            # Update existing user
+            values = {}
+            if password is not None:
+                values["hm2UserPassword"] = encode_string(password)
+            if role is not None:
+                values["hm2UserAccessRole"] = self._ROLE_REV[role]
+            if snmp_auth_type is not None:
+                values["hm2UserSnmpAuthType"] = (
+                    self._AUTH_REV[snmp_auth_type])
+            if snmp_enc_type is not None:
+                values["hm2UserSnmpEncType"] = (
+                    self._ENC_REV[snmp_enc_type])
+            if snmp_auth_password is not None:
+                values["hm2UserSnmpAuthPassword"] = encode_string(
+                    snmp_auth_password)
+            if snmp_enc_password is not None:
+                values["hm2UserSnmpEncPassword"] = encode_string(
+                    snmp_enc_password)
+            if policy_check is not None:
+                values["hm2UserPwdPolicyChk"] = (
+                    "1" if policy_check else "2")
+            if locked is not None:
+                values["hm2UserLockoutStatus"] = (
+                    "1" if locked else "2")
+            if values:
+                self._apply_set_indexed(
+                    "HM2-USERMGMT-MIB", "hm2UserConfigEntry",
+                    index=idx, values=values)
+
+    def delete_user(self, name):
+        """Delete a local user account.
+
+        Args:
+            name: Username to delete.
+        """
+        hex_name = encode_string(name)
+        self._apply_set_indexed(
+            "HM2-USERMGMT-MIB", "hm2UserConfigEntry",
+            index={"hm2UserName": hex_name},
+            values={"hm2UserStatus": "6"})  # destroy
+
+    # ------------------------------------------------------------------
+    # Port Security
+    # ------------------------------------------------------------------
+
+    _PORTSEC_MODE = {'1': 'mac-based', '2': 'ip-based'}
+    _PORTSEC_MODE_REV = {'mac-based': '1', 'ip-based': '2'}
+
+    def _parse_portsec_macs(self, raw):
+        """Parse 'VLAN MAC,VLAN MAC,...' DisplayString into list of dicts."""
+        if not raw or not raw.strip():
+            return []
+        result = []
+        for pair in raw.split(','):
+            pair = pair.strip()
+            if not pair:
+                continue
+            parts = pair.split()
+            if len(parts) >= 2:
+                result.append({'vlan': int(parts[0]), 'mac': parts[1]})
+        return result
+
+    def _parse_portsec_ips(self, raw):
+        """Parse 'VLAN IP,VLAN IP,...' DisplayString into list of dicts."""
+        if not raw or not raw.strip():
+            return []
+        result = []
+        for pair in raw.split(','):
+            pair = pair.strip()
+            if not pair:
+                continue
+            parts = pair.split()
+            if len(parts) >= 2:
+                result.append({'vlan': int(parts[0]), 'ip': parts[1]})
+        return result
+
+    def get_port_security(self, interface=None):
+        """Return port security configuration and status.
+
+        Args:
+            interface: port name (str), list of port names, or None for all
+
+        Returns:
+            dict with:
+                'enabled': bool (global admin state)
+                'mode': str ('mac-based' or 'ip-based')
+                'ports': {port_name: {
+                    'enabled': bool,
+                    'dynamic_limit': int (0-600),
+                    'static_limit': int (0-64),
+                    'auto_disable': bool,
+                    'violation_trap_mode': bool,
+                    'violation_trap_frequency': int (0-3600),
+                    'dynamic_count': int,
+                    'static_count': int,
+                    'static_ip_count': int,
+                    'last_discarded_mac': str,
+                    'static_macs': [{'vlan': int, 'mac': str}],
+                    'static_ips': [{'vlan': int, 'ip': str}],
+                }}
+        """
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("HM2-PLATFORM-PORTSECURITY-MIB",
+             "hm2AgentPortSecurityGroup", [
+                 "hm2AgentGlobalPortSecurityMode",
+                 "hm2AgentPortSecurityOperationMode",
+             ]),
+            ("HM2-PLATFORM-PORTSECURITY-MIB",
+             "hm2AgentPortSecurityEntry", [
+                 "ifIndex",
+                 "hm2AgentPortSecurityMode",
+                 "hm2AgentPortSecurityDynamicLimit",
+                 "hm2AgentPortSecurityStaticLimit",
+                 "hm2AgentPortSecurityAutoDisable",
+                 "hm2AgentPortSecurityViolationTrapMode",
+                 "hm2AgentPortSecurityViolationTrapFrequency",
+                 "hm2AgentPortSecurityDynamicCount",
+                 "hm2AgentPortSecurityStaticCount",
+                 "hm2AgentPortSecurityStaticIpCount",
+                 "hm2AgentPortSecurityLastDiscardedMAC",
+                 "hm2AgentPortSecurityStaticMACs",
+                 "hm2AgentPortSecurityStaticIPs",
+             ]),
+            decode_strings=False,
+        )
+
+        psmib = mibs.get("HM2-PLATFORM-PORTSECURITY-MIB", {})
+        glb = psmib.get("hm2AgentPortSecurityGroup", [{}])[0]
+
+        # Filter interfaces if requested
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for entry in psmib.get("hm2AgentPortSecurityEntry", []):
+            idx = entry.get("ifIndex", "")
+            name = ifindex_map.get(idx, "")
+            if not name or name.startswith("cpu") or name.startswith("vlan"):
+                continue
+            if want is not None and name not in want:
+                continue
+
+            ports[name] = {
+                'enabled': entry.get(
+                    "hm2AgentPortSecurityMode", "2") == "1",
+                'dynamic_limit': _safe_int(entry.get(
+                    "hm2AgentPortSecurityDynamicLimit", "600")),
+                'static_limit': _safe_int(entry.get(
+                    "hm2AgentPortSecurityStaticLimit", "64")),
+                'auto_disable': entry.get(
+                    "hm2AgentPortSecurityAutoDisable", "1") == "1",
+                'violation_trap_mode': entry.get(
+                    "hm2AgentPortSecurityViolationTrapMode", "2") == "1",
+                'violation_trap_frequency': _safe_int(entry.get(
+                    "hm2AgentPortSecurityViolationTrapFrequency", "0")),
+                'dynamic_count': _safe_int(entry.get(
+                    "hm2AgentPortSecurityDynamicCount", "0")),
+                'static_count': _safe_int(entry.get(
+                    "hm2AgentPortSecurityStaticCount", "0")),
+                'static_ip_count': _safe_int(entry.get(
+                    "hm2AgentPortSecurityStaticIpCount", "0")),
+                'last_discarded_mac': _decode_hex_string(entry.get(
+                    "hm2AgentPortSecurityLastDiscardedMAC", "")),
+                'static_macs': self._parse_portsec_macs(
+                    _decode_hex_string(entry.get(
+                        "hm2AgentPortSecurityStaticMACs", ""))),
+                'static_ips': self._parse_portsec_ips(
+                    _decode_hex_string(entry.get(
+                        "hm2AgentPortSecurityStaticIPs", ""))),
+            }
+
+        return {
+            'enabled': glb.get(
+                "hm2AgentGlobalPortSecurityMode", "2") == "1",
+            'mode': self._PORTSEC_MODE.get(
+                glb.get("hm2AgentPortSecurityOperationMode", "1"),
+                'mac-based'),
+            'ports': ports,
+        }
+
+    def set_port_security(self, interface=None, enabled=None, mode=None,
+                          dynamic_limit=None, static_limit=None,
+                          auto_disable=None, violation_trap_mode=None,
+                          violation_trap_frequency=None, move_macs=None):
+        """Set port security configuration.
+
+        If interface is provided, sets per-port values.
+        If interface is None, sets global values (enabled, mode).
+
+        Args:
+            interface: port name (str), list of port names, or None for global
+            enabled: True/False
+            mode: 'mac-based' or 'ip-based' (global only)
+            dynamic_limit: int 0-600 (per-port only)
+            static_limit: int 0-64 (per-port only)
+            auto_disable: True/False (per-port only)
+            violation_trap_mode: True/False (per-port only)
+            violation_trap_frequency: int 0-3600 seconds (per-port only)
+            move_macs: True to promote dynamic MACs to static (per-port only)
+        """
+        if interface is not None:
+            interfaces = ([interface] if isinstance(interface, str)
+                          else list(interface))
+            ifindex_map = self._build_ifindex_map()
+            name_to_idx = {n: idx for idx, n in ifindex_map.items()}
+
+            values = {}
+            if enabled is not None:
+                values["hm2AgentPortSecurityMode"] = (
+                    "1" if enabled else "2")
+            if dynamic_limit is not None:
+                values["hm2AgentPortSecurityDynamicLimit"] = str(
+                    int(dynamic_limit))
+            if static_limit is not None:
+                values["hm2AgentPortSecurityStaticLimit"] = str(
+                    int(static_limit))
+            if auto_disable is not None:
+                values["hm2AgentPortSecurityAutoDisable"] = (
+                    "1" if auto_disable else "2")
+            if violation_trap_mode is not None:
+                values["hm2AgentPortSecurityViolationTrapMode"] = (
+                    "1" if violation_trap_mode else "2")
+            if violation_trap_frequency is not None:
+                values["hm2AgentPortSecurityViolationTrapFrequency"] = str(
+                    int(violation_trap_frequency))
+            if move_macs:
+                values["hm2AgentPortSecurityMACAddressMove"] = "1"
+
+            if not values:
+                return
+
+            mutations = []
+            for iface in interfaces:
+                ifidx = name_to_idx.get(iface)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                mutations.append((
+                    "HM2-PLATFORM-PORTSECURITY-MIB",
+                    "hm2AgentPortSecurityEntry",
+                    dict(values), {"ifIndex": ifidx}))
+
+            self._apply_mutations(mutations)
+        else:
+            values = {}
+            if enabled is not None:
+                values["hm2AgentGlobalPortSecurityMode"] = (
+                    "1" if enabled else "2")
+            if mode is not None:
+                val = self._PORTSEC_MODE_REV.get(mode)
+                if val is None:
+                    raise ValueError(
+                        f"Invalid mode '{mode}': "
+                        f"use 'mac-based' or 'ip-based'")
+                values["hm2AgentPortSecurityOperationMode"] = val
+            if values:
+                self._apply_set("HM2-PLATFORM-PORTSECURITY-MIB",
+                                "hm2AgentPortSecurityGroup", values)
+
+    def add_port_security(self, interface, vlan, mac=None, ip=None,
+                          entries=None):
+        """Add static MAC or IP entries to port security.
+
+        Single entry:
+            add_port_security('1/1', vlan=1, mac='aa:bb:cc:dd:ee:ff')
+            add_port_security('1/1', vlan=2, ip='192.168.1.100')
+
+        Bulk (atomic on MOPS):
+            add_port_security('1/1', entries=[
+                {'vlan': 1, 'mac': 'aa:bb:cc:dd:ee:ff'},
+                {'vlan': 2, 'ip': '192.168.1.100'},
+            ])
+
+        Args:
+            interface: port name (str)
+            vlan: VLAN ID (int) — ignored if entries provided
+            mac: MAC address string (mutually exclusive with ip)
+            ip: IP address string (mutually exclusive with mac)
+            entries: list of {'vlan': int, 'mac': str} or {'vlan': int, 'ip': str}
+        """
+        if entries is None:
+            if mac is not None:
+                entries = [{'vlan': vlan, 'mac': mac}]
+            elif ip is not None:
+                entries = [{'vlan': vlan, 'ip': ip}]
+            else:
+                raise ValueError("Provide mac=, ip=, or entries=")
+
+        ifindex_map = self._build_ifindex_map()
+        name_to_idx = {n: idx for idx, n in ifindex_map.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+
+        # Action OIDs take "VLAN ADDR" DisplayString — each write is
+        # an action, so same-OID writes in one POST may only keep last.
+        # Send one mutation per entry to be safe.
+        for entry in entries:
+            v = entry.get('vlan', vlan)
+            if 'mac' in entry:
+                self._apply_set_indexed(
+                    "HM2-PLATFORM-PORTSECURITY-MIB",
+                    "hm2AgentPortSecurityEntry",
+                    index={"ifIndex": ifidx},
+                    values={"hm2AgentPortSecurityMACAddressAdd":
+                            encode_string(f"{v} {entry['mac']}")})
+            elif 'ip' in entry:
+                self._apply_set_indexed(
+                    "HM2-PLATFORM-PORTSECURITY-MIB",
+                    "hm2AgentPortSecurityEntry",
+                    index={"ifIndex": ifidx},
+                    values={"hm2AgentPortSecurityIPAddressAdd":
+                            encode_string(f"{v} {entry['ip']}")})
+
+    def delete_port_security(self, interface, vlan=None, mac=None, ip=None,
+                             entries=None):
+        """Remove static MAC or IP entries from port security.
+
+        Single entry:
+            delete_port_security('1/1', vlan=1, mac='aa:bb:cc:dd:ee:ff')
+            delete_port_security('1/1', vlan=2, ip='192.168.1.100')
+
+        Bulk:
+            delete_port_security('1/1', entries=[
+                {'vlan': 1, 'mac': 'aa:bb:cc:dd:ee:ff'},
+                {'vlan': 2, 'ip': '192.168.1.100'},
+            ])
+
+        Args:
+            interface: port name (str)
+            vlan: VLAN ID (int) — ignored if entries provided
+            mac: MAC address string (mutually exclusive with ip)
+            ip: IP address string (mutually exclusive with mac)
+            entries: list of {'vlan': int, 'mac': str} or {'vlan': int, 'ip': str}
+        """
+        if entries is None:
+            if mac is not None:
+                entries = [{'vlan': vlan, 'mac': mac}]
+            elif ip is not None:
+                entries = [{'vlan': vlan, 'ip': ip}]
+            else:
+                raise ValueError("Provide mac=, ip=, or entries=")
+
+        ifindex_map = self._build_ifindex_map()
+        name_to_idx = {n: idx for idx, n in ifindex_map.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+
+        for entry in entries:
+            v = entry.get('vlan', vlan)
+            if 'mac' in entry:
+                self._apply_set_indexed(
+                    "HM2-PLATFORM-PORTSECURITY-MIB",
+                    "hm2AgentPortSecurityEntry",
+                    index={"ifIndex": ifidx},
+                    values={"hm2AgentPortSecurityMACAddressRemove":
+                            encode_string(f"{v} {entry['mac']}")})
+            elif 'ip' in entry:
+                self._apply_set_indexed(
+                    "HM2-PLATFORM-PORTSECURITY-MIB",
+                    "hm2AgentPortSecurityEntry",
+                    index={"ifIndex": ifidx},
+                    values={"hm2AgentPortSecurityIPAddressRemove":
+                            encode_string(f"{v} {entry['ip']}")})
+
+    # ------------------------------------------------------------------
+    # DHCP Snooping
+    # ------------------------------------------------------------------
+
+    def get_dhcp_snooping(self, interface=None):
+        """Return DHCP snooping configuration and status.
+
+        Args:
+            interface: port name (str), list of port names, or None for all
+
+        Returns:
+            dict with:
+                'enabled': bool (global admin state)
+                'verify_mac': bool (source MAC verification)
+                'vlans': {vlan_id: {'enabled': bool}}
+                'ports': {port_name: {
+                    'trusted': bool,
+                    'log': bool,
+                    'rate_limit': int (-1 = unlimited),
+                    'burst_interval': int (seconds),
+                    'auto_disable': bool,
+                }}
+        """
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("HM2-PLATFORM-SWITCHING-MIB",
+             "hm2AgentDhcpSnoopingConfigGroup", [
+                 "hm2AgentDhcpSnoopingAdminMode",
+                 "hm2AgentDhcpSnoopingVerifyMac",
+             ]),
+            ("HM2-PLATFORM-SWITCHING-MIB",
+             "hm2AgentDhcpSnoopingIfConfigEntry", [
+                 "ifIndex",
+                 "hm2AgentDhcpSnoopingIfTrustEnable",
+                 "hm2AgentDhcpSnoopingIfLogEnable",
+                 "hm2AgentDhcpSnoopingIfRateLimit",
+                 "hm2AgentDhcpSnoopingIfBurstInterval",
+                 "hm2AgentDhcpSnoopingIfAutoDisable",
+             ]),
+            decode_strings=False,
+        )
+
+        # VLAN table (separate — not ifIndex-indexed)
+        vlan_data = self.client.get(
+            "HM2-PLATFORM-SWITCHING-MIB",
+            "hm2AgentDhcpSnoopingVlanConfigEntry",
+            ["hm2AgentDhcpSnoopingVlanIndex",
+             "hm2AgentDhcpSnoopingVlanEnable"],
+            decode_strings=False)
+
+        swmib = mibs.get("HM2-PLATFORM-SWITCHING-MIB", {})
+        glb = swmib.get("hm2AgentDhcpSnoopingConfigGroup", [{}])[0]
+
+        # Build VLANs dict
+        vlans = {}
+        for entry in (vlan_data or []):
+            vid = _safe_int(entry.get("hm2AgentDhcpSnoopingVlanIndex", "0"))
+            if vid > 0:
+                vlans[vid] = {
+                    'enabled': entry.get(
+                        "hm2AgentDhcpSnoopingVlanEnable", "2") == "1",
+                }
+
+        # Filter interfaces
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for entry in swmib.get("hm2AgentDhcpSnoopingIfConfigEntry", []):
+            idx = entry.get("ifIndex", "")
+            name = ifindex_map.get(idx, "")
+            if not name or name.startswith("cpu") or name.startswith("vlan"):
+                continue
+            if want is not None and name not in want:
+                continue
+
+            ports[name] = {
+                'trusted': entry.get(
+                    "hm2AgentDhcpSnoopingIfTrustEnable", "2") == "1",
+                'log': entry.get(
+                    "hm2AgentDhcpSnoopingIfLogEnable", "2") == "1",
+                'rate_limit': _safe_int(entry.get(
+                    "hm2AgentDhcpSnoopingIfRateLimit", "-1")),
+                'burst_interval': _safe_int(entry.get(
+                    "hm2AgentDhcpSnoopingIfBurstInterval", "1")),
+                'auto_disable': entry.get(
+                    "hm2AgentDhcpSnoopingIfAutoDisable", "1") == "1",
+            }
+
+        return {
+            'enabled': glb.get(
+                "hm2AgentDhcpSnoopingAdminMode", "2") == "1",
+            'verify_mac': glb.get(
+                "hm2AgentDhcpSnoopingVerifyMac", "2") == "1",
+            'vlans': vlans,
+            'ports': ports,
+        }
+
+    def set_dhcp_snooping(self, interface=None, enabled=None,
+                          verify_mac=None, vlan=None, vlan_enabled=None,
+                          trusted=None, log=None, rate_limit=None,
+                          burst_interval=None, auto_disable=None,
+                          **kwargs):
+        """Set DHCP snooping configuration.
+
+        Global:
+            set_dhcp_snooping(enabled=True)
+            set_dhcp_snooping(verify_mac=True)
+
+        Per-VLAN:
+            set_dhcp_snooping(vlan=1, vlan_enabled=True)
+
+        Per-port:
+            set_dhcp_snooping('1/1', trusted=True)
+            set_dhcp_snooping(['1/1', '1/2'], trusted=True, rate_limit=15)
+        """
+        # Global settings
+        if enabled is not None or verify_mac is not None:
+            attrs = {}
+            if enabled is not None:
+                attrs["hm2AgentDhcpSnoopingAdminMode"] = (
+                    "1" if enabled else "2")
+            if verify_mac is not None:
+                attrs["hm2AgentDhcpSnoopingVerifyMac"] = (
+                    "1" if verify_mac else "2")
+            self._apply_set(
+                "HM2-PLATFORM-SWITCHING-MIB",
+                "hm2AgentDhcpSnoopingConfigGroup",
+                attrs)
+
+        # Per-VLAN
+        if vlan is not None and vlan_enabled is not None:
+            vlans = [vlan] if isinstance(vlan, int) else list(vlan)
+            for vid in vlans:
+                self._apply_set_indexed(
+                    "HM2-PLATFORM-SWITCHING-MIB",
+                    "hm2AgentDhcpSnoopingVlanConfigEntry",
+                    index={"hm2AgentDhcpSnoopingVlanIndex": str(vid)},
+                    values={"hm2AgentDhcpSnoopingVlanEnable":
+                            "1" if vlan_enabled else "2"})
+
+        # Per-port
+        if interface is not None:
+            interfaces = ([interface] if isinstance(interface, str)
+                          else list(interface))
+            ifindex_map = self._build_ifindex_map()
+            name_to_idx = {n: idx for idx, n in ifindex_map.items()}
+
+            for iface in interfaces:
+                ifidx = name_to_idx.get(iface)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                vals = {}
+                if trusted is not None:
+                    vals["hm2AgentDhcpSnoopingIfTrustEnable"] = (
+                        "1" if trusted else "2")
+                if log is not None:
+                    vals["hm2AgentDhcpSnoopingIfLogEnable"] = (
+                        "1" if log else "2")
+                if rate_limit is not None:
+                    vals["hm2AgentDhcpSnoopingIfRateLimit"] = (
+                        str(int(rate_limit)))
+                if burst_interval is not None:
+                    vals["hm2AgentDhcpSnoopingIfBurstInterval"] = (
+                        str(int(burst_interval)))
+                if auto_disable is not None:
+                    vals["hm2AgentDhcpSnoopingIfAutoDisable"] = (
+                        "1" if auto_disable else "2")
+                if vals:
+                    self._apply_set_indexed(
+                        "HM2-PLATFORM-SWITCHING-MIB",
+                        "hm2AgentDhcpSnoopingIfConfigEntry",
+                        index={"ifIndex": ifidx},
+                        values=vals)
+
+    # ------------------------------------------------------------------
+    # ARP Inspection (DAI)
+    # ------------------------------------------------------------------
+
+    def get_arp_inspection(self, interface=None):
+        """Return Dynamic ARP Inspection configuration.
+
+        Args:
+            interface: port name (str), list of port names, or None for all
+
+        Returns:
+            dict with:
+                'validate_src_mac': bool
+                'validate_dst_mac': bool
+                'validate_ip': bool
+                'vlans': {vlan_id: {
+                    'enabled': bool,
+                    'log': bool,
+                    'acl_name': str,
+                    'acl_static': bool,
+                    'binding_check': bool,
+                }}
+                'ports': {port_name: {
+                    'trusted': bool,
+                    'rate_limit': int (-1 = unlimited),
+                    'burst_interval': int (seconds),
+                    'auto_disable': bool,
+                }}
+        """
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("HM2-PLATFORM-SWITCHING-MIB",
+             "hm2AgentDaiConfigGroup", [
+                 "hm2AgentDaiSrcMacValidate",
+                 "hm2AgentDaiDstMacValidate",
+                 "hm2AgentDaiIPValidate",
+             ]),
+            ("HM2-PLATFORM-SWITCHING-MIB",
+             "hm2AgentDaiIfConfigEntry", [
+                 "ifIndex",
+                 "hm2AgentDaiIfTrustEnable",
+                 "hm2AgentDaiIfRateLimit",
+                 "hm2AgentDaiIfBurstInterval",
+                 "hm2AgentDaiIfAutoDisable",
+             ]),
+            decode_strings=False,
+        )
+
+        # VLAN table (separate — not ifIndex-indexed)
+        vlan_data = self.client.get(
+            "HM2-PLATFORM-SWITCHING-MIB",
+            "hm2AgentDaiVlanConfigEntry",
+            ["hm2AgentDaiVlanIndex",
+             "hm2AgentDaiVlanDynArpInspEnable",
+             "hm2AgentDaiVlanLoggingEnable",
+             "hm2AgentDaiVlanArpAclName",
+             "hm2AgentDaiVlanArpAclStaticFlag",
+             "hm2AgentDaiVlanBindingCheckEnable"],
+            decode_strings=False)
+
+        swmib = mibs.get("HM2-PLATFORM-SWITCHING-MIB", {})
+        glb = swmib.get("hm2AgentDaiConfigGroup", [{}])[0]
+
+        # Build VLANs dict
+        vlans = {}
+        for entry in (vlan_data or []):
+            vid = _safe_int(entry.get("hm2AgentDaiVlanIndex", "0"))
+            if vid > 0:
+                acl_name = entry.get("hm2AgentDaiVlanArpAclName", "")
+                if isinstance(acl_name, str):
+                    acl_name = bytes.fromhex(
+                        acl_name.replace(' ', '')).decode(
+                        'ascii', errors='replace').strip(
+                        '\x00') if acl_name.strip() else ''
+                vlans[vid] = {
+                    'enabled': entry.get(
+                        "hm2AgentDaiVlanDynArpInspEnable", "2") == "1",
+                    'log': entry.get(
+                        "hm2AgentDaiVlanLoggingEnable", "2") == "1",
+                    'acl_name': acl_name,
+                    'acl_static': entry.get(
+                        "hm2AgentDaiVlanArpAclStaticFlag", "2") == "1",
+                    'binding_check': entry.get(
+                        "hm2AgentDaiVlanBindingCheckEnable", "2") == "1",
+                }
+
+        # Filter interfaces
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for entry in swmib.get("hm2AgentDaiIfConfigEntry", []):
+            idx = entry.get("ifIndex", "")
+            name = ifindex_map.get(idx, "")
+            if not name or name.startswith("cpu") or name.startswith("vlan"):
+                continue
+            if want is not None and name not in want:
+                continue
+
+            ports[name] = {
+                'trusted': entry.get(
+                    "hm2AgentDaiIfTrustEnable", "2") == "1",
+                'rate_limit': _safe_int(entry.get(
+                    "hm2AgentDaiIfRateLimit", "-1")),
+                'burst_interval': _safe_int(entry.get(
+                    "hm2AgentDaiIfBurstInterval", "1")),
+                'auto_disable': entry.get(
+                    "hm2AgentDaiIfAutoDisable", "1") == "1",
+            }
+
+        return {
+            'validate_src_mac': glb.get(
+                "hm2AgentDaiSrcMacValidate", "2") == "1",
+            'validate_dst_mac': glb.get(
+                "hm2AgentDaiDstMacValidate", "2") == "1",
+            'validate_ip': glb.get(
+                "hm2AgentDaiIPValidate", "2") == "1",
+            'vlans': vlans,
+            'ports': ports,
+        }
+
+    def set_arp_inspection(self, interface=None,
+                           validate_src_mac=None, validate_dst_mac=None,
+                           validate_ip=None,
+                           vlan=None, vlan_enabled=None, vlan_log=None,
+                           vlan_acl_name=None, vlan_acl_static=None,
+                           vlan_binding_check=None,
+                           trusted=None, rate_limit=None,
+                           burst_interval=None, auto_disable=None,
+                           **kwargs):
+        """Set Dynamic ARP Inspection configuration.
+
+        Global:
+            set_arp_inspection(validate_src_mac=True)
+            set_arp_inspection(validate_ip=True)
+
+        Per-VLAN:
+            set_arp_inspection(vlan=1, vlan_enabled=True)
+            set_arp_inspection(vlan=1, vlan_log=True, vlan_binding_check=True)
+
+        Per-port:
+            set_arp_inspection('1/1', trusted=True)
+            set_arp_inspection(['1/1', '1/2'], trusted=True, rate_limit=15)
+        """
+        # Global settings
+        if any(v is not None for v in (validate_src_mac, validate_dst_mac,
+                                        validate_ip)):
+            attrs = {}
+            if validate_src_mac is not None:
+                attrs["hm2AgentDaiSrcMacValidate"] = (
+                    "1" if validate_src_mac else "2")
+            if validate_dst_mac is not None:
+                attrs["hm2AgentDaiDstMacValidate"] = (
+                    "1" if validate_dst_mac else "2")
+            if validate_ip is not None:
+                attrs["hm2AgentDaiIPValidate"] = (
+                    "1" if validate_ip else "2")
+            self._apply_set(
+                "HM2-PLATFORM-SWITCHING-MIB",
+                "hm2AgentDaiConfigGroup",
+                attrs)
+
+        # Per-VLAN
+        if vlan is not None:
+            vlans = [vlan] if isinstance(vlan, int) else list(vlan)
+            for vid in vlans:
+                vals = {}
+                if vlan_enabled is not None:
+                    vals["hm2AgentDaiVlanDynArpInspEnable"] = (
+                        "1" if vlan_enabled else "2")
+                if vlan_log is not None:
+                    vals["hm2AgentDaiVlanLoggingEnable"] = (
+                        "1" if vlan_log else "2")
+                if vlan_acl_name is not None:
+                    vals["hm2AgentDaiVlanArpAclName"] = vlan_acl_name
+                if vlan_acl_static is not None:
+                    vals["hm2AgentDaiVlanArpAclStaticFlag"] = (
+                        "1" if vlan_acl_static else "2")
+                if vlan_binding_check is not None:
+                    vals["hm2AgentDaiVlanBindingCheckEnable"] = (
+                        "1" if vlan_binding_check else "2")
+                if vals:
+                    self._apply_set_indexed(
+                        "HM2-PLATFORM-SWITCHING-MIB",
+                        "hm2AgentDaiVlanConfigEntry",
+                        index={"hm2AgentDaiVlanIndex": str(vid)},
+                        values=vals)
+
+        # Per-port
+        if interface is not None:
+            interfaces = ([interface] if isinstance(interface, str)
+                          else list(interface))
+            ifindex_map = self._build_ifindex_map()
+            name_to_idx = {n: idx for idx, n in ifindex_map.items()}
+
+            for iface in interfaces:
+                ifidx = name_to_idx.get(iface)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                vals = {}
+                if trusted is not None:
+                    vals["hm2AgentDaiIfTrustEnable"] = (
+                        "1" if trusted else "2")
+                if rate_limit is not None:
+                    vals["hm2AgentDaiIfRateLimit"] = (
+                        str(int(rate_limit)))
+                if burst_interval is not None:
+                    vals["hm2AgentDaiIfBurstInterval"] = (
+                        str(int(burst_interval)))
+                if auto_disable is not None:
+                    vals["hm2AgentDaiIfAutoDisable"] = (
+                        "1" if auto_disable else "2")
+                if vals:
+                    self._apply_set_indexed(
+                        "HM2-PLATFORM-SWITCHING-MIB",
+                        "hm2AgentDaiIfConfigEntry",
+                        index={"ifIndex": ifidx},
+                        values=vals)
+
+    def get_ip_source_guard(self, interface=None):
+        """Return IP Source Guard configuration and bindings.
+
+        Args:
+            interface: port name (str), list of port names, or None for all
+
+        Returns:
+            dict with:
+                'ports': {port_name: {
+                    'verify_source': bool (IP filtering),
+                    'port_security': bool (MAC filtering),
+                }}
+                'static_bindings': [{
+                    'interface': str,
+                    'vlan_id': int,
+                    'mac_address': str,
+                    'ip_address': str,
+                    'active': bool,
+                    'hw_status': bool,
+                }]
+                'dynamic_bindings': [{
+                    'interface': str,
+                    'vlan_id': int,
+                    'mac_address': str,
+                    'ip_address': str,
+                    'hw_status': bool,
+                }]
+        """
+        mibs, ifindex_map = self._get_with_ifindex(
+            ("HM2-PLATFORM-SWITCHING-MIB",
+             "hm2AgentIpsgIfConfigEntry", [
+                 "ifIndex",
+                 "hm2AgentIpsgIfVerifySource",
+                 "hm2AgentIpsgIfPortSecurity",
+             ]),
+            decode_strings=False,
+        )
+
+        # Binding tables (composite index, not ifIndex-indexed)
+        static_data = self.client.get(
+            "HM2-PLATFORM-SWITCHING-MIB",
+            "hm2AgentStaticIpsgBindingEntry",
+            ["hm2AgentStaticIpsgBindingIfIndex",
+             "hm2AgentStaticIpsgBindingVlanId",
+             "hm2AgentStaticIpsgBindingMacAddr",
+             "hm2AgentStaticIpsgBindingIpAddr",
+             "hm2AgentStaticIpsgBindingRowStatus",
+             "hm2AgentStaticIpsgBindingHwStatus"],
+            decode_strings=False)
+
+        dynamic_data = self.client.get(
+            "HM2-PLATFORM-SWITCHING-MIB",
+            "hm2AgentDynamicIpsgBindingEntry",
+            ["hm2AgentDynamicIpsgBindingIfIndex",
+             "hm2AgentDynamicIpsgBindingVlanId",
+             "hm2AgentDynamicIpsgBindingMacAddr",
+             "hm2AgentDynamicIpsgBindingIpAddr",
+             "hm2AgentDynamicIpsgBindingHwStatus"],
+            decode_strings=False)
+
+        swmib = mibs.get("HM2-PLATFORM-SWITCHING-MIB", {})
+
+        # Filter interfaces
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for entry in swmib.get("hm2AgentIpsgIfConfigEntry", []):
+            idx = entry.get("ifIndex", "")
+            name = ifindex_map.get(idx, "")
+            if not name or name.startswith("cpu") or name.startswith("vlan"):
+                continue
+            if want is not None and name not in want:
+                continue
+
+            ports[name] = {
+                'verify_source': entry.get(
+                    "hm2AgentIpsgIfVerifySource", "2") == "1",
+                'port_security': entry.get(
+                    "hm2AgentIpsgIfPortSecurity", "2") == "1",
+            }
+
+        # Build reverse ifindex map for binding tables
+        idx_to_name = ifindex_map
+
+        # Static bindings
+        static_bindings = []
+        for entry in (static_data or []):
+            ifidx = entry.get("hm2AgentStaticIpsgBindingIfIndex", "")
+            iface = idx_to_name.get(str(ifidx), str(ifidx))
+            if want is not None and iface not in want:
+                continue
+            mac_raw = entry.get("hm2AgentStaticIpsgBindingMacAddr", "")
+            if isinstance(mac_raw, str) and ' ' in mac_raw:
+                mac_raw = mac_raw.replace(' ', '')
+            mac = _decode_hex_mac(mac_raw) if mac_raw else ''
+            row_status = _safe_int(entry.get(
+                "hm2AgentStaticIpsgBindingRowStatus", "0"))
+            static_bindings.append({
+                'interface': iface,
+                'vlan_id': _safe_int(entry.get(
+                    "hm2AgentStaticIpsgBindingVlanId", "0")),
+                'mac_address': mac,
+                'ip_address': entry.get(
+                    "hm2AgentStaticIpsgBindingIpAddr", ""),
+                'active': row_status == 1,
+                'hw_status': entry.get(
+                    "hm2AgentStaticIpsgBindingHwStatus", "2") == "1",
+            })
+
+        # Dynamic bindings
+        dynamic_bindings = []
+        for entry in (dynamic_data or []):
+            ifidx = entry.get("hm2AgentDynamicIpsgBindingIfIndex", "")
+            iface = idx_to_name.get(str(ifidx), str(ifidx))
+            if want is not None and iface not in want:
+                continue
+            mac_raw = entry.get("hm2AgentDynamicIpsgBindingMacAddr", "")
+            if isinstance(mac_raw, str) and ' ' in mac_raw:
+                mac_raw = mac_raw.replace(' ', '')
+            mac = _decode_hex_mac(mac_raw) if mac_raw else ''
+            dynamic_bindings.append({
+                'interface': iface,
+                'vlan_id': _safe_int(entry.get(
+                    "hm2AgentDynamicIpsgBindingVlanId", "0")),
+                'mac_address': mac,
+                'ip_address': entry.get(
+                    "hm2AgentDynamicIpsgBindingIpAddr", ""),
+                'hw_status': entry.get(
+                    "hm2AgentDynamicIpsgBindingHwStatus", "2") == "1",
+            })
+
+        return {
+            'ports': ports,
+            'static_bindings': static_bindings,
+            'dynamic_bindings': dynamic_bindings,
+        }
+
+    def set_ip_source_guard(self, interface=None,
+                            verify_source=None, port_security=None,
+                            **kwargs):
+        """Set IP Source Guard configuration per port.
+
+        Per-port:
+            set_ip_source_guard('1/1', verify_source=True)
+            set_ip_source_guard(['1/1', '1/2'], verify_source=True,
+                                port_security=True)
+        """
+        if interface is None:
+            return
+
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
+        ifindex_map = self._build_ifindex_map()
+        name_to_idx = {n: idx for idx, n in ifindex_map.items()}
+
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            vals = {}
+            if verify_source is not None:
+                vals["hm2AgentIpsgIfVerifySource"] = (
+                    "1" if verify_source else "2")
+            if port_security is not None:
+                vals["hm2AgentIpsgIfPortSecurity"] = (
+                    "1" if port_security else "2")
+            if vals:
+                self._apply_set_indexed(
+                    "HM2-PLATFORM-SWITCHING-MIB",
+                    "hm2AgentIpsgIfConfigEntry",
+                    index={"ifIndex": ifidx},
+                    values=vals)

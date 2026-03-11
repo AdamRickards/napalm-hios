@@ -111,6 +111,7 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | 14 | **Auto-disable reasons on L2S** | 7 reasons (CLI shows what's available) | 7 reasons (SNMP) / 7 reasons (MOPS) | All protocols return only the reasons the firmware supports |
 | 15 | **Auto-disable timer reset** | `auto-disable timer 0` (explicit value) | SET OID to 0 | SSH `no auto-disable timer` is a no-op — always send explicit `0` |
 | 16 | **QoS shaping rate** | Always `0` (not available via CLI) | Actual value from MIB | SSH `get_qos` won't reflect shaping rate; use MOPS/SNMP getter to read |
+| 17 | **Cipher/algorithm fields** | Empty lists (no CLI equivalent) | Actual BITS values from MIB | SSH `get_services()` returns empty `tls_versions`, `tls_cipher_suites`, `hmac_algorithms`, `kex_algorithms`, `encryption_algorithms`, `host_key_algorithms`; MOPS/SNMP returns populated lists. `set_services()` cipher kwargs are MOPS/SNMP only |
 
 ---
 
@@ -212,6 +213,42 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 | `set_services` | Yes | Yes | Yes | Yes | Vendor write |
 | `get_snmp_config` | Yes | Yes | Yes | Yes | Vendor |
 | `set_snmp_config` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_signal_contact` | Yes | Yes | Yes | Yes | Vendor |
+| `set_signal_contact` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_device_monitor` | Yes | Yes | Yes | Yes | Vendor |
+| `set_device_monitor` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_devsec_status` | Yes | Yes | Yes | Yes | Vendor |
+| `set_devsec_status` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_banner` | Yes | Yes | Yes | Yes | Vendor |
+| `set_banner` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_session_config` | Yes | Yes | Yes | Yes | Vendor |
+| `set_session_config` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_ip_restrict` | Yes | Yes | Yes | Yes | Vendor |
+| `set_ip_restrict` | Yes | Yes | Yes | Yes | Vendor write |
+| `add_ip_restrict_rule` | Yes | Yes | Yes | Yes | Vendor write |
+| `delete_ip_restrict_rule` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_dns` | Yes | Yes | Yes | Yes | Vendor |
+| `set_dns` | Yes | Yes | Yes | — | Vendor write |
+| `add_dns_server` | Yes | Yes | Yes | — | Vendor write |
+| `delete_dns_server` | Yes | Yes | Yes | — | Vendor write |
+| `get_poe` | Yes | Yes | Yes | Yes | Vendor |
+| `set_poe` | Yes | Yes | Yes | — | Vendor write |
+| `get_remote_auth` | Yes | Yes | Yes | Yes | Vendor |
+| `get_users` | Yes | Yes | Yes | Yes | Vendor; MOPS adds `default_password` |
+| `set_user` | Yes | Yes | Yes | No | Vendor write |
+| `delete_user` | Yes | Yes | Yes | No | Vendor write |
+| `add_snmp_trap_dest` | Yes | Yes | Yes | No | Vendor write |
+| `delete_snmp_trap_dest` | Yes | Yes | Yes | No | Vendor write |
+| `get_port_security` | Yes | Yes | Yes | Yes | Vendor |
+| `set_port_security` | Yes | Yes | Yes | Yes | Vendor write |
+| `add_port_security` | Yes | Yes | Yes | No | Vendor write |
+| `delete_port_security` | Yes | Yes | Yes | No | Vendor write |
+| `get_dhcp_snooping` | Yes | Yes | Yes | Yes | Vendor |
+| `set_dhcp_snooping` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_arp_inspection` | Yes | Yes | Yes | Yes | Vendor |
+| `set_arp_inspection` | Yes | Yes | Yes | Yes | Vendor write |
+| `get_ip_source_guard` | Yes | Yes | Yes | Yes | Vendor |
+| `set_ip_source_guard` | Yes | Yes | Yes | Yes | Vendor write |
 
 ---
 

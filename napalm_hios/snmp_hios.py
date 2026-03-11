@@ -20,7 +20,9 @@ from pysnmp.hlapi.v3arch.asyncio import (
     ObjectType, ObjectIdentity, get_cmd, set_cmd, bulk_walk_cmd,
     usmHMACMD5AuthProtocol, usmDESPrivProtocol,
 )
-from pysnmp.proto.rfc1902 import Integer32, Unsigned32, OctetString
+from pysnmp.proto.rfc1902 import (
+    Integer32, Unsigned32, OctetString, ObjectIdentifier,
+)
 from pysnmp.proto.secmod.rfc3414.localkey import hash_passphrase_md5
 from pysnmp.entity.config import USM_KEY_TYPE_MASTER
 from napalm.base.exceptions import ConnectionException
@@ -413,8 +415,14 @@ OID_hm2WebHttpAdminStatus       = '1.3.6.1.4.1.248.11.25.1.2.1'
 OID_hm2WebHttpsAdminStatus      = '1.3.6.1.4.1.248.11.25.1.2.2'
 OID_hm2WebHttpPortNumber        = '1.3.6.1.4.1.248.11.25.1.2.3'
 OID_hm2WebHttpsPortNumber       = '1.3.6.1.4.1.248.11.25.1.2.4'
+OID_hm2WebHttpsServerTlsVersions      = '1.3.6.1.4.1.248.11.25.1.2.17'
+OID_hm2WebHttpsServerTlsCipherSuites  = '1.3.6.1.4.1.248.11.25.1.2.18'
 OID_hm2TelnetServerAdminStatus  = '1.3.6.1.4.1.248.11.25.1.3.1'
 OID_hm2SshAdminStatus           = '1.3.6.1.4.1.248.11.25.1.4.1'
+OID_hm2SshHmacAlgorithms        = '1.3.6.1.4.1.248.11.25.1.4.19'
+OID_hm2SshKexAlgorithms         = '1.3.6.1.4.1.248.11.25.1.4.20'
+OID_hm2SshEncryptionAlgorithms  = '1.3.6.1.4.1.248.11.25.1.4.21'
+OID_hm2SshHostKeyAlgorithms     = '1.3.6.1.4.1.248.11.25.1.4.22'
 OID_hm2SnmpV1AdminStatus        = '1.3.6.1.4.1.248.11.25.1.1.1'
 OID_hm2SnmpV2AdminStatus        = '1.3.6.1.4.1.248.11.25.1.1.2'
 OID_hm2SnmpV3AdminStatus        = '1.3.6.1.4.1.248.11.25.1.1.3'
@@ -491,6 +499,177 @@ _OID_DEVSEC_ALL = [
     OID_hm2DevSecSenseDevMode,
 ]
 
+# HM2-DIAGNOSTIC-MIB — Signal Contact  1.3.6.1.4.1.248.11.22.1.3.1.*
+_SC = '1.3.6.1.4.1.248.11.22.1.3.1'
+OID_hm2SigConTrapEnable       = f'{_SC}.1.1.2'
+OID_hm2SigConTrapCause        = f'{_SC}.1.1.3'
+OID_hm2SigConTrapCauseIndex   = f'{_SC}.1.1.4'
+OID_hm2SigConMode             = f'{_SC}.1.1.5'
+OID_hm2SigConOperState        = f'{_SC}.1.1.6'
+OID_hm2SigConOperTimeStamp    = f'{_SC}.1.1.7'
+OID_hm2SigConManualActivate   = f'{_SC}.1.1.8'
+OID_hm2SigConSenseLinkFailure = f'{_SC}.1.1.9'
+OID_hm2SigConSenseTemperature = f'{_SC}.1.1.10'
+OID_hm2SigConSenseFan         = f'{_SC}.1.1.11'
+OID_hm2SigConSenseModRemoval  = f'{_SC}.1.1.12'
+OID_hm2SigConSenseExtNvmRem   = f'{_SC}.1.1.13'
+OID_hm2SigConSenseExtNvmSync  = f'{_SC}.1.1.14'
+OID_hm2SigConSenseRingRedund  = f'{_SC}.1.1.15'
+OID_hm2SigConSenseEthLoops    = f'{_SC}.1.1.16'
+OID_hm2SigConSenseHumidity    = f'{_SC}.1.1.17'
+OID_hm2SigConSenseStpBlock    = f'{_SC}.1.1.18'
+OID_hm2SigConSensePSState     = f'{_SC}.2.1.1'   # indexed SigConID.PSID
+OID_hm2SigConSenseIfLinkAlarm = f'{_SC}.3.1.1'   # indexed SigConID.ifIndex
+OID_hm2SigConStatusTimeStamp  = f'{_SC}.10.1.2'  # indexed SigConID.StatusIdx
+OID_hm2SigConStatusTrapCause  = f'{_SC}.10.1.3'
+OID_hm2SigConStatusTrapCauseIdx = f'{_SC}.10.1.4'
+
+_SIGCON_SENSE_OIDS = [
+    (OID_hm2SigConSenseLinkFailure, 'link_failure'),
+    (OID_hm2SigConSenseTemperature, 'temperature'),
+    (OID_hm2SigConSenseFan, 'fan'),
+    (OID_hm2SigConSenseModRemoval, 'module_removal'),
+    (OID_hm2SigConSenseExtNvmRem, 'envm_removal'),
+    (OID_hm2SigConSenseExtNvmSync, 'envm_not_in_sync'),
+    (OID_hm2SigConSenseRingRedund, 'ring_redundancy'),
+    (OID_hm2SigConSenseEthLoops, 'ethernet_loops'),
+    (OID_hm2SigConSenseHumidity, 'humidity'),
+    (OID_hm2SigConSenseStpBlock, 'stp_port_block'),
+]
+
+# HM2-DIAGNOSTIC-MIB — Device Monitor  1.3.6.1.4.1.248.11.22.1.3.2.*
+_DM = '1.3.6.1.4.1.248.11.22.1.3.2'
+OID_hm2DevMonTrapEnable       = f'{_DM}.1.1.2'
+OID_hm2DevMonTrapCause        = f'{_DM}.1.1.3'
+OID_hm2DevMonTrapCauseIndex   = f'{_DM}.1.1.4'
+OID_hm2DevMonOperState        = f'{_DM}.1.1.5'
+OID_hm2DevMonOperTimeStamp    = f'{_DM}.1.1.6'
+OID_hm2DevMonSenseLinkFailure = f'{_DM}.1.1.7'
+OID_hm2DevMonSenseTemperature = f'{_DM}.1.1.8'
+OID_hm2DevMonSenseFan         = f'{_DM}.1.1.9'
+OID_hm2DevMonSenseModRemoval  = f'{_DM}.1.1.10'
+OID_hm2DevMonSenseExtNvmRem   = f'{_DM}.1.1.11'
+OID_hm2DevMonSenseExtNvmSync  = f'{_DM}.1.1.12'
+OID_hm2DevMonSenseRingRedund  = f'{_DM}.1.1.13'
+OID_hm2DevMonSenseHumidity    = f'{_DM}.1.1.14'
+OID_hm2DevMonSenseStpBlock    = f'{_DM}.1.1.15'
+OID_hm2DevMonSensePSState     = f'{_DM}.2.1.1'   # indexed DevMonID.PSID
+OID_hm2DevMonSenseIfLinkAlarm = f'{_DM}.3.1.1'   # indexed DevMonID.ifIndex
+OID_hm2DevMonStatusTimeStamp  = f'{_DM}.10.1.2'
+OID_hm2DevMonStatusTrapCause  = f'{_DM}.10.1.3'
+OID_hm2DevMonStatusTrapCauseIdx = f'{_DM}.10.1.4'
+
+_DEVMON_SENSE_OIDS = [
+    (OID_hm2DevMonSenseLinkFailure, 'link_failure'),
+    (OID_hm2DevMonSenseTemperature, 'temperature'),
+    (OID_hm2DevMonSenseFan, 'fan'),
+    (OID_hm2DevMonSenseModRemoval, 'module_removal'),
+    (OID_hm2DevMonSenseExtNvmRem, 'envm_removal'),
+    (OID_hm2DevMonSenseExtNvmSync, 'envm_not_in_sync'),
+    (OID_hm2DevMonSenseRingRedund, 'ring_redundancy'),
+    (OID_hm2DevMonSenseHumidity, 'humidity'),
+    (OID_hm2DevMonSenseStpBlock, 'stp_port_block'),
+]
+
+# HM2-DIAGNOSTIC-MIB — DevSec scalars  (sense flags already defined above)
+_DS = '1.3.6.1.4.1.248.11.22.1.3.3'
+OID_hm2DevSecTrapEnable       = f'{_DS}.1.1'
+OID_hm2DevSecTrapCause        = f'{_DS}.1.2'
+OID_hm2DevSecTrapCauseIndex   = f'{_DS}.1.3'
+OID_hm2DevSecOperState        = f'{_DS}.1.4'
+OID_hm2DevSecOperTimeStamp    = f'{_DS}.1.5'
+OID_hm2DevSecSenseIfNoLink    = f'{_DS}.2.1.1'   # indexed by ifIndex
+OID_hm2DevSecStatusTimeStamp  = f'{_DS}.10.1.2'
+OID_hm2DevSecStatusTrapCause  = f'{_DS}.10.1.3'
+OID_hm2DevSecStatusTrapCauseIdx = f'{_DS}.10.1.4'
+
+_DEVSEC_SENSE_OIDS = [
+    (OID_hm2DevSecSensePasswordChange, 'password_change'),
+    (OID_hm2DevSecSensePasswordMinLen, 'password_min_length'),
+    (OID_hm2DevSecSensePwStrNotCfg, 'password_policy_not_configured'),
+    (OID_hm2DevSecSenseBypassPwStr, 'password_policy_bypass'),
+    (OID_hm2DevSecSenseTelnetEnabled, 'telnet_enabled'),
+    (OID_hm2DevSecSenseHttpEnabled, 'http_enabled'),
+    (OID_hm2DevSecSenseSnmpUnsecure, 'snmp_unsecure'),
+    (OID_hm2DevSecSenseSysmonEnabled, 'sysmon_enabled'),
+    (OID_hm2DevSecSenseExtNvmUpdate, 'envm_update_enabled'),
+    (OID_hm2DevSecSenseNoLinkEnabled, 'no_link_enabled'),
+    (OID_hm2DevSecSenseHiDiscovery, 'hidiscovery_enabled'),
+    (OID_hm2DevSecSenseExtNvmCfgLoad, 'envm_config_load_unsecure'),
+    (OID_hm2DevSecSenseIec61850Mms, 'iec61850_mms_enabled'),
+    (OID_hm2DevSecSenseHttpsCertWarn, 'https_cert_warning'),
+    (OID_hm2DevSecSenseModbusTcp, 'modbus_tcp_enabled'),
+    (OID_hm2DevSecSenseEtherNetIp, 'ethernet_ip_enabled'),
+    (OID_hm2DevSecSenseProfinetIO, 'profinet_enabled'),
+    (OID_hm2DevSecSenseSecureBoot, 'secure_boot_disabled'),
+    (OID_hm2DevSecSenseDevMode, 'dev_mode_enabled'),
+]
+
+# HM2-MGMTACCESS-MIB — Session Config  1.3.6.1.4.1.248.11.25.1.*
+OID_hm2SshMaxSessionsCount          = '1.3.6.1.4.1.248.11.25.1.4.5'
+OID_hm2SshSessionTimeout            = '1.3.6.1.4.1.248.11.25.1.4.6'
+OID_hm2SshSessionsCount             = '1.3.6.1.4.1.248.11.25.1.4.4'
+OID_hm2SshOutboundMaxSessionsCount  = '1.3.6.1.4.1.248.11.25.1.4.51'
+OID_hm2SshOutboundSessionTimeout    = '1.3.6.1.4.1.248.11.25.1.4.52'
+OID_hm2SshOutboundSessionsCount     = '1.3.6.1.4.1.248.11.25.1.4.50'
+OID_hm2TelnetServerMaxSessions      = '1.3.6.1.4.1.248.11.25.1.3.4'
+OID_hm2TelnetServerSessionsTimeOut  = '1.3.6.1.4.1.248.11.25.1.3.5'
+OID_hm2TelnetServerSessionsCount    = '1.3.6.1.4.1.248.11.25.1.3.3'
+OID_hm2WebIntfTimeOut                = '1.3.6.1.4.1.248.11.25.1.2.8'
+OID_hm2CliLoginTimeoutSerial        = '1.3.6.1.4.1.248.11.25.1.6.3'
+# Physical interface group (serial + ENVM admin/oper status)
+OID_hm2MgmtAccessPhysicalIntfSerialAdminStatus = '1.3.6.1.4.1.248.11.25.1.11.1'
+OID_hm2MgmtAccessPhysicalIntfSerialOperStatus  = '1.3.6.1.4.1.248.11.25.1.11.2'
+OID_hm2MgmtAccessPhysicalIntfEnvmAdminStatus   = '1.3.6.1.4.1.248.11.25.1.11.3'
+OID_hm2MgmtAccessPhysicalIntfEnvmOperStatus    = '1.3.6.1.4.1.248.11.25.1.11.4'
+OID_hm2NetconfMaxSessions           = '1.3.6.1.4.1.248.11.25.1.8.4'
+OID_hm2NetconfSessionTimeout        = '1.3.6.1.4.1.248.11.25.1.8.5'
+OID_hm2NetconfSessionsCount         = '1.3.6.1.4.1.248.11.25.1.8.3'
+
+# HM2-MGMTACCESS-MIB — Restricted Management Access  1.3.6.1.4.1.248.11.25.1.7.*
+OID_hm2RmaOperation        = '1.3.6.1.4.1.248.11.25.1.7.2'
+OID_hm2RmaLoggingGlobal    = '1.3.6.1.4.1.248.11.25.1.7.3'
+OID_hm2RmaRowStatus        = '1.3.6.1.4.1.248.11.25.1.7.1.1.2'
+OID_hm2RmaIpAddrType       = '1.3.6.1.4.1.248.11.25.1.7.1.1.3'
+OID_hm2RmaIpAddr           = '1.3.6.1.4.1.248.11.25.1.7.1.1.4'
+OID_hm2RmaPrefixLength     = '1.3.6.1.4.1.248.11.25.1.7.1.1.5'
+OID_hm2RmaSrvHttp          = '1.3.6.1.4.1.248.11.25.1.7.1.1.6'
+OID_hm2RmaSrvHttps         = '1.3.6.1.4.1.248.11.25.1.7.1.1.7'
+OID_hm2RmaSrvSnmp          = '1.3.6.1.4.1.248.11.25.1.7.1.1.8'
+OID_hm2RmaSrvTelnet        = '1.3.6.1.4.1.248.11.25.1.7.1.1.9'
+OID_hm2RmaSrvSsh           = '1.3.6.1.4.1.248.11.25.1.7.1.1.10'
+OID_hm2RmaSrvIEC61850      = '1.3.6.1.4.1.248.11.25.1.7.1.1.11'
+OID_hm2RmaSrvModbusTcp     = '1.3.6.1.4.1.248.11.25.1.7.1.1.12'
+OID_hm2RmaSrvEthernetIP    = '1.3.6.1.4.1.248.11.25.1.7.1.1.13'
+OID_hm2RmaSrvProfinetIO    = '1.3.6.1.4.1.248.11.25.1.7.1.1.14'
+OID_hm2RmaInterface        = '1.3.6.1.4.1.248.11.25.1.7.1.1.15'
+OID_hm2RmaLogging          = '1.3.6.1.4.1.248.11.25.1.7.1.1.16'
+
+# HM2-MGMTACCESS-MIB — SNMP Traps  1.3.6.1.4.1.248.11.25.1.1.*
+OID_hm2SnmpTrapServiceAdminStatus = '1.3.6.1.4.1.248.11.25.1.1.6'
+
+# HM2-USERMGMT-MIB — SNMPv3 user auth/enc  1.3.6.1.4.1.248.11.24.1.1.1.1.*
+OID_hm2UserSnmpAuthType = '1.3.6.1.4.1.248.11.24.1.1.1.1.7'
+OID_hm2UserSnmpEncType  = '1.3.6.1.4.1.248.11.24.1.1.1.1.8'
+
+# SNMP-TARGET-MIB (RFC 3413) — trap destinations  1.3.6.1.6.3.12.1.*
+OID_snmpTargetAddrTDomain      = '1.3.6.1.6.3.12.1.2.1.2'
+OID_snmpTargetAddrTAddress     = '1.3.6.1.6.3.12.1.2.1.3'
+OID_snmpTargetAddrTagList      = '1.3.6.1.6.3.12.1.2.1.6'
+OID_snmpTargetAddrParams       = '1.3.6.1.6.3.12.1.2.1.7'
+OID_snmpTargetAddrRowStatus    = '1.3.6.1.6.3.12.1.2.1.9'
+OID_snmpTargetParamsSecModel   = '1.3.6.1.6.3.12.1.3.1.3'
+OID_snmpTargetParamsSecName    = '1.3.6.1.6.3.12.1.3.1.4'
+OID_snmpTargetParamsSecLevel   = '1.3.6.1.6.3.12.1.3.1.5'
+OID_snmpTargetParamsRowStatus  = '1.3.6.1.6.3.12.1.3.1.7'
+OID_snmpUDPDomain              = '1.3.6.1.6.1.1'
+
+# HM2-MGMTACCESS-MIB — Banner  1.3.6.1.4.1.248.11.25.1.*
+OID_hm2PreLoginBannerAdminStatus = '1.3.6.1.4.1.248.11.25.1.5.1'
+OID_hm2PreLoginBannerText       = '1.3.6.1.4.1.248.11.25.1.5.2'
+OID_hm2CliLoginBannerAdminStatus = '1.3.6.1.4.1.248.11.25.1.6.10'
+OID_hm2CliLoginBannerText       = '1.3.6.1.4.1.248.11.25.1.6.11'
+
 # HM2-TIMESYNC-MIB — SNTP client admin  1.3.6.1.4.1.248.11.50.1.2.3.1
 OID_hm2SntpClientAdminState = '1.3.6.1.4.1.248.11.50.1.2.3.1'
 
@@ -523,6 +702,147 @@ OID_lldpXdot3RemLinkAggPortId        = '1.0.8802.1.1.2.1.5.4623.1.3.3.1.2'
 # LLDP-EXT-DOT1-MIB  1.0.8802.1.1.2.1.5.32962.1.*
 OID_lldpXdot1RemPortVlanId = '1.0.8802.1.1.2.1.5.32962.1.3.1.1.1'
 OID_lldpXdot1RemVlanId     = '1.0.8802.1.1.2.1.5.32962.1.3.3.1.1'
+
+# HM2-DNS-MIB — DNS client  1.3.6.1.4.1.248.11.90.*
+OID_hm2DnsClientAdminState          = '1.3.6.1.4.1.248.11.90.1.1.1'
+OID_hm2DnsClientConfigSource        = '1.3.6.1.4.1.248.11.90.1.1.2'
+OID_hm2DnsClientDefaultDomainName   = '1.3.6.1.4.1.248.11.90.1.1.5.1'
+OID_hm2DnsClientRequestTimeout      = '1.3.6.1.4.1.248.11.90.1.1.5.2'
+OID_hm2DnsClientRequestRetransmits  = '1.3.6.1.4.1.248.11.90.1.1.5.3'
+OID_hm2DnsClientCacheAdminState     = '1.3.6.1.4.1.248.11.90.1.1.5.4'
+# DNS server config table  1.3.6.1.4.1.248.11.90.1.1.3.1.*
+OID_hm2DnsClientServerAddressType   = '1.3.6.1.4.1.248.11.90.1.1.3.1.2'
+OID_hm2DnsClientServerAddress       = '1.3.6.1.4.1.248.11.90.1.1.3.1.3'
+OID_hm2DnsClientServerRowStatus     = '1.3.6.1.4.1.248.11.90.1.1.3.1.4'
+# DNS server diag table  1.3.6.1.4.1.248.11.90.1.1.4.1.*
+OID_hm2DnsClientServerDiagAddressType = '1.3.6.1.4.1.248.11.90.1.1.4.1.2'
+OID_hm2DnsClientServerDiagAddress     = '1.3.6.1.4.1.248.11.90.1.1.4.1.3'
+
+# HM2-POE-MIB — Power over Ethernet  1.3.6.1.4.1.248.11.12.*
+# Global  1.3.6.1.4.1.248.11.12.1.1.1.*
+OID_hm2PoeMgmtAdminStatus             = '1.3.6.1.4.1.248.11.12.1.1.1.1'
+OID_hm2PoeMgmtReservedPower           = '1.3.6.1.4.1.248.11.12.1.1.1.2'
+OID_hm2PoeMgmtDeliveredCurrent        = '1.3.6.1.4.1.248.11.12.1.1.1.3'
+# Port table  1.3.6.1.4.1.248.11.12.1.1.3.1.*
+OID_hm2PoeMgmtPortAdminEnable         = '1.3.6.1.4.1.248.11.12.1.1.3.1.1'
+OID_hm2PoeMgmtPortConsumptionPower    = '1.3.6.1.4.1.248.11.12.1.1.3.1.2'
+OID_hm2PoeMgmtPortDetectionStatus     = '1.3.6.1.4.1.248.11.12.1.1.3.1.3'
+OID_hm2PoeMgmtPortPowerPriority       = '1.3.6.1.4.1.248.11.12.1.1.3.1.4'
+OID_hm2PoeMgmtPortPowerClassification = '1.3.6.1.4.1.248.11.12.1.1.3.1.5'
+OID_hm2PoeMgmtPortName                = '1.3.6.1.4.1.248.11.12.1.1.3.1.6'
+OID_hm2PoeMgmtPortClassValid          = '1.3.6.1.4.1.248.11.12.1.1.3.1.11'
+OID_hm2PoeMgmtPortFastStartup         = '1.3.6.1.4.1.248.11.12.1.1.3.1.12'
+OID_hm2PoeMgmtPortPowerLimit          = '1.3.6.1.4.1.248.11.12.1.1.3.1.14'
+# Module table  1.3.6.1.4.1.248.11.12.1.1.4.1.*
+OID_hm2PoeMgmtModuleUnitIndex         = '1.3.6.1.4.1.248.11.12.1.1.4.1.1'
+OID_hm2PoeMgmtModuleSlotIndex         = '1.3.6.1.4.1.248.11.12.1.1.4.1.2'
+OID_hm2PoeMgmtModulePower             = '1.3.6.1.4.1.248.11.12.1.1.4.1.3'
+OID_hm2PoeMgmtModuleMaximumPower      = '1.3.6.1.4.1.248.11.12.1.1.4.1.4'
+OID_hm2PoeMgmtModuleReservedPower     = '1.3.6.1.4.1.248.11.12.1.1.4.1.5'
+OID_hm2PoeMgmtModuleDeliveredPower    = '1.3.6.1.4.1.248.11.12.1.1.4.1.6'
+OID_hm2PoeMgmtModulePowerSource       = '1.3.6.1.4.1.248.11.12.1.1.4.1.7'
+OID_hm2PoeMgmtModuleUsageThreshold    = '1.3.6.1.4.1.248.11.12.1.1.4.1.8'
+OID_hm2PoeMgmtModuleNotifCtlEnable    = '1.3.6.1.4.1.248.11.12.1.1.4.1.9'
+
+# Remote Authentication (HM2-REMOTE-AUTHENTICATION-MIB / HM2-PLATFORM-RADIUS / TACACS)
+OID_hm2AgentRadiusServerRowStatus     = '1.3.6.1.4.1.248.12.8.1.8.1.9'
+OID_hm2AgentTacacsServerStatus        = '1.3.6.1.4.1.248.12.18.1.2.1.7'
+OID_hm2LdapClientAdminState           = '1.3.6.1.4.1.248.11.26.1.1.10.1'
+
+# User Management (HM2-USERMGMT-MIB)
+# Base: 1.3.6.1.4.1.248.11.24.1.1.1.1  (hm2UserConfigEntry)
+OID_hm2UserConfigEntry                = '1.3.6.1.4.1.248.11.24.1.1.1.1'
+OID_hm2UserAccessRole                 = '1.3.6.1.4.1.248.11.24.1.1.1.1.3'
+OID_hm2UserLockoutStatus              = '1.3.6.1.4.1.248.11.24.1.1.1.1.4'
+OID_hm2UserPwdPolicyChk               = '1.3.6.1.4.1.248.11.24.1.1.1.1.6'
+OID_hm2UserSnmpAuthType               = '1.3.6.1.4.1.248.11.24.1.1.1.1.7'
+OID_hm2UserSnmpEncType                = '1.3.6.1.4.1.248.11.24.1.1.1.1.8'
+OID_hm2UserStatus                     = '1.3.6.1.4.1.248.11.24.1.1.1.1.9'
+OID_hm2UserPassword                   = '1.3.6.1.4.1.248.11.24.1.1.1.1.2'
+OID_hm2UserSnmpAuthPassword           = '1.3.6.1.4.1.248.11.24.1.1.1.1.10'
+OID_hm2UserSnmpEncPassword            = '1.3.6.1.4.1.248.11.24.1.1.1.1.11'
+
+# Port Security (HM2-PLATFORM-PORTSECURITY-MIB)
+# hm2PlatformMibs.20 = hm2PlatformPortSecurity
+# Base: 1.3.6.1.4.1.248.12.20.1  (hm2AgentPortSecurityGroup)
+_PS_GRP = '1.3.6.1.4.1.248.12.20.1'
+_PS_ENT = _PS_GRP + '.2.1'  # hm2AgentPortSecurityEntry
+OID_hm2AgentGlobalPortSecurityMode           = _PS_GRP + '.1'
+OID_hm2AgentPortSecurityOperationMode        = _PS_GRP + '.12'
+OID_hm2AgentPortSecurityMode                 = _PS_ENT + '.1'
+OID_hm2AgentPortSecurityDynamicLimit         = _PS_ENT + '.2'
+OID_hm2AgentPortSecurityStaticLimit          = _PS_ENT + '.3'
+OID_hm2AgentPortSecurityViolationTrapMode    = _PS_ENT + '.4'
+OID_hm2AgentPortSecurityStaticMACs           = _PS_ENT + '.6'
+OID_hm2AgentPortSecurityLastDiscardedMAC     = _PS_ENT + '.7'
+OID_hm2AgentPortSecurityMACAddressAdd        = _PS_ENT + '.8'
+OID_hm2AgentPortSecurityMACAddressRemove     = _PS_ENT + '.9'
+OID_hm2AgentPortSecurityMACAddressMove       = _PS_ENT + '.10'
+OID_hm2AgentPortSecurityDynamicCount         = _PS_ENT + '.20'
+OID_hm2AgentPortSecurityStaticCount          = _PS_ENT + '.21'
+OID_hm2AgentPortSecurityViolationTrapCount   = _PS_ENT + '.22'
+OID_hm2AgentPortSecurityViolationTrapFrequency = _PS_ENT + '.23'
+OID_hm2AgentPortSecurityAutoDisable          = _PS_ENT + '.248'
+OID_hm2AgentPortSecurityStaticIpCount        = _PS_ENT + '.249'
+OID_hm2AgentPortSecurityStaticIPs            = _PS_ENT + '.250'
+OID_hm2AgentPortSecurityIPAddressAdd         = _PS_ENT + '.251'
+OID_hm2AgentPortSecurityIPAddressRemove      = _PS_ENT + '.252'
+
+# DHCP Snooping (HM2-PLATFORM-SWITCHING-MIB)
+# hm2PlatformSwitching.hm2AgentConfigGroup.hm2AgentSwitchConfigGroup.hm2AgentDhcpSnoopingConfigGroup
+# Base: 1.3.6.1.4.1.248.12.1.2.8.23
+_DS_GRP = '1.3.6.1.4.1.248.12.1.2.8.23'
+_DS_VLAN_ENT = _DS_GRP + '.3.1'    # hm2AgentDhcpSnoopingVlanConfigEntry
+_DS_IF_ENT = _DS_GRP + '.4.1'      # hm2AgentDhcpSnoopingIfConfigEntry
+OID_hm2AgentDhcpSnoopingAdminMode       = _DS_GRP + '.1'
+OID_hm2AgentDhcpSnoopingVerifyMac       = _DS_GRP + '.2'
+OID_hm2AgentDhcpSnoopingVlanIndex       = _DS_VLAN_ENT + '.1'
+OID_hm2AgentDhcpSnoopingVlanEnable      = _DS_VLAN_ENT + '.2'
+OID_hm2AgentDhcpSnoopingIfTrustEnable   = _DS_IF_ENT + '.1'
+OID_hm2AgentDhcpSnoopingIfLogEnable     = _DS_IF_ENT + '.2'
+OID_hm2AgentDhcpSnoopingIfRateLimit     = _DS_IF_ENT + '.3'
+OID_hm2AgentDhcpSnoopingIfBurstInterval = _DS_IF_ENT + '.4'
+OID_hm2AgentDhcpSnoopingIfAutoDisable   = _DS_IF_ENT + '.248'
+
+# Dynamic ARP Inspection (HM2-PLATFORM-SWITCHING-MIB)
+# hm2AgentSwitchConfigGroup.21 = hm2AgentDaiConfigGroup
+# Base: 1.3.6.1.4.1.248.12.1.2.8.21
+_DAI_GRP = '1.3.6.1.4.1.248.12.1.2.8.21'
+_DAI_VLAN_ENT = _DAI_GRP + '.4.1'    # hm2AgentDaiVlanConfigEntry
+_DAI_IF_ENT = _DAI_GRP + '.7.1'      # hm2AgentDaiIfConfigEntry
+OID_hm2AgentDaiSrcMacValidate           = _DAI_GRP + '.1'
+OID_hm2AgentDaiDstMacValidate           = _DAI_GRP + '.2'
+OID_hm2AgentDaiIPValidate               = _DAI_GRP + '.3'
+OID_hm2AgentDaiVlanDynArpInspEnable     = _DAI_VLAN_ENT + '.2'
+OID_hm2AgentDaiVlanLoggingEnable        = _DAI_VLAN_ENT + '.3'
+OID_hm2AgentDaiVlanArpAclName           = _DAI_VLAN_ENT + '.4'
+OID_hm2AgentDaiVlanArpAclStaticFlag     = _DAI_VLAN_ENT + '.5'
+OID_hm2AgentDaiVlanBindingCheckEnable   = _DAI_VLAN_ENT + '.248'
+OID_hm2AgentDaiIfTrustEnable            = _DAI_IF_ENT + '.1'
+OID_hm2AgentDaiIfRateLimit              = _DAI_IF_ENT + '.2'
+OID_hm2AgentDaiIfBurstInterval          = _DAI_IF_ENT + '.3'
+OID_hm2AgentDaiIfAutoDisable            = _DAI_IF_ENT + '.248'
+
+# IP Source Guard (same base as DHCP Snooping — .23)
+# hm2AgentIpsgIfConfigEntry = .23.5.1
+_IPSG_IF_ENT = _DS_GRP + '.5.1'
+OID_hm2AgentIpsgIfVerifySource          = _IPSG_IF_ENT + '.1'
+OID_hm2AgentIpsgIfPortSecurity          = _IPSG_IF_ENT + '.2'
+# Static binding table = .23.8.1
+_IPSG_STATIC_ENT = _DS_GRP + '.8.1'
+OID_hm2AgentStaticIpsgBindingIfIndex    = _IPSG_STATIC_ENT + '.1'
+OID_hm2AgentStaticIpsgBindingVlanId     = _IPSG_STATIC_ENT + '.2'
+OID_hm2AgentStaticIpsgBindingMacAddr    = _IPSG_STATIC_ENT + '.3'
+OID_hm2AgentStaticIpsgBindingIpAddr     = _IPSG_STATIC_ENT + '.4'
+OID_hm2AgentStaticIpsgBindingRowStatus  = _IPSG_STATIC_ENT + '.5'
+OID_hm2AgentStaticIpsgBindingHwStatus   = _IPSG_STATIC_ENT + '.248'
+# Dynamic binding table = .23.9.1
+_IPSG_DYN_ENT = _DS_GRP + '.9.1'
+OID_hm2AgentDynamicIpsgBindingIfIndex   = _IPSG_DYN_ENT + '.1'
+OID_hm2AgentDynamicIpsgBindingVlanId    = _IPSG_DYN_ENT + '.2'
+OID_hm2AgentDynamicIpsgBindingMacAddr   = _IPSG_DYN_ENT + '.3'
+OID_hm2AgentDynamicIpsgBindingIpAddr    = _IPSG_DYN_ENT + '.4'
+OID_hm2AgentDynamicIpsgBindingHwStatus  = _IPSG_DYN_ENT + '.248'
 
 
 # ---------------------------------------------------------------------------
@@ -838,6 +1158,97 @@ def _snmp_ip(val):
             # IPv6 — use standard compressed notation
             return str(ipaddress.IPv6Address(raw))
     return s
+
+
+def _decode_bits_snmp(val, bit_map):
+    """Decode SNMP BITS OctetString to list of enabled algorithm names.
+
+    BITS encoding: MSB-first, bit 0 = 0x80 of first octet.
+    ``val`` is a pysnmp OctetString or bytes.
+    """
+    raw = bytes(val) if hasattr(val, '__bytes__') else val
+    if not isinstance(raw, bytes) or not raw:
+        return []
+    enabled = []
+    for byte_idx, byte_val in enumerate(raw):
+        for bit_idx in range(8):
+            if byte_val & (0x80 >> bit_idx):
+                bit_num = byte_idx * 8 + bit_idx
+                name = bit_map.get(bit_num)
+                if name:
+                    enabled.append(name)
+    return enabled
+
+
+def _encode_bits_snmp(names, bit_map):
+    """Encode algorithm name list to bytes for SNMP SET.
+
+    Returns OctetString-compatible bytes value.
+    """
+    rev = {v: k for k, v in bit_map.items()}
+    max_bit = max(bit_map.keys()) if bit_map else 0
+    num_bytes = (max_bit // 8) + 1
+    octets = bytearray(num_bytes)
+    for name in names:
+        bit = rev.get(name)
+        if bit is not None:
+            octets[bit // 8] |= (0x80 >> (bit % 8))
+    return bytes(octets)
+
+
+# -- Cipher / TLS / SSH algorithm BITS mappings (HM2-MGMTACCESS-MIB) ------
+
+_TLS_VERSIONS = {
+    0: 'tlsv1.0', 1: 'tlsv1.1', 2: 'tlsv1.2',
+}
+
+_TLS_CIPHER_SUITES = {
+    0: 'tls-rsa-with-rc4-128-sha',
+    1: 'tls-rsa-with-aes-128-cbc-sha',
+    2: 'tls-dhe-rsa-with-aes-128-cbc-sha',
+    3: 'tls-dhe-rsa-with-aes-256-cbc-sha',
+    4: 'tls-ecdhe-rsa-with-aes-128-cbc-sha',
+    5: 'tls-ecdhe-rsa-with-aes-256-cbc-sha',
+    6: 'tls-ecdhe-rsa-with-aes-128-gcm-sha256',
+    7: 'tls-ecdhe-rsa-with-aes-256-gcm-sha384',
+}
+
+_SSH_HMAC = {
+    0: 'hmac-sha1', 1: 'hmac-sha2-256', 2: 'hmac-sha2-512',
+    3: 'hmac-sha1-etm@openssh.com',
+    4: 'hmac-sha2-256-etm@openssh.com',
+    5: 'hmac-sha2-512-etm@openssh.com',
+}
+
+_SSH_KEX = {
+    0: 'diffie-hellman-group1-sha1',
+    1: 'diffie-hellman-group14-sha1',
+    2: 'diffie-hellman-group14-sha256',
+    3: 'diffie-hellman-group16-sha512',
+    4: 'diffie-hellman-group18-sha512',
+    5: 'diffie-hellman-group-exchange-sha256',
+    6: 'ecdh-sha2-nistp256', 7: 'ecdh-sha2-nistp384',
+}
+
+_SSH_ENCRYPTION = {
+    0: 'aes128-ctr', 1: 'aes192-ctr', 2: 'aes256-ctr',
+    3: 'aes128-gcm@openssh.com', 4: 'aes256-gcm@openssh.com',
+    5: 'chacha20-poly1305@openssh.com',
+}
+
+_SSH_HOST_KEY = {
+    0: 'ecdsa-sha2-nistp256', 1: 'ecdsa-sha2-nistp384',
+    2: 'ecdsa-sha2-nistp521',
+    3: 'ecdsa-sha2-nistp256-cert-v01@openssh.com',
+    4: 'ecdsa-sha2-nistp384-cert-v01@openssh.com',
+    5: 'ecdsa-sha2-nistp521-cert-v01@openssh.com',
+    6: 'rsa-sha2-256', 7: 'rsa-sha2-512',
+    8: 'rsa-sha2-256-cert-v01@openssh.com',
+    9: 'rsa-sha2-512-cert-v01@openssh.com',
+    10: 'ssh-dss', 11: 'ssh-ed25519',
+    12: 'ssh-ed25519-cert-v01@openssh.com',
+    13: 'ssh-rsa', 14: 'ssh-rsa-cert-v01@openssh.com',
+}
 
 
 def _decode_implied_string(suffix_str):
@@ -3605,7 +4016,13 @@ class SNMPHIOS:
             OID_hm2WebHttpsAdminStatus,
             OID_hm2WebHttpPortNumber,
             OID_hm2WebHttpsPortNumber,
+            OID_hm2WebHttpsServerTlsVersions,
+            OID_hm2WebHttpsServerTlsCipherSuites,
             OID_hm2SshAdminStatus,
+            OID_hm2SshHmacAlgorithms,
+            OID_hm2SshKexAlgorithms,
+            OID_hm2SshEncryptionAlgorithms,
+            OID_hm2SshHostKeyAlgorithms,
             OID_hm2TelnetServerAdminStatus,
             OID_hm2SnmpV1AdminStatus,
             OID_hm2SnmpV2AdminStatus,
@@ -3634,10 +4051,37 @@ class SNMPHIOS:
             out.update({
                 'http': {'enabled': _en(OID_hm2WebHttpAdminStatus),
                          'port': _port(OID_hm2WebHttpPortNumber, 80)},
-                'https': {'enabled': _en(OID_hm2WebHttpsAdminStatus),
-                          'port': _port(
-                              OID_hm2WebHttpsPortNumber, 443)},
-                'ssh': {'enabled': _en(OID_hm2SshAdminStatus)},
+                'https': {
+                    'enabled': _en(OID_hm2WebHttpsAdminStatus),
+                    'port': _port(OID_hm2WebHttpsPortNumber, 443),
+                    'tls_versions': _decode_bits_snmp(
+                        scalars.get(
+                            OID_hm2WebHttpsServerTlsVersions, b''),
+                        _TLS_VERSIONS),
+                    'tls_cipher_suites': _decode_bits_snmp(
+                        scalars.get(
+                            OID_hm2WebHttpsServerTlsCipherSuites,
+                            b''), _TLS_CIPHER_SUITES),
+                },
+                'ssh': {
+                    'enabled': _en(OID_hm2SshAdminStatus),
+                    'hmac_algorithms': _decode_bits_snmp(
+                        scalars.get(
+                            OID_hm2SshHmacAlgorithms, b''),
+                        _SSH_HMAC),
+                    'kex_algorithms': _decode_bits_snmp(
+                        scalars.get(
+                            OID_hm2SshKexAlgorithms, b''),
+                        _SSH_KEX),
+                    'encryption_algorithms': _decode_bits_snmp(
+                        scalars.get(
+                            OID_hm2SshEncryptionAlgorithms, b''),
+                        _SSH_ENCRYPTION),
+                    'host_key_algorithms': _decode_bits_snmp(
+                        scalars.get(
+                            OID_hm2SshHostKeyAlgorithms, b''),
+                        _SSH_HOST_KEY),
+                },
                 'telnet': {'enabled': _en(
                     OID_hm2TelnetServerAdminStatus)},
                 'snmp': {
@@ -3705,13 +4149,18 @@ class SNMPHIOS:
                      ethernet_ip=None, opcua=None, modbus=None,
                      unsigned_sw=None, aca_auto_update=None,
                      aca_config_write=None, aca_config_load=None,
-                     mvrp=None, mmrp=None, devsec_monitors=None):
+                     mvrp=None, mmrp=None, devsec_monitors=None,
+                     tls_versions=None, tls_cipher_suites=None,
+                     ssh_hmac=None, ssh_kex=None,
+                     ssh_encryption=None, ssh_host_key=None):
         """Set service enable/disable state."""
         return asyncio.run(self._set_services_async(
             http, https, ssh, telnet, snmp_v1, snmp_v2, snmp_v3,
             iec61850, profinet, ethernet_ip, opcua, modbus,
             unsigned_sw, aca_auto_update, aca_config_write,
-            aca_config_load, mvrp, mmrp, devsec_monitors))
+            aca_config_load, mvrp, mmrp, devsec_monitors,
+            tls_versions, tls_cipher_suites,
+            ssh_hmac, ssh_kex, ssh_encryption, ssh_host_key))
 
     async def _set_services_async(self, http, https, ssh, telnet,
                                    snmp_v1, snmp_v2, snmp_v3,
@@ -3719,7 +4168,12 @@ class SNMPHIOS:
                                    opcua, modbus, unsigned_sw,
                                    aca_auto_update, aca_config_write,
                                    aca_config_load, mvrp, mmrp,
-                                   devsec_monitors):
+                                   devsec_monitors,
+                                   tls_versions=None,
+                                   tls_cipher_suites=None,
+                                   ssh_hmac=None, ssh_kex=None,
+                                   ssh_encryption=None,
+                                   ssh_host_key=None):
         _map = [
             (http, OID_hm2WebHttpAdminStatus),
             (https, OID_hm2WebHttpsAdminStatus),
@@ -3747,6 +4201,27 @@ class SNMPHIOS:
             v = Integer32(1 if devsec_monitors else 2)
             for oid in _OID_DEVSEC_ALL:
                 sets.append((oid + '.0', v))
+        # Cipher BITS fields — OctetString values
+        _bits_map = [
+            (tls_versions,
+             OID_hm2WebHttpsServerTlsVersions, _TLS_VERSIONS),
+            (tls_cipher_suites,
+             OID_hm2WebHttpsServerTlsCipherSuites,
+             _TLS_CIPHER_SUITES),
+            (ssh_hmac,
+             OID_hm2SshHmacAlgorithms, _SSH_HMAC),
+            (ssh_kex,
+             OID_hm2SshKexAlgorithms, _SSH_KEX),
+            (ssh_encryption,
+             OID_hm2SshEncryptionAlgorithms, _SSH_ENCRYPTION),
+            (ssh_host_key,
+             OID_hm2SshHostKeyAlgorithms, _SSH_HOST_KEY),
+        ]
+        for val, oid, bmap in _bits_map:
+            if val is not None:
+                sets.append((oid + '.0',
+                             OctetString(_encode_bits_snmp(
+                                 val, bmap))))
         if sets:
             await self._set_oids(*sets)
 
@@ -3783,7 +4258,7 @@ class SNMPHIOS:
     # ------------------------------------------------------------------
 
     def get_snmp_config(self):
-        """Read SNMP version status and port."""
+        """Read SNMP config: versions, port, trap service, v3 users, trap dests."""
         return asyncio.run(self._get_snmp_config_async())
 
     async def _get_snmp_config_async(self):
@@ -3792,7 +4267,34 @@ class SNMPHIOS:
             OID_hm2SnmpV2AdminStatus,
             OID_hm2SnmpV3AdminStatus,
             OID_hm2SnmpPortNumber,
+            OID_hm2SnmpTrapServiceAdminStatus,
         )
+
+        # v3 user auth/enc
+        engine = SnmpEngine()
+        user_rows = await self._walk_columns({
+            'auth': OID_hm2UserSnmpAuthType,
+            'enc': OID_hm2UserSnmpEncType,
+            'status': OID_hm2UserStatus,
+        }, engine)
+        v3_users = []
+        for suffix, cols in user_rows.items():
+            if _snmp_int(cols.get('status', 0)) != 1:
+                continue
+            name = _decode_implied_string(suffix)
+            if not name:
+                continue
+            v3_users.append({
+                'name': name,
+                'auth_type': self._SNMP_AUTH_TYPE.get(
+                    _snmp_int(cols.get('auth', 0)), ''),
+                'enc_type': self._SNMP_ENC_TYPE.get(
+                    _snmp_int(cols.get('enc', 0)), 'none'),
+            })
+
+        # Trap destinations
+        trap_destinations = await self._get_trap_dests_async(engine)
+
         return {
             'versions': {
                 'v1': _snmp_int(scalars.get(
@@ -3805,13 +4307,85 @@ class SNMPHIOS:
             'port': _snmp_int(scalars.get(
                 OID_hm2SnmpPortNumber, 161)),
             'communities': [],
+            'trap_service': _snmp_int(scalars.get(
+                OID_hm2SnmpTrapServiceAdminStatus, 2)) == 1,
+            'v3_users': v3_users,
+            'trap_destinations': trap_destinations,
         }
 
-    def set_snmp_config(self, v1=None, v2=None, v3=None):
-        """Set SNMP version enable/disable."""
-        return asyncio.run(self._set_snmp_config_async(v1, v2, v3))
+    async def _get_trap_dests_async(self, engine=None):
+        """Walk SNMP-TARGET-MIB for trap destinations."""
+        if engine is None:
+            engine = SnmpEngine()
 
-    async def _set_snmp_config_async(self, v1, v2, v3):
+        addr_rows = await self._walk_columns({
+            'taddr': OID_snmpTargetAddrTAddress,
+            'params': OID_snmpTargetAddrParams,
+        }, engine)
+
+        params_rows = await self._walk_columns({
+            'model': OID_snmpTargetParamsSecModel,
+            'sec_name': OID_snmpTargetParamsSecName,
+            'sec_level': OID_snmpTargetParamsSecLevel,
+        }, engine)
+
+        # Build params lookup by implied string suffix
+        params_map = {}
+        for suffix, cols in params_rows.items():
+            pname = _decode_implied_string(suffix)
+            if pname:
+                params_map[pname] = {
+                    'security_model': self._SNMP_SEC_MODEL.get(
+                        _snmp_int(cols.get('model', 0)), ''),
+                    'security_name': str(
+                        cols.get('sec_name', '')),
+                    'security_level': self._SNMP_SEC_LEVEL.get(
+                        _snmp_int(cols.get('sec_level', 0)), ''),
+                }
+
+        destinations = []
+        for suffix, cols in addr_rows.items():
+            name = _decode_implied_string(suffix)
+            taddr = cols.get('taddr', b'')
+            params_ref = str(cols.get('params', ''))
+            address = self._decode_taddress_snmp(taddr)
+            params = params_map.get(params_ref, {})
+            model = params.get('security_model', '')
+            # v1/v2c don't use security levels — normalise
+            level = ('noauth' if model in ('v1', 'v2c')
+                     else params.get('security_level', ''))
+            destinations.append({
+                'name': name,
+                'address': address,
+                'security_model': model,
+                'security_name': params.get(
+                    'security_name', ''),
+                'security_level': level,
+            })
+        return destinations
+
+    @staticmethod
+    def _decode_taddress_snmp(val):
+        """Decode SNMP TAddress (OctetString 6 bytes) to ip:port."""
+        # pysnmp OctetString supports bytes() conversion
+        raw = bytes(val) if hasattr(val, '__bytes__') else val
+        if isinstance(raw, bytes) and len(raw) == 6:
+            ip = '.'.join(str(b) for b in raw[:4])
+            port = raw[4] * 256 + raw[5]
+            return f'{ip}:{port}'
+        s = str(val)
+        if s:
+            return s
+        return ''
+
+    def set_snmp_config(self, v1=None, v2=None, v3=None,
+                        trap_service=None):
+        """Set SNMP version enable/disable and trap service."""
+        return asyncio.run(self._set_snmp_config_async(
+            v1, v2, v3, trap_service))
+
+    async def _set_snmp_config_async(self, v1, v2, v3,
+                                      trap_service):
         sets = []
         if v1 is not None:
             sets.append((OID_hm2SnmpV1AdminStatus + '.0',
@@ -3822,8 +4396,92 @@ class SNMPHIOS:
         if v3 is not None:
             sets.append((OID_hm2SnmpV3AdminStatus + '.0',
                          Integer32(1 if v3 else 2)))
+        if trap_service is not None:
+            sets.append((OID_hm2SnmpTrapServiceAdminStatus + '.0',
+                         Integer32(1 if trap_service else 2)))
         if sets:
             await self._set_oids(*sets)
+
+    _SNMP_SEC_MODEL_REV = {'v1': 1, 'v2c': 2, 'v3': 3}
+    _SNMP_SEC_LEVEL_REV = {'noauth': 1, 'auth': 2, 'authpriv': 3}
+
+    def add_snmp_trap_dest(self, name, address, port=162,
+                           security_model='v3', security_name='admin',
+                           security_level='authpriv'):
+        """Add an SNMP trap destination via SNMP."""
+        asyncio.run(self._add_snmp_trap_dest_async(
+            name, address, port, security_model,
+            security_name, security_level))
+
+    async def _add_snmp_trap_dest_async(self, name, address, port,
+                                         security_model, security_name,
+                                         security_level):
+        if security_model not in self._SNMP_SEC_MODEL_REV:
+            raise ValueError(
+                f"Invalid security_model '{security_model}': "
+                f"use 'v1', 'v2c', or 'v3'")
+        # v1/v2c only supports noauth — override regardless
+        if security_model in ('v1', 'v2c'):
+            security_level = 'noauth'
+        if security_level not in self._SNMP_SEC_LEVEL_REV:
+            raise ValueError(
+                f"Invalid security_level '{security_level}': "
+                f"use 'noauth', 'auth', or 'authpriv'")
+
+        suffix = self._encode_implied_string(name)
+
+        # Encode TAddress: 4 IP octets + 2-byte port
+        ip_parts = address.split('.')
+        if len(ip_parts) != 4:
+            raise ValueError(f"Invalid IP address: {address}")
+        taddr = bytes([int(p) for p in ip_parts] +
+                      [port >> 8, port & 0xFF])
+
+        # Create params entry: createAndWait → set attrs → activate
+        await self._set_oids(
+            (f"{OID_snmpTargetParamsRowStatus}{suffix}",
+             Integer32(5)))
+        await self._set_oids(
+            (f"{OID_snmpTargetParamsSecModel}{suffix}",
+             Integer32(self._SNMP_SEC_MODEL_REV[security_model])),
+            (f"{OID_snmpTargetParamsSecName}{suffix}",
+             OctetString(security_name.encode())),
+            (f"{OID_snmpTargetParamsSecLevel}{suffix}",
+             Integer32(self._SNMP_SEC_LEVEL_REV[security_level])),
+        )
+        await self._set_oids(
+            (f"{OID_snmpTargetParamsRowStatus}{suffix}",
+             Integer32(1)))
+
+        # Create addr entry: createAndWait → set attrs → activate
+        await self._set_oids(
+            (f"{OID_snmpTargetAddrRowStatus}{suffix}",
+             Integer32(5)))
+        await self._set_oids(
+            (f"{OID_snmpTargetAddrTDomain}{suffix}",
+             ObjectIdentifier(OID_snmpUDPDomain)),
+            (f"{OID_snmpTargetAddrTAddress}{suffix}",
+             OctetString(taddr)),
+            (f"{OID_snmpTargetAddrParams}{suffix}",
+             OctetString(name.encode())),
+        )
+        await self._set_oids(
+            (f"{OID_snmpTargetAddrRowStatus}{suffix}",
+             Integer32(1)))
+
+    def delete_snmp_trap_dest(self, name):
+        """Delete an SNMP trap destination via SNMP."""
+        asyncio.run(self._delete_snmp_trap_dest_async(name))
+
+    async def _delete_snmp_trap_dest_async(self, name):
+        suffix = self._encode_implied_string(name)
+        # Destroy addr first, then params
+        await self._set_oids(
+            (f"{OID_snmpTargetAddrRowStatus}{suffix}",
+             Integer32(6)))
+        await self._set_oids(
+            (f"{OID_snmpTargetParamsRowStatus}{suffix}",
+             Integer32(6)))
 
     # ------------------------------------------------------------------
     # Auto-Disable
@@ -5090,3 +5748,1976 @@ class SNMPHIOS:
 
         if sets:
             await self._set_oids(*sets)
+
+    # ------------------------------------------------------------------
+    # Signal Contact (HM2-DIAGNOSTIC-MIB / hm2SignalContactGroup)
+    # ------------------------------------------------------------------
+
+    _SIGCON_MODE = {1: 'manual', 2: 'monitor', 3: 'deviceState',
+                    4: 'deviceSecurity', 5: 'deviceStateAndSecurity'}
+    _SIGCON_MODE_REV = {v: k for k, v in _SIGCON_MODE.items()}
+    _SIGCON_OPER = {1: 'open', 2: 'close'}
+    _SIGCON_MANUAL_REV = {'open': 1, 'close': 2}
+    _SIGCON_TRAP_CAUSE = {
+        1: 'none', 2: 'power-supply', 3: 'link-failure',
+        4: 'temperature', 5: 'fan-failure', 6: 'module-removal',
+        7: 'ext-nvm-removal', 8: 'ext-nvm-not-in-sync',
+        9: 'ring-redundancy', 10: 'power-fail-imminent',
+        11: 'invalid-cfg', 12: 'sw-watchdog', 13: 'hw-watchdog',
+        14: 'ext-nvm-update-enabled', 15: 'hw-failure',
+        16: 'dev-temp-sensor-failure', 17: 'temp-warning',
+        18: 'security-incident', 19: 'config-corrupted',
+        20: 'system-reboot', 21: 'system-poweron',
+        22: 'system-poweroff', 23: 'license-invalid',
+        24: 'license-missing', 25: 'pml-enabled',
+        26: 'profinet-io-enabled', 27: 'ethernet-loops',
+        28: 'humidity', 29: 'pml-disabled',
+        30: 'stp-port-blocked', 31: 'secure-boot-disabled',
+        32: 'dev-mode-enabled',
+    }
+    _DEVMON_TRAP_CAUSE_MAP = {
+        1: 'none', 2: 'power-supply', 3: 'link-failure',
+        4: 'temperature', 5: 'fan-failure', 6: 'module-removal',
+        7: 'ext-nvm-removal', 8: 'ext-nvm-not-in-sync',
+        9: 'ring-redundancy', 28: 'humidity', 30: 'stp-port-blocked',
+    }
+    _DEVSEC_TRAP_CAUSE_MAP = {
+        1: 'none', 10: 'password-change', 11: 'password-min-length',
+        12: 'password-policy-not-configured',
+        13: 'password-policy-inactive', 14: 'telnet-enabled',
+        15: 'http-enabled', 16: 'snmp-unsecure',
+        17: 'sysmon-enabled', 18: 'ext-nvm-update-enabled',
+        19: 'no-link', 20: 'hidiscovery-enabled',
+        21: 'ext-nvm-config-load-unsecure',
+        22: 'iec61850-mms-enabled',
+        23: 'https-certificate-warning', 24: 'modbus-tcp-enabled',
+        25: 'ethernet-ip-enabled', 26: 'profinet-io-enabled',
+        29: 'pml-disabled', 31: 'secure-boot-disabled',
+        32: 'dev-mode-enabled',
+    }
+
+    @staticmethod
+    def _format_timestamp(epoch_seconds):
+        if not epoch_seconds:
+            return ''
+        try:
+            from datetime import datetime, timezone
+            dt = datetime.fromtimestamp(epoch_seconds, tz=timezone.utc)
+            return dt.strftime('%Y-%m-%d %H:%M:%S')
+        except (ValueError, OSError, OverflowError):
+            return str(epoch_seconds)
+
+    def get_signal_contact(self):
+        return asyncio.run(self._get_signal_contact_async())
+
+    async def _get_signal_contact_async(self):
+        engine = SnmpEngine()
+        common_task = self._walk_columns({
+            'trap_en': OID_hm2SigConTrapEnable,
+            'trap_cause': OID_hm2SigConTrapCause,
+            'trap_cause_idx': OID_hm2SigConTrapCauseIndex,
+            'mode': OID_hm2SigConMode,
+            'oper_state': OID_hm2SigConOperState,
+            'oper_ts': OID_hm2SigConOperTimeStamp,
+            'manual': OID_hm2SigConManualActivate,
+            **{key: oid for oid, key in _SIGCON_SENSE_OIDS},
+        }, engine)
+        ps_task = self._walk(OID_hm2SigConSensePSState, engine)
+        intf_task = self._walk(OID_hm2SigConSenseIfLinkAlarm, engine)
+        status_task = self._walk_columns({
+            'ts': OID_hm2SigConStatusTimeStamp,
+            'cause': OID_hm2SigConStatusTrapCause,
+            'cause_idx': OID_hm2SigConStatusTrapCauseIdx,
+        }, engine)
+        ifmap_task = self._build_ifindex_map(engine)
+
+        common, ps_raw, intf_raw, status, ifmap = await asyncio.gather(
+            common_task, ps_task, intf_task, status_task, ifmap_task)
+
+        idx_to_name = {int(k): v for k, v in ifmap.items()}
+        result = {}
+        for suffix, cols in common.items():
+            cid = int(suffix.lstrip('.'))
+            monitoring = {}
+            for oid, key in _SIGCON_SENSE_OIDS:
+                val = cols.get(key)
+                if val is not None:
+                    monitoring[key] = _snmp_int(val) == 1
+
+            cause_val = _snmp_int(cols.get('trap_cause', 1))
+            ts = _snmp_int(cols.get('oper_ts', 0))
+            result[cid] = {
+                'mode': self._SIGCON_MODE.get(
+                    _snmp_int(cols.get('mode', 2)), 'monitor'),
+                'manual_state': 'open' if _snmp_int(
+                    cols.get('manual', 2)) == 1 else 'close',
+                'trap_enabled': _snmp_int(cols.get('trap_en', 2)) == 1,
+                'monitoring': monitoring,
+                'power_supply': {},
+                'link_alarm': {},
+                'status': {
+                    'oper_state': self._SIGCON_OPER.get(
+                        _snmp_int(cols.get('oper_state', 2)), 'close'),
+                    'last_change': self._format_timestamp(ts),
+                    'cause': self._SIGCON_TRAP_CAUSE.get(
+                        cause_val, str(cause_val)),
+                    'cause_index': _snmp_int(
+                        cols.get('trap_cause_idx', 0)),
+                    'events': [],
+                },
+            }
+
+        for suffix, val in ps_raw.items():
+            parts = suffix.lstrip('.').split('.')
+            if len(parts) == 2:
+                cid, psid = int(parts[0]), int(parts[1])
+                if cid in result:
+                    result[cid]['power_supply'][psid] = (
+                        _snmp_int(val) == 1)
+
+        for suffix, val in intf_raw.items():
+            parts = suffix.lstrip('.').split('.')
+            if len(parts) == 2:
+                cid, ifidx = int(parts[0]), int(parts[1])
+                if cid in result:
+                    port = idx_to_name.get(ifidx, '')
+                    if port and not port.startswith('cpu'):
+                        result[cid]['link_alarm'][port] = (
+                            _snmp_int(val) == 1)
+
+        for suffix, cols in status.items():
+            cause_val = _snmp_int(cols.get('cause', 1))
+            ts = _snmp_int(cols.get('ts', 0))
+            event = {
+                'cause': self._SIGCON_TRAP_CAUSE.get(
+                    cause_val, str(cause_val)),
+                'info': _snmp_int(cols.get('cause_idx', 0)),
+                'timestamp': self._format_timestamp(ts),
+            }
+            for cid in result:
+                result[cid]['status']['events'].append(event)
+                break
+
+        return result
+
+    def set_signal_contact(self, contact_id=1, mode=None,
+                           manual_state=None, trap_enabled=None,
+                           monitoring=None, power_supply=None,
+                           link_alarm=None):
+        return asyncio.run(self._set_signal_contact_async(
+            contact_id, mode, manual_state, trap_enabled,
+            monitoring, power_supply, link_alarm))
+
+    async def _set_signal_contact_async(self, contact_id, mode,
+                                         manual_state, trap_enabled,
+                                         monitoring, power_supply,
+                                         link_alarm):
+        cid = str(contact_id)
+        sets = []
+        if mode is not None:
+            if mode not in self._SIGCON_MODE_REV:
+                raise ValueError(f"Invalid mode '{mode}'")
+            sets.append((f"{OID_hm2SigConMode}.{cid}",
+                         Integer32(self._SIGCON_MODE_REV[mode])))
+        if manual_state is not None:
+            if manual_state not in self._SIGCON_MANUAL_REV:
+                raise ValueError(f"Invalid manual_state '{manual_state}'")
+            sets.append((f"{OID_hm2SigConManualActivate}.{cid}",
+                         Integer32(self._SIGCON_MANUAL_REV[manual_state])))
+        if trap_enabled is not None:
+            sets.append((f"{OID_hm2SigConTrapEnable}.{cid}",
+                         Integer32(1 if trap_enabled else 2)))
+        if monitoring:
+            sense_rev = {k: o for o, k in _SIGCON_SENSE_OIDS}
+            for key, enabled in monitoring.items():
+                oid = sense_rev.get(key)
+                if oid is None:
+                    raise ValueError(f"Unknown sense flag '{key}'")
+                sets.append((f"{oid}.{cid}",
+                             Integer32(1 if enabled else 2)))
+        if power_supply:
+            for psid, enabled in power_supply.items():
+                sets.append((
+                    f"{OID_hm2SigConSensePSState}.{cid}.{psid}",
+                    Integer32(1 if enabled else 2)))
+        if link_alarm:
+            engine = SnmpEngine()
+            ifmap = await self._build_ifindex_map(engine)
+            name_to_idx = {v: int(k) for k, v in ifmap.items()}
+            for port, enabled in link_alarm.items():
+                ifidx = name_to_idx.get(port)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{port}'")
+                sets.append((
+                    f"{OID_hm2SigConSenseIfLinkAlarm}.{cid}.{ifidx}",
+                    Integer32(1 if enabled else 2)))
+        if sets:
+            await self._set_oids(*sets)
+
+    # ------------------------------------------------------------------
+    # Device Monitor (HM2-DIAGNOSTIC-MIB / hm2DeviceMonitorGroup)
+    # ------------------------------------------------------------------
+
+    def get_device_monitor(self):
+        return asyncio.run(self._get_device_monitor_async())
+
+    async def _get_device_monitor_async(self):
+        engine = SnmpEngine()
+        # Walk the common table (indexed by hm2DevMonID, always 1)
+        common_task = self._walk_columns({
+            'trap_en': OID_hm2DevMonTrapEnable,
+            'trap_cause': OID_hm2DevMonTrapCause,
+            'trap_cause_idx': OID_hm2DevMonTrapCauseIndex,
+            'oper_state': OID_hm2DevMonOperState,
+            'oper_ts': OID_hm2DevMonOperTimeStamp,
+            **{key: oid for oid, key in _DEVMON_SENSE_OIDS},
+        }, engine)
+        ps_task = self._walk(OID_hm2DevMonSensePSState, engine)
+        intf_task = self._walk(OID_hm2DevMonSenseIfLinkAlarm, engine)
+        status_task = self._walk_columns({
+            'ts': OID_hm2DevMonStatusTimeStamp,
+            'cause': OID_hm2DevMonStatusTrapCause,
+            'cause_idx': OID_hm2DevMonStatusTrapCauseIdx,
+        }, engine)
+        ifmap_task = self._build_ifindex_map(engine)
+
+        common, ps_raw, intf_raw, status, ifmap = await asyncio.gather(
+            common_task, ps_task, intf_task, status_task, ifmap_task)
+
+        # Single row with index .1 (hm2DevMonID=1)
+        cols = common.get('.1', {})
+        idx_to_name = {int(k): v for k, v in ifmap.items()}
+        monitoring = {}
+        for oid, key in _DEVMON_SENSE_OIDS:
+            val = cols.get(key)
+            if val is not None:
+                monitoring[key] = _snmp_int(val) == 1
+
+        cause_val = _snmp_int(cols.get('trap_cause', 1))
+        ts = _snmp_int(cols.get('oper_ts', 0))
+        result = {
+            'trap_enabled': _snmp_int(
+                cols.get('trap_en', 2)) == 1,
+            'monitoring': monitoring,
+            'power_supply': {},
+            'link_alarm': {},
+            'status': {
+                'oper_state': 'error' if _snmp_int(
+                    cols.get('oper_state', 1)) == 2 else 'ok',
+                'last_change': self._format_timestamp(ts),
+                'cause': self._DEVMON_TRAP_CAUSE_MAP.get(
+                    cause_val, str(cause_val)),
+                'cause_index': _snmp_int(
+                    cols.get('trap_cause_idx', 0)),
+                'events': [],
+            },
+        }
+
+        for suffix, val in ps_raw.items():
+            parts = suffix.lstrip('.').split('.')
+            if len(parts) == 2:
+                psid = int(parts[1])
+                result['power_supply'][psid] = _snmp_int(val) == 1
+
+        for suffix, val in intf_raw.items():
+            parts = suffix.lstrip('.').split('.')
+            if len(parts) == 2:
+                ifidx = int(parts[1])
+                port = idx_to_name.get(ifidx, '')
+                if port and not port.startswith('cpu'):
+                    result['link_alarm'][port] = _snmp_int(val) == 1
+
+        for suffix, cols in status.items():
+            cause_val = _snmp_int(cols.get('cause', 1))
+            ts = _snmp_int(cols.get('ts', 0))
+            result['status']['events'].append({
+                'cause': self._DEVMON_TRAP_CAUSE_MAP.get(
+                    cause_val, str(cause_val)),
+                'info': _snmp_int(cols.get('cause_idx', 0)),
+                'timestamp': self._format_timestamp(ts),
+            })
+
+        return result
+
+    def set_device_monitor(self, trap_enabled=None, monitoring=None,
+                           power_supply=None, link_alarm=None):
+        return asyncio.run(self._set_device_monitor_async(
+            trap_enabled, monitoring, power_supply, link_alarm))
+
+    async def _set_device_monitor_async(self, trap_enabled, monitoring,
+                                         power_supply, link_alarm):
+        sets = []
+        if trap_enabled is not None:
+            sets.append((f"{OID_hm2DevMonTrapEnable}.1",
+                         Integer32(1 if trap_enabled else 2)))
+        if monitoring:
+            sense_rev = {k: o for o, k in _DEVMON_SENSE_OIDS}
+            for key, enabled in monitoring.items():
+                oid = sense_rev.get(key)
+                if oid is None:
+                    raise ValueError(f"Unknown sense flag '{key}'")
+                sets.append((f"{oid}.1",
+                             Integer32(1 if enabled else 2)))
+        if power_supply:
+            for psid, enabled in power_supply.items():
+                sets.append((
+                    f"{OID_hm2DevMonSensePSState}.1.{psid}",
+                    Integer32(1 if enabled else 2)))
+        if link_alarm:
+            engine = SnmpEngine()
+            ifmap = await self._build_ifindex_map(engine)
+            name_to_idx = {v: int(k) for k, v in ifmap.items()}
+            for port, enabled in link_alarm.items():
+                ifidx = name_to_idx.get(port)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{port}'")
+                sets.append((
+                    f"{OID_hm2DevMonSenseIfLinkAlarm}.1.{ifidx}",
+                    Integer32(1 if enabled else 2)))
+        if sets:
+            await self._set_oids(*sets)
+
+    # ------------------------------------------------------------------
+    # Device Security Status (HM2-DIAGNOSTIC-MIB / hm2DeviceSecurityGroup)
+    # ------------------------------------------------------------------
+
+    def get_devsec_status(self):
+        return asyncio.run(self._get_devsec_status_async())
+
+    async def _get_devsec_status_async(self):
+        engine = SnmpEngine()
+        # Walk the scalar config group (suffix .0 for each scalar)
+        config_task = self._walk_columns({
+            'trap_en': OID_hm2DevSecTrapEnable,
+            'trap_cause': OID_hm2DevSecTrapCause,
+            'trap_cause_idx': OID_hm2DevSecTrapCauseIndex,
+            'oper_state': OID_hm2DevSecOperState,
+            'oper_ts': OID_hm2DevSecOperTimeStamp,
+            **{key: oid for oid, key in _DEVSEC_SENSE_OIDS},
+        }, engine)
+        intf_task = self._walk(OID_hm2DevSecSenseIfNoLink, engine)
+        status_task = self._walk_columns({
+            'ts': OID_hm2DevSecStatusTimeStamp,
+            'cause': OID_hm2DevSecStatusTrapCause,
+            'cause_idx': OID_hm2DevSecStatusTrapCauseIdx,
+        }, engine)
+        ifmap_task = self._build_ifindex_map(engine)
+
+        config, intf_raw, status, ifmap = await asyncio.gather(
+            config_task, intf_task, status_task, ifmap_task)
+
+        # Scalar group — data under .0 suffix
+        cols = config.get('.0', {})
+        idx_to_name = {int(k): v for k, v in ifmap.items()}
+        monitoring = {}
+        for oid, key in _DEVSEC_SENSE_OIDS:
+            val = cols.get(key)
+            if val is not None:
+                monitoring[key] = _snmp_int(val) == 1
+
+        cause_val = _snmp_int(cols.get('trap_cause', 1))
+        ts = _snmp_int(cols.get('oper_ts', 0))
+        result = {
+            'trap_enabled': _snmp_int(
+                cols.get('trap_en', 2)) == 1,
+            'monitoring': monitoring,
+            'no_link': {},
+            'status': {
+                'oper_state': 'error' if _snmp_int(
+                    cols.get('oper_state', 1)) == 2 else 'ok',
+                'last_change': self._format_timestamp(ts),
+                'cause': self._DEVSEC_TRAP_CAUSE_MAP.get(
+                    cause_val, str(cause_val)),
+                'cause_index': _snmp_int(
+                    cols.get('trap_cause_idx', 0)),
+                'events': [],
+            },
+        }
+
+        for suffix, val in intf_raw.items():
+            ifidx = int(suffix.lstrip('.'))
+            port = idx_to_name.get(ifidx, '')
+            if port and not port.startswith('cpu'):
+                result['no_link'][port] = _snmp_int(val) == 1
+
+        for suffix, cols in status.items():
+            cause_val = _snmp_int(cols.get('cause', 1))
+            ts = _snmp_int(cols.get('ts', 0))
+            result['status']['events'].append({
+                'cause': self._DEVSEC_TRAP_CAUSE_MAP.get(
+                    cause_val, str(cause_val)),
+                'info': _snmp_int(cols.get('cause_idx', 0)),
+                'timestamp': self._format_timestamp(ts),
+            })
+
+        return result
+
+    def set_devsec_status(self, trap_enabled=None, monitoring=None,
+                          no_link=None):
+        return asyncio.run(self._set_devsec_status_async(
+            trap_enabled, monitoring, no_link))
+
+    async def _set_devsec_status_async(self, trap_enabled, monitoring,
+                                        no_link):
+        sets = []
+        if trap_enabled is not None:
+            sets.append((f"{OID_hm2DevSecTrapEnable}.0",
+                         Integer32(1 if trap_enabled else 2)))
+        if monitoring:
+            sense_rev = {k: o for o, k in _DEVSEC_SENSE_OIDS}
+            for key, enabled in monitoring.items():
+                oid = sense_rev.get(key)
+                if oid is None:
+                    raise ValueError(f"Unknown sense flag '{key}'")
+                sets.append((f"{oid}.0",
+                             Integer32(1 if enabled else 2)))
+        if no_link:
+            engine = SnmpEngine()
+            ifmap = await self._build_ifindex_map(engine)
+            name_to_idx = {v: int(k) for k, v in ifmap.items()}
+            for port, enabled in no_link.items():
+                ifidx = name_to_idx.get(port)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{port}'")
+                sets.append((
+                    f"{OID_hm2DevSecSenseIfNoLink}.{ifidx}",
+                    Integer32(1 if enabled else 2)))
+        if sets:
+            await self._set_oids(*sets)
+
+    # ------------------------------------------------------------------
+    # Banner (HM2-MGMTACCESS-MIB)
+    # ------------------------------------------------------------------
+
+    def get_banner(self):
+        return asyncio.run(self._get_banner_async())
+
+    async def _get_banner_async(self):
+        scalars = await self._get_scalar(
+            OID_hm2PreLoginBannerAdminStatus,
+            OID_hm2PreLoginBannerText,
+            OID_hm2CliLoginBannerAdminStatus,
+            OID_hm2CliLoginBannerText)
+
+        pre_text = scalars.get(OID_hm2PreLoginBannerText, '')
+        cli_text = scalars.get(OID_hm2CliLoginBannerText, '')
+
+        return {
+            'pre_login': {
+                'enabled': _snmp_int(scalars.get(
+                    OID_hm2PreLoginBannerAdminStatus, 2)) == 1,
+                'text': _snmp_str(pre_text),
+            },
+            'cli_login': {
+                'enabled': _snmp_int(scalars.get(
+                    OID_hm2CliLoginBannerAdminStatus, 2)) == 1,
+                'text': _snmp_str(cli_text),
+            },
+        }
+
+    def set_banner(self, pre_login_enabled=None, pre_login_text=None,
+                   cli_login_enabled=None, cli_login_text=None):
+        return asyncio.run(self._set_banner_async(
+            pre_login_enabled, pre_login_text,
+            cli_login_enabled, cli_login_text))
+
+    async def _set_banner_async(self, pre_login_enabled, pre_login_text,
+                                 cli_login_enabled, cli_login_text):
+        sets = []
+        if pre_login_enabled is not None:
+            sets.append((f"{OID_hm2PreLoginBannerAdminStatus}.0",
+                         Integer32(1 if pre_login_enabled else 2)))
+        if pre_login_text is not None:
+            sets.append((f"{OID_hm2PreLoginBannerText}.0",
+                         OctetString(pre_login_text.encode())))
+        if cli_login_enabled is not None:
+            sets.append((f"{OID_hm2CliLoginBannerAdminStatus}.0",
+                         Integer32(1 if cli_login_enabled else 2)))
+        if cli_login_text is not None:
+            sets.append((f"{OID_hm2CliLoginBannerText}.0",
+                         OctetString(cli_login_text.encode())))
+        if sets:
+            await self._set_oids(*sets)
+
+    # ------------------------------------------------------------------
+    # Session Config
+    # ------------------------------------------------------------------
+
+    def get_session_config(self):
+        return asyncio.run(self._get_session_config_async())
+
+    async def _get_session_config_async(self):
+        scalars = await self._get_scalar(
+            OID_hm2SshSessionTimeout,
+            OID_hm2SshMaxSessionsCount,
+            OID_hm2SshSessionsCount,
+            OID_hm2SshOutboundSessionTimeout,
+            OID_hm2SshOutboundMaxSessionsCount,
+            OID_hm2SshOutboundSessionsCount,
+            OID_hm2TelnetServerSessionsTimeOut,
+            OID_hm2TelnetServerMaxSessions,
+            OID_hm2TelnetServerSessionsCount,
+            OID_hm2WebIntfTimeOut,
+            OID_hm2CliLoginTimeoutSerial,
+            OID_hm2NetconfSessionTimeout,
+            OID_hm2NetconfMaxSessions,
+            OID_hm2NetconfSessionsCount,
+            OID_hm2MgmtAccessPhysicalIntfSerialAdminStatus,
+            OID_hm2MgmtAccessPhysicalIntfSerialOperStatus,
+            OID_hm2MgmtAccessPhysicalIntfEnvmAdminStatus,
+            OID_hm2MgmtAccessPhysicalIntfEnvmOperStatus,
+        )
+        nc_sec = _snmp_int(scalars.get(
+            OID_hm2NetconfSessionTimeout, 0))
+        nc_min = nc_sec // 60 if nc_sec else 0
+        return {
+            'ssh': {
+                'timeout': _snmp_int(scalars.get(
+                    OID_hm2SshSessionTimeout, 0)),
+                'max_sessions': _snmp_int(scalars.get(
+                    OID_hm2SshMaxSessionsCount, 0)),
+                'active_sessions': _snmp_int(scalars.get(
+                    OID_hm2SshSessionsCount, 0)),
+            },
+            'ssh_outbound': {
+                'timeout': _snmp_int(scalars.get(
+                    OID_hm2SshOutboundSessionTimeout, 0)),
+                'max_sessions': _snmp_int(scalars.get(
+                    OID_hm2SshOutboundMaxSessionsCount, 0)),
+                'active_sessions': _snmp_int(scalars.get(
+                    OID_hm2SshOutboundSessionsCount, 0)),
+            },
+            'telnet': {
+                'timeout': _snmp_int(scalars.get(
+                    OID_hm2TelnetServerSessionsTimeOut, 0)),
+                'max_sessions': _snmp_int(scalars.get(
+                    OID_hm2TelnetServerMaxSessions, 0)),
+                'active_sessions': _snmp_int(scalars.get(
+                    OID_hm2TelnetServerSessionsCount, 0)),
+            },
+            'web': {
+                'timeout': _snmp_int(scalars.get(
+                    OID_hm2WebIntfTimeOut, 0)),
+            },
+            'serial': {
+                'timeout': _snmp_int(scalars.get(
+                    OID_hm2CliLoginTimeoutSerial, 0)),
+                'enabled': _snmp_int(scalars.get(
+                    OID_hm2MgmtAccessPhysicalIntfSerialAdminStatus,
+                    1), default=1) == 1,
+                'oper_status': _snmp_int(scalars.get(
+                    OID_hm2MgmtAccessPhysicalIntfSerialOperStatus,
+                    1), default=1) == 1,
+            },
+            'envm': {
+                'enabled': _snmp_int(scalars.get(
+                    OID_hm2MgmtAccessPhysicalIntfEnvmAdminStatus,
+                    1), default=1) == 1,
+                'oper_status': _snmp_int(scalars.get(
+                    OID_hm2MgmtAccessPhysicalIntfEnvmOperStatus,
+                    1), default=1) == 1,
+            },
+            'netconf': {
+                'timeout': nc_min,
+                'max_sessions': _snmp_int(scalars.get(
+                    OID_hm2NetconfMaxSessions, 0)),
+                'active_sessions': _snmp_int(scalars.get(
+                    OID_hm2NetconfSessionsCount, 0)),
+            },
+        }
+
+    def set_session_config(self, ssh_timeout=None, ssh_max_sessions=None,
+                           ssh_outbound_timeout=None,
+                           ssh_outbound_max_sessions=None,
+                           telnet_timeout=None, telnet_max_sessions=None,
+                           web_timeout=None, serial_timeout=None,
+                           netconf_timeout=None,
+                           netconf_max_sessions=None,
+                           serial_enabled=None, envm_enabled=None):
+        return asyncio.run(self._set_session_config_async(
+            ssh_timeout, ssh_max_sessions,
+            ssh_outbound_timeout, ssh_outbound_max_sessions,
+            telnet_timeout, telnet_max_sessions,
+            web_timeout, serial_timeout,
+            netconf_timeout, netconf_max_sessions,
+            serial_enabled, envm_enabled))
+
+    async def _set_session_config_async(
+            self, ssh_timeout, ssh_max_sessions,
+            ssh_outbound_timeout, ssh_outbound_max_sessions,
+            telnet_timeout, telnet_max_sessions,
+            web_timeout, serial_timeout,
+            netconf_timeout, netconf_max_sessions,
+            serial_enabled=None, envm_enabled=None):
+        sets = []
+        if ssh_timeout is not None:
+            sets.append((f"{OID_hm2SshSessionTimeout}.0",
+                         Integer32(ssh_timeout)))
+        if ssh_max_sessions is not None:
+            sets.append((f"{OID_hm2SshMaxSessionsCount}.0",
+                         Integer32(ssh_max_sessions)))
+        if ssh_outbound_timeout is not None:
+            sets.append((f"{OID_hm2SshOutboundSessionTimeout}.0",
+                         Integer32(ssh_outbound_timeout)))
+        if ssh_outbound_max_sessions is not None:
+            sets.append((f"{OID_hm2SshOutboundMaxSessionsCount}.0",
+                         Integer32(ssh_outbound_max_sessions)))
+        if telnet_timeout is not None:
+            sets.append((f"{OID_hm2TelnetServerSessionsTimeOut}.0",
+                         Integer32(telnet_timeout)))
+        if telnet_max_sessions is not None:
+            sets.append((f"{OID_hm2TelnetServerMaxSessions}.0",
+                         Integer32(telnet_max_sessions)))
+        if web_timeout is not None:
+            sets.append((f"{OID_hm2WebIntfTimeOut}.0",
+                         Integer32(web_timeout)))
+        if serial_timeout is not None:
+            sets.append((f"{OID_hm2CliLoginTimeoutSerial}.0",
+                         Integer32(serial_timeout)))
+        if netconf_timeout is not None:
+            sets.append((f"{OID_hm2NetconfSessionTimeout}.0",
+                         Integer32(netconf_timeout * 60)))
+        if netconf_max_sessions is not None:
+            sets.append((f"{OID_hm2NetconfMaxSessions}.0",
+                         Integer32(netconf_max_sessions)))
+        if serial_enabled is not None:
+            sets.append((
+                f"{OID_hm2MgmtAccessPhysicalIntfSerialAdminStatus}.0",
+                Integer32(1 if serial_enabled else 2)))
+        if envm_enabled is not None:
+            sets.append((
+                f"{OID_hm2MgmtAccessPhysicalIntfEnvmAdminStatus}.0",
+                Integer32(1 if envm_enabled else 2)))
+        if sets:
+            await self._set_oids(*sets)
+
+    # ------------------------------------------------------------------
+    # IP Restrict
+    # ------------------------------------------------------------------
+
+    def get_ip_restrict(self):
+        return asyncio.run(self._get_ip_restrict_async())
+
+    async def _get_ip_restrict_async(self):
+        scalars = await self._get_scalar(
+            OID_hm2RmaOperation, OID_hm2RmaLoggingGlobal)
+
+        engine = SnmpEngine()
+        rows = await self._walk_columns({
+            'row_status': OID_hm2RmaRowStatus,
+            'ip_type': OID_hm2RmaIpAddrType,
+            'ip': OID_hm2RmaIpAddr,
+            'prefix': OID_hm2RmaPrefixLength,
+            'http': OID_hm2RmaSrvHttp,
+            'https': OID_hm2RmaSrvHttps,
+            'snmp': OID_hm2RmaSrvSnmp,
+            'telnet': OID_hm2RmaSrvTelnet,
+            'ssh': OID_hm2RmaSrvSsh,
+            'iec61850': OID_hm2RmaSrvIEC61850,
+            'modbus': OID_hm2RmaSrvModbusTcp,
+            'ethernet_ip': OID_hm2RmaSrvEthernetIP,
+            'profinet': OID_hm2RmaSrvProfinetIO,
+            'interface': OID_hm2RmaInterface,
+            'logging': OID_hm2RmaLogging,
+        }, engine)
+
+        rules = []
+        for suffix, cols in rows.items():
+            status = _snmp_int(cols.get('row_status', 0))
+            if status not in (1, 3):
+                continue
+            idx = int(suffix)
+            ip_raw = cols.get('ip', b'')
+            ip = _snmp_ip(ip_raw) if ip_raw else '0.0.0.0'
+            iface = str(cols.get('interface', ''))
+            if iface in ('0', ''):
+                iface = ''
+            rules.append({
+                'index': idx,
+                'ip': ip,
+                'prefix_length': _snmp_int(
+                    cols.get('prefix', 0)),
+                'services': {
+                    'http': _snmp_int(
+                        cols.get('http', 1)) == 1,
+                    'https': _snmp_int(
+                        cols.get('https', 1)) == 1,
+                    'snmp': _snmp_int(
+                        cols.get('snmp', 1)) == 1,
+                    'telnet': _snmp_int(
+                        cols.get('telnet', 1)) == 1,
+                    'ssh': _snmp_int(
+                        cols.get('ssh', 1)) == 1,
+                    'iec61850': _snmp_int(
+                        cols.get('iec61850', 1)) == 1,
+                    'modbus': _snmp_int(
+                        cols.get('modbus', 1)) == 1,
+                    'ethernet_ip': _snmp_int(
+                        cols.get('ethernet_ip', 1)) == 1,
+                    'profinet': _snmp_int(
+                        cols.get('profinet', 1)) == 1,
+                },
+                'interface': iface,
+                'per_rule_logging': _snmp_int(
+                    cols.get('logging', 2)) == 1,
+                'log_counter': 0,
+            })
+
+        return {
+            'enabled': _snmp_int(scalars.get(
+                OID_hm2RmaOperation, 2)) == 1,
+            'logging': _snmp_int(scalars.get(
+                OID_hm2RmaLoggingGlobal, 2)) == 1,
+            'rules': rules,
+        }
+
+    def set_ip_restrict(self, enabled=None, logging=None):
+        return asyncio.run(self._set_ip_restrict_async(
+            enabled, logging))
+
+    async def _set_ip_restrict_async(self, enabled, logging):
+        sets = []
+        if enabled is not None:
+            sets.append((f"{OID_hm2RmaOperation}.0",
+                         Integer32(1 if enabled else 2)))
+        if logging is not None:
+            sets.append((f"{OID_hm2RmaLoggingGlobal}.0",
+                         Integer32(1 if logging else 2)))
+        if sets:
+            await self._set_oids(*sets)
+
+    def add_ip_restrict_rule(self, index, ip='0.0.0.0',
+                             prefix_length=0,
+                             http=True, https=True, snmp=True,
+                             telnet=True, ssh=True, iec61850=True,
+                             modbus=True, ethernet_ip=True,
+                             profinet=True,
+                             interface='',
+                             per_rule_logging=False):
+        return asyncio.run(self._add_ip_restrict_rule_async(
+            index, ip, prefix_length,
+            http, https, snmp, telnet, ssh, iec61850,
+            modbus, ethernet_ip, profinet,
+            interface, per_rule_logging))
+
+    async def _add_ip_restrict_rule_async(
+            self, index, ip, prefix_length,
+            http, https, snmp, telnet, ssh, iec61850,
+            modbus, ethernet_ip, profinet,
+            interface, per_rule_logging):
+        ip_bytes = bytes(int(o) for o in ip.split('.'))
+        sets = [
+            (f"{OID_hm2RmaIpAddrType}.{index}",
+             Integer32(1)),  # ipv4
+            (f"{OID_hm2RmaIpAddr}.{index}",
+             OctetString(ip_bytes)),
+            (f"{OID_hm2RmaPrefixLength}.{index}",
+             Unsigned32(prefix_length)),  # Gauge32
+            (f"{OID_hm2RmaSrvHttp}.{index}",
+             Integer32(1 if http else 2)),
+            (f"{OID_hm2RmaSrvHttps}.{index}",
+             Integer32(1 if https else 2)),
+            (f"{OID_hm2RmaSrvSnmp}.{index}",
+             Integer32(1 if snmp else 2)),
+            (f"{OID_hm2RmaSrvTelnet}.{index}",
+             Integer32(1 if telnet else 2)),
+            (f"{OID_hm2RmaSrvSsh}.{index}",
+             Integer32(1 if ssh else 2)),
+            (f"{OID_hm2RmaSrvIEC61850}.{index}",
+             Integer32(1 if iec61850 else 2)),
+            (f"{OID_hm2RmaSrvModbusTcp}.{index}",
+             Integer32(1 if modbus else 2)),
+            (f"{OID_hm2RmaSrvEthernetIP}.{index}",
+             Integer32(1 if ethernet_ip else 2)),
+            (f"{OID_hm2RmaSrvProfinetIO}.{index}",
+             Integer32(1 if profinet else 2)),
+            (f"{OID_hm2RmaLogging}.{index}",
+             Integer32(1 if per_rule_logging else 2)),
+            (f"{OID_hm2RmaRowStatus}.{index}",
+             Integer32(4)),  # createAndGo — MUST be last
+        ]
+        await self._set_oids(*sets)
+
+    def delete_ip_restrict_rule(self, index):
+        return asyncio.run(self._set_oids(
+            (f"{OID_hm2RmaRowStatus}.{index}",
+             Integer32(6)),  # destroy
+        ))
+
+    # ------------------------------------------------------------------
+    # DNS Client
+    # ------------------------------------------------------------------
+
+    _DNS_CONFIG_SOURCE = {1: 'user', 2: 'mgmt-dhcp', 3: 'provider'}
+    _DNS_CONFIG_SOURCE_REV = {v: k for k, v in _DNS_CONFIG_SOURCE.items()}
+
+    def get_dns(self):
+        return asyncio.run(self._get_dns_async())
+
+    async def _get_dns_async(self):
+        engine = SnmpEngine()
+
+        # Scalars
+        scalars = await self._get_scalar(
+            OID_hm2DnsClientAdminState,
+            OID_hm2DnsClientConfigSource,
+            OID_hm2DnsClientDefaultDomainName,
+            OID_hm2DnsClientRequestTimeout,
+            OID_hm2DnsClientRequestRetransmits,
+            OID_hm2DnsClientCacheAdminState,
+        )
+
+        # Server config table (user-configured, up to 4)
+        cfg_rows = await self._walk_columns({
+            'addr_type': OID_hm2DnsClientServerAddressType,
+            'addr': OID_hm2DnsClientServerAddress,
+            'row_status': OID_hm2DnsClientServerRowStatus,
+        }, engine)
+
+        # Server diag table (active — may include DHCP-provided)
+        diag_rows = await self._walk_columns({
+            'addr_type': OID_hm2DnsClientServerDiagAddressType,
+            'addr': OID_hm2DnsClientServerDiagAddress,
+        }, engine)
+
+        servers = []
+        for suffix, cols in cfg_rows.items():
+            status = _snmp_int(cols.get('row_status', 0))
+            if status not in (1, 3):  # active or notReady
+                continue
+            addr = _snmp_ip(cols.get('addr', b''))
+            if addr and addr != '0.0.0.0':
+                servers.append(addr)
+
+        active_servers = []
+        for suffix, cols in diag_rows.items():
+            addr = _snmp_ip(cols.get('addr', b''))
+            if addr and addr != '0.0.0.0':
+                active_servers.append(addr)
+
+        domain_raw = scalars.get(OID_hm2DnsClientDefaultDomainName, '')
+        domain = _snmp_str(domain_raw).strip() if domain_raw else ''
+
+        return {
+            'enabled': _snmp_int(scalars.get(
+                OID_hm2DnsClientAdminState, 2)) == 1,
+            'config_source': self._DNS_CONFIG_SOURCE.get(
+                _snmp_int(scalars.get(
+                    OID_hm2DnsClientConfigSource, 2)), 'mgmt-dhcp'),
+            'domain_name': domain,
+            'timeout': _snmp_int(scalars.get(
+                OID_hm2DnsClientRequestTimeout, 3)),
+            'retransmits': _snmp_int(scalars.get(
+                OID_hm2DnsClientRequestRetransmits, 2)),
+            'cache_enabled': _snmp_int(scalars.get(
+                OID_hm2DnsClientCacheAdminState, 2)) == 1,
+            'servers': servers,
+            'active_servers': active_servers,
+        }
+
+    def set_dns(self, enabled=None, config_source=None, domain_name=None,
+                timeout=None, retransmits=None, cache_enabled=None):
+        sets = []
+        if enabled is not None:
+            sets.append((OID_hm2DnsClientAdminState + '.0',
+                         Integer32(1 if enabled else 2)))
+        if config_source is not None:
+            rev = self._DNS_CONFIG_SOURCE_REV.get(config_source)
+            if rev is None:
+                raise ValueError(
+                    f"config_source must be one of "
+                    f"{list(self._DNS_CONFIG_SOURCE.values())}, "
+                    f"got '{config_source}'")
+            sets.append((OID_hm2DnsClientConfigSource + '.0',
+                         Integer32(rev)))
+        if domain_name is not None:
+            sets.append((OID_hm2DnsClientDefaultDomainName + '.0',
+                         OctetString(domain_name.encode())))
+        if timeout is not None:
+            sets.append((OID_hm2DnsClientRequestTimeout + '.0',
+                         Integer32(int(timeout))))
+        if retransmits is not None:
+            sets.append((OID_hm2DnsClientRequestRetransmits + '.0',
+                         Integer32(int(retransmits))))
+        if cache_enabled is not None:
+            sets.append((OID_hm2DnsClientCacheAdminState + '.0',
+                         Integer32(1 if cache_enabled else 2)))
+        if sets:
+            asyncio.run(self._set_oids(*sets))
+
+    def add_dns_server(self, address):
+        return asyncio.run(self._add_dns_server_async(address))
+
+    async def _add_dns_server_async(self, address):
+        engine = SnmpEngine()
+        # Find used indices
+        cfg_rows = await self._walk_columns({
+            'row_status': OID_hm2DnsClientServerRowStatus,
+        }, engine)
+        used = set()
+        for suffix, cols in cfg_rows.items():
+            status = _snmp_int(cols.get('row_status', 0))
+            if status not in (0, 6):  # not absent/destroyed
+                used.add(int(suffix))
+        free_idx = None
+        for i in range(1, 5):
+            if i not in used:
+                free_idx = i
+                break
+        if free_idx is None:
+            raise ValueError("All 4 DNS server slots are in use")
+        ip_bytes = bytes(int(o) for o in address.split('.'))
+        await self._set_oids(
+            (f"{OID_hm2DnsClientServerAddressType}.{free_idx}",
+             Integer32(1)),  # ipv4
+            (f"{OID_hm2DnsClientServerAddress}.{free_idx}",
+             OctetString(ip_bytes)),
+            (f"{OID_hm2DnsClientServerRowStatus}.{free_idx}",
+             Integer32(4)),  # createAndGo — MUST be last
+        )
+
+    def delete_dns_server(self, address):
+        return asyncio.run(self._delete_dns_server_async(address))
+
+    async def _delete_dns_server_async(self, address):
+        engine = SnmpEngine()
+        cfg_rows = await self._walk_columns({
+            'addr': OID_hm2DnsClientServerAddress,
+            'row_status': OID_hm2DnsClientServerRowStatus,
+        }, engine)
+        target_idx = None
+        for suffix, cols in cfg_rows.items():
+            status = _snmp_int(cols.get('row_status', 0))
+            if status not in (1, 3):
+                continue
+            addr = _snmp_ip(cols.get('addr', b''))
+            if addr == address:
+                target_idx = int(suffix)
+                break
+        if target_idx is None:
+            raise ValueError(f"DNS server '{address}' not found")
+        await self._set_oids(
+            (f"{OID_hm2DnsClientServerRowStatus}.{target_idx}",
+             Integer32(6)),  # destroy
+        )
+
+    # ------------------------------------------------------------------
+    # PoE (Power over Ethernet)
+    # ------------------------------------------------------------------
+
+    _POE_STATUS = {
+        1: 'disabled', 2: 'searching', 3: 'delivering',
+        4: 'fault', 5: 'test', 6: 'other-fault',
+    }
+    _POE_PRIORITY = {1: 'critical', 2: 'high', 3: 'low'}
+    _POE_PRIORITY_REV = {'critical': 1, 'high': 2, 'low': 3}
+    _POE_CLASS = {
+        1: 'class0', 2: 'class1', 3: 'class2', 4: 'class3',
+        5: 'class4', 6: 'class5', 7: 'class6', 8: 'class7',
+        9: 'class8',
+    }
+    _POE_SOURCE = {0: 'internal', 1: 'external'}
+
+    def get_poe(self):
+        return asyncio.run(self._get_poe_async())
+
+    async def _get_poe_async(self):
+        engine = SnmpEngine()
+
+        # Scalars
+        scalars = await self._get_scalar(
+            OID_hm2PoeMgmtAdminStatus,
+            OID_hm2PoeMgmtReservedPower,
+            OID_hm2PoeMgmtDeliveredCurrent,
+        )
+
+        # Port table
+        port_rows = await self._walk_columns({
+            'admin': OID_hm2PoeMgmtPortAdminEnable,
+            'consumption': OID_hm2PoeMgmtPortConsumptionPower,
+            'status': OID_hm2PoeMgmtPortDetectionStatus,
+            'priority': OID_hm2PoeMgmtPortPowerPriority,
+            'classification': OID_hm2PoeMgmtPortPowerClassification,
+            'name': OID_hm2PoeMgmtPortName,
+            'class_valid': OID_hm2PoeMgmtPortClassValid,
+            'fast_startup': OID_hm2PoeMgmtPortFastStartup,
+            'power_limit': OID_hm2PoeMgmtPortPowerLimit,
+        }, engine)
+
+        # Module table
+        mod_rows = await self._walk_columns({
+            'unit': OID_hm2PoeMgmtModuleUnitIndex,
+            'slot': OID_hm2PoeMgmtModuleSlotIndex,
+            'power': OID_hm2PoeMgmtModulePower,
+            'max_power': OID_hm2PoeMgmtModuleMaximumPower,
+            'reserved': OID_hm2PoeMgmtModuleReservedPower,
+            'delivered': OID_hm2PoeMgmtModuleDeliveredPower,
+            'source': OID_hm2PoeMgmtModulePowerSource,
+            'threshold': OID_hm2PoeMgmtModuleUsageThreshold,
+            'notif': OID_hm2PoeMgmtModuleNotifCtlEnable,
+        }, engine)
+
+        # Resolve port names via ifIndex
+        ifmap = await self._build_ifindex_map(engine)
+
+        # --- modules ---
+        modules = {}
+        for suffix, cols in mod_rows.items():
+            unit = _snmp_int(cols.get('unit', 1))
+            slot = _snmp_int(cols.get('slot', 1))
+            key = f"{unit}/{slot}"
+            modules[key] = {
+                'budget_w': _snmp_int(cols.get('power', 0)),
+                'max_w': _snmp_int(cols.get('max_power', 0)),
+                'reserved_w': _snmp_int(cols.get('reserved', 0)),
+                'delivered_w': _snmp_int(cols.get('delivered', 0)),
+                'source': self._POE_SOURCE.get(
+                    _snmp_int(cols.get('source', 0)), 'internal'),
+                'threshold_pct': _snmp_int(cols.get('threshold', 90)),
+                'notifications': _snmp_int(cols.get('notif', 1)) == 1,
+            }
+
+        # --- ports ---
+        ports = {}
+        for suffix, cols in port_rows.items():
+            name = ifmap.get(suffix, '')
+            if not name or name.startswith('cpu') or name.startswith('vlan'):
+                continue
+            status_code = _snmp_int(cols.get('status', 1))
+            pri_code = _snmp_int(cols.get('priority', 3))
+            class_code = _snmp_int(cols.get('classification', 1))
+            class_valid = _snmp_int(cols.get('class_valid', 0)) == 1
+            name_raw = cols.get('name', '')
+            ports[name] = {
+                'enabled': _snmp_int(cols.get('admin', 2)) == 1,
+                'status': self._POE_STATUS.get(status_code, 'disabled'),
+                'priority': self._POE_PRIORITY.get(pri_code, 'low'),
+                'classification': (
+                    self._POE_CLASS.get(class_code)
+                    if class_valid else None),
+                'consumption_mw': _snmp_int(cols.get('consumption', 0)),
+                'power_limit_mw': _snmp_int(cols.get('power_limit', 0)),
+                'name': _snmp_str(name_raw).strip() if name_raw else '',
+                'fast_startup': _snmp_int(
+                    cols.get('fast_startup', 2)) == 1,
+            }
+
+        return {
+            'enabled': _snmp_int(scalars.get(
+                OID_hm2PoeMgmtAdminStatus, 2)) == 1,
+            'power_w': _snmp_int(scalars.get(
+                OID_hm2PoeMgmtReservedPower, 0)),
+            'delivered_current_ma': _snmp_int(scalars.get(
+                OID_hm2PoeMgmtDeliveredCurrent, 0)),
+            'modules': modules,
+            'ports': ports,
+        }
+
+    def set_poe(self, interface=None, enabled=None, priority=None,
+                power_limit_mw=None, name=None, fast_startup=None):
+        sets = []
+        if interface is not None:
+            interfaces = ([interface] if isinstance(interface, str)
+                          else list(interface))
+            ifmap = asyncio.run(self._build_ifindex_map(SnmpEngine()))
+            name_to_idx = {n: idx for idx, n in ifmap.items()}
+
+            for iface in interfaces:
+                ifidx = name_to_idx.get(iface)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                if enabled is not None:
+                    sets.append((
+                        f"{OID_hm2PoeMgmtPortAdminEnable}.{ifidx}",
+                        Integer32(1 if enabled else 2)))
+                if priority is not None:
+                    val = self._POE_PRIORITY_REV.get(priority)
+                    if val is None:
+                        raise ValueError(
+                            f"Invalid priority '{priority}': "
+                            f"use 'critical', 'high', or 'low'")
+                    sets.append((
+                        f"{OID_hm2PoeMgmtPortPowerPriority}.{ifidx}",
+                        Integer32(val)))
+                if power_limit_mw is not None:
+                    sets.append((
+                        f"{OID_hm2PoeMgmtPortPowerLimit}.{ifidx}",
+                        Integer32(int(power_limit_mw))))
+                if name is not None:
+                    sets.append((
+                        f"{OID_hm2PoeMgmtPortName}.{ifidx}",
+                        OctetString(name.encode())))
+                if fast_startup is not None:
+                    sets.append((
+                        f"{OID_hm2PoeMgmtPortFastStartup}.{ifidx}",
+                        Integer32(1 if fast_startup else 2)))
+        else:
+            if enabled is not None:
+                sets.append((OID_hm2PoeMgmtAdminStatus + '.0',
+                             Integer32(1 if enabled else 2)))
+
+        if sets:
+            asyncio.run(self._set_oids(*sets))
+
+    # ------------------------------------------------------------------
+    # SNMP Config Extensions
+    # ------------------------------------------------------------------
+
+    _SNMP_AUTH_TYPE = {0: '', 1: 'md5', 2: 'sha'}
+    _SNMP_ENC_TYPE = {0: 'none', 1: 'des', 2: 'aes128', 3: 'aes256'}
+    _SNMP_SEC_MODEL = {1: 'v1', 2: 'v2c', 3: 'v3'}
+    _SNMP_SEC_LEVEL = {1: 'noauth', 2: 'auth', 3: 'authpriv'}
+
+    # ------------------------------------------------------------------
+    # Remote Authentication
+    # ------------------------------------------------------------------
+
+    def get_remote_auth(self):
+        return asyncio.run(self._get_remote_auth_async())
+
+    async def _get_remote_auth_async(self):
+        # LDAP global admin state (scalar)
+        ldap_scalars = await self._get_scalar(
+            OID_hm2LdapClientAdminState)
+        ldap_enabled = _snmp_int(ldap_scalars.get(
+            OID_hm2LdapClientAdminState, 2)) == 1
+
+        # RADIUS server table — walk RowStatus column
+        radius_rows = await self._walk_columns({
+            'row_status': OID_hm2AgentRadiusServerRowStatus,
+        })
+        radius_enabled = any(
+            _snmp_int(row.get('row_status', 0)) == 1
+            for row in radius_rows.values())
+
+        # TACACS+ server table — walk RowStatus column
+        tacacs_rows = await self._walk_columns({
+            'row_status': OID_hm2AgentTacacsServerStatus,
+        })
+        tacacs_enabled = any(
+            _snmp_int(row.get('row_status', 0)) == 1
+            for row in tacacs_rows.values())
+
+        return {
+            'radius': {'enabled': radius_enabled},
+            'tacacs': {'enabled': tacacs_enabled},
+            'ldap': {'enabled': ldap_enabled},
+        }
+
+    # ------------------------------------------------------------------
+    # User Management
+    # ------------------------------------------------------------------
+
+    _ROLE_MAP = {
+        0: 'unauthorized', 1: 'guest', 2: 'auditor',
+        5: 'custom1', 6: 'custom2', 7: 'custom3',
+        13: 'operator', 15: 'administrator',
+    }
+    _ROLE_REV = {v: k for k, v in _ROLE_MAP.items()}
+
+    _AUTH_MAP = {1: 'md5', 2: 'sha'}
+    _ENC_MAP = {0: 'none', 1: 'des', 2: 'aes128', 3: 'aes256'}
+    _AUTH_REV = {v: k for k, v in _AUTH_MAP.items()}
+    _ENC_REV = {v: k for k, v in _ENC_MAP.items()}
+
+    @staticmethod
+    def _decode_implied_string(suffix):
+        """Decode IMPLIED string SNMP index suffix to a string.
+
+        IMPLIED string index: OID suffix is the raw ASCII byte values
+        of the string (no length prefix).
+        e.g. '.97.100.109.105.110' -> 'admin'
+        """
+        parts = suffix.lstrip('.').split('.')
+        return ''.join(chr(int(c)) for c in parts)
+
+    @staticmethod
+    def _encode_implied_string(name):
+        """Encode a string to IMPLIED string OID suffix.
+
+        e.g. 'admin' -> '.97.100.109.105.110'
+        """
+        return '.' + '.'.join(str(ord(c)) for c in name)
+
+    def get_users(self):
+        return asyncio.run(self._get_users_async())
+
+    async def _get_users_async(self):
+        engine = SnmpEngine()
+        rows = await self._walk_columns({
+            'role': OID_hm2UserAccessRole,
+            'locked': OID_hm2UserLockoutStatus,
+            'policy_check': OID_hm2UserPwdPolicyChk,
+            'snmp_auth': OID_hm2UserSnmpAuthType,
+            'snmp_enc': OID_hm2UserSnmpEncType,
+            'row_status': OID_hm2UserStatus,
+        }, engine=engine)
+
+        users = []
+        for suffix, data in rows.items():
+            name = self._decode_implied_string(suffix)
+            role_val = _snmp_int(data.get('role', 1))
+            auth_val = _snmp_int(data.get('snmp_auth', 1))
+            enc_val = _snmp_int(data.get('snmp_enc', 1))
+            users.append({
+                'name': name,
+                'role': self._ROLE_MAP.get(role_val,
+                                           f'unknown({role_val})'),
+                'locked': _snmp_int(data.get('locked', 2)) == 1,
+                'policy_check': _snmp_int(
+                    data.get('policy_check', 2)) == 1,
+                'snmp_auth': self._AUTH_MAP.get(auth_val, 'md5'),
+                'snmp_enc': self._ENC_MAP.get(enc_val, 'des'),
+                'active': _snmp_int(data.get('row_status', 1)) == 1,
+                'default_password': False,  # SNMP can't read this
+            })
+        return users
+
+    def set_user(self, name, password=None, role=None,
+                 snmp_auth_type=None, snmp_enc_type=None,
+                 snmp_auth_password=None, snmp_enc_password=None,
+                 policy_check=None, locked=None):
+        asyncio.run(self._set_user_async(
+            name, password=password, role=role,
+            snmp_auth_type=snmp_auth_type, snmp_enc_type=snmp_enc_type,
+            snmp_auth_password=snmp_auth_password,
+            snmp_enc_password=snmp_enc_password,
+            policy_check=policy_check, locked=locked))
+
+    async def _set_user_async(self, name, password=None, role=None,
+                              snmp_auth_type=None, snmp_enc_type=None,
+                              snmp_auth_password=None,
+                              snmp_enc_password=None,
+                              policy_check=None, locked=None):
+        suffix = self._encode_implied_string(name)
+
+        # Check if user exists
+        engine = SnmpEngine()
+        existing = await self._walk_columns({
+            'row_status': OID_hm2UserStatus,
+        }, engine=engine)
+        existing_names = {self._decode_implied_string(s)
+                         for s in existing}
+        is_new = name not in existing_names
+
+        if is_new:
+            if password is None:
+                raise ValueError(
+                    "password is required when creating a new user")
+            # Three-step RowStatus sequence: createAndWait →
+            # set password (separate PDU) → activate + attributes.
+            # HiOS requires password as a separate SET after row
+            # creation before it will allow transition to active(1).
+            await self._set_oids(
+                (f"{OID_hm2UserStatus}{suffix}", Integer32(5)),
+            )
+            await self._set_oids(
+                (f"{OID_hm2UserPassword}{suffix}",
+                 OctetString(password.encode())),
+            )
+            # Step 3: activate + set all attributes
+            attr_sets = [
+                (f"{OID_hm2UserStatus}{suffix}", Integer32(1)),
+            ]
+        else:
+            attr_sets = []
+            if password is not None:
+                attr_sets.append((f"{OID_hm2UserPassword}{suffix}",
+                                  OctetString(password.encode())))
+
+        if role is not None:
+            if role not in self._ROLE_REV:
+                raise ValueError(
+                    f"Invalid role '{role}': use one of "
+                    f"{list(self._ROLE_REV.keys())}")
+            attr_sets.append((f"{OID_hm2UserAccessRole}{suffix}",
+                              Integer32(self._ROLE_REV[role])))
+        if snmp_auth_type is not None:
+            if snmp_auth_type not in self._AUTH_REV:
+                raise ValueError(
+                    f"Invalid snmp_auth_type '{snmp_auth_type}'")
+            attr_sets.append((f"{OID_hm2UserSnmpAuthType}{suffix}",
+                              Integer32(
+                                  self._AUTH_REV[snmp_auth_type])))
+        if snmp_enc_type is not None:
+            if snmp_enc_type not in self._ENC_REV:
+                raise ValueError(
+                    f"Invalid snmp_enc_type '{snmp_enc_type}'")
+            attr_sets.append((f"{OID_hm2UserSnmpEncType}{suffix}",
+                              Integer32(
+                                  self._ENC_REV[snmp_enc_type])))
+        if snmp_auth_password is not None:
+            attr_sets.append((
+                f"{OID_hm2UserSnmpAuthPassword}{suffix}",
+                OctetString(snmp_auth_password.encode())))
+        if snmp_enc_password is not None:
+            attr_sets.append((
+                f"{OID_hm2UserSnmpEncPassword}{suffix}",
+                OctetString(snmp_enc_password.encode())))
+        if policy_check is not None:
+            attr_sets.append((f"{OID_hm2UserPwdPolicyChk}{suffix}",
+                              Integer32(
+                                  1 if policy_check else 2)))
+        if locked is not None:
+            attr_sets.append((f"{OID_hm2UserLockoutStatus}{suffix}",
+                              Integer32(
+                                  1 if locked else 2)))
+
+        if attr_sets:
+            await self._set_oids(*attr_sets)
+
+    def delete_user(self, name):
+        asyncio.run(self._delete_user_async(name))
+
+    async def _delete_user_async(self, name):
+        suffix = self._encode_implied_string(name)
+        await self._set_oids(
+            (f"{OID_hm2UserStatus}{suffix}", Integer32(6)))
+
+    # ------------------------------------------------------------------
+    # Port Security
+    # ------------------------------------------------------------------
+
+    _PORTSEC_MODE = {1: 'mac-based', 2: 'ip-based'}
+    _PORTSEC_MODE_REV = {'mac-based': 1, 'ip-based': 2}
+
+    def _parse_portsec_macs(self, raw):
+        """Parse 'VLAN MAC,VLAN MAC,...' string into list of dicts."""
+        text = str(raw) if raw else ''
+        if not text.strip():
+            return []
+        result = []
+        for pair in text.split(','):
+            pair = pair.strip()
+            if not pair:
+                continue
+            parts = pair.split()
+            if len(parts) >= 2:
+                result.append({'vlan': int(parts[0]), 'mac': parts[1]})
+        return result
+
+    def _parse_portsec_ips(self, raw):
+        """Parse 'VLAN IP,VLAN IP,...' string into list of dicts."""
+        text = str(raw) if raw else ''
+        if not text.strip():
+            return []
+        result = []
+        for pair in text.split(','):
+            pair = pair.strip()
+            if not pair:
+                continue
+            parts = pair.split()
+            if len(parts) >= 2:
+                result.append({'vlan': int(parts[0]), 'ip': parts[1]})
+        return result
+
+    def get_port_security(self, interface=None):
+        return asyncio.run(self._get_port_security_async(interface))
+
+    async def _get_port_security_async(self, interface=None):
+        engine = SnmpEngine()
+
+        # Scalars — global config
+        scalars = await self._get_scalar(
+            OID_hm2AgentGlobalPortSecurityMode,
+            OID_hm2AgentPortSecurityOperationMode,
+        )
+
+        # Per-port table walk
+        port_rows = await self._walk_columns({
+            'mode': OID_hm2AgentPortSecurityMode,
+            'dyn_limit': OID_hm2AgentPortSecurityDynamicLimit,
+            'static_limit': OID_hm2AgentPortSecurityStaticLimit,
+            'auto_disable': OID_hm2AgentPortSecurityAutoDisable,
+            'trap_mode': OID_hm2AgentPortSecurityViolationTrapMode,
+            'trap_freq': OID_hm2AgentPortSecurityViolationTrapFrequency,
+            'dyn_count': OID_hm2AgentPortSecurityDynamicCount,
+            'static_count': OID_hm2AgentPortSecurityStaticCount,
+            'static_ip_count': OID_hm2AgentPortSecurityStaticIpCount,
+            'last_mac': OID_hm2AgentPortSecurityLastDiscardedMAC,
+            'static_macs': OID_hm2AgentPortSecurityStaticMACs,
+            'static_ips': OID_hm2AgentPortSecurityStaticIPs,
+        }, engine)
+
+        ifmap = await self._build_ifindex_map(engine)
+
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for suffix, cols in port_rows.items():
+            ifidx = suffix.lstrip('.')
+            name = ifmap.get(ifidx, '')
+            if not name or name.startswith('cpu') or name.startswith('vlan'):
+                continue
+            if want is not None and name not in want:
+                continue
+
+            ports[name] = {
+                'enabled': _snmp_int(cols.get('mode', 2)) == 1,
+                'dynamic_limit': _snmp_int(cols.get('dyn_limit', 600)),
+                'static_limit': _snmp_int(cols.get('static_limit', 64)),
+                'auto_disable': _snmp_int(cols.get('auto_disable', 1)) == 1,
+                'violation_trap_mode':
+                    _snmp_int(cols.get('trap_mode', 2)) == 1,
+                'violation_trap_frequency':
+                    _snmp_int(cols.get('trap_freq', 0)),
+                'dynamic_count': _snmp_int(cols.get('dyn_count', 0)),
+                'static_count': _snmp_int(cols.get('static_count', 0)),
+                'static_ip_count':
+                    _snmp_int(cols.get('static_ip_count', 0)),
+                'last_discarded_mac': str(cols.get('last_mac', '')),
+                'static_macs': self._parse_portsec_macs(
+                    cols.get('static_macs', '')),
+                'static_ips': self._parse_portsec_ips(
+                    cols.get('static_ips', '')),
+            }
+
+        return {
+            'enabled': _snmp_int(scalars.get(
+                OID_hm2AgentGlobalPortSecurityMode, 2)) == 1,
+            'mode': self._PORTSEC_MODE.get(
+                _snmp_int(scalars.get(
+                    OID_hm2AgentPortSecurityOperationMode, 1)),
+                'mac-based'),
+            'ports': ports,
+        }
+
+    def set_port_security(self, interface=None, enabled=None, mode=None,
+                          dynamic_limit=None, static_limit=None,
+                          auto_disable=None, violation_trap_mode=None,
+                          violation_trap_frequency=None, move_macs=None,
+                          **kwargs):
+        sets = []
+        if interface is not None:
+            interfaces = ([interface] if isinstance(interface, str)
+                          else list(interface))
+            ifmap = asyncio.run(self._build_ifindex_map(SnmpEngine()))
+            name_to_idx = {n: idx for idx, n in ifmap.items()}
+
+            for iface in interfaces:
+                ifidx = name_to_idx.get(iface)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                if enabled is not None:
+                    sets.append((
+                        f"{OID_hm2AgentPortSecurityMode}.{ifidx}",
+                        Integer32(1 if enabled else 2)))
+                if dynamic_limit is not None:
+                    sets.append((
+                        f"{OID_hm2AgentPortSecurityDynamicLimit}.{ifidx}",
+                        Unsigned32(int(dynamic_limit))))
+                if static_limit is not None:
+                    sets.append((
+                        f"{OID_hm2AgentPortSecurityStaticLimit}.{ifidx}",
+                        Unsigned32(int(static_limit))))
+                if auto_disable is not None:
+                    sets.append((
+                        f"{OID_hm2AgentPortSecurityAutoDisable}.{ifidx}",
+                        Integer32(1 if auto_disable else 2)))
+                if violation_trap_mode is not None:
+                    sets.append((
+                        f"{OID_hm2AgentPortSecurityViolationTrapMode}.{ifidx}",
+                        Integer32(1 if violation_trap_mode else 2)))
+                if violation_trap_frequency is not None:
+                    sets.append((
+                        f"{OID_hm2AgentPortSecurityViolationTrapFrequency}.{ifidx}",
+                        Unsigned32(int(violation_trap_frequency))))
+                if move_macs:
+                    sets.append((
+                        f"{OID_hm2AgentPortSecurityMACAddressMove}.{ifidx}",
+                        Integer32(1)))
+        else:
+            if enabled is not None:
+                sets.append((
+                    OID_hm2AgentGlobalPortSecurityMode + '.0',
+                    Integer32(1 if enabled else 2)))
+            if mode is not None:
+                val = self._PORTSEC_MODE_REV.get(mode)
+                if val is None:
+                    raise ValueError(
+                        f"Invalid mode '{mode}': "
+                        f"use 'mac-based' or 'ip-based'")
+                sets.append((
+                    OID_hm2AgentPortSecurityOperationMode + '.0',
+                    Integer32(val)))
+
+        if sets:
+            asyncio.run(self._set_oids(*sets))
+
+    def add_port_security(self, interface, vlan=None, mac=None, ip=None,
+                          entries=None):
+        if entries is None:
+            if mac is not None:
+                entries = [{'vlan': vlan, 'mac': mac}]
+            elif ip is not None:
+                entries = [{'vlan': vlan, 'ip': ip}]
+            else:
+                raise ValueError("Provide mac=, ip=, or entries=")
+
+        ifmap = asyncio.run(self._build_ifindex_map(SnmpEngine()))
+        name_to_idx = {n: idx for idx, n in ifmap.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+
+        for entry in entries:
+            v = entry.get('vlan', vlan)
+            if 'mac' in entry:
+                asyncio.run(self._set_oids((
+                    f"{OID_hm2AgentPortSecurityMACAddressAdd}.{ifidx}",
+                    OctetString(f"{v} {entry['mac']}".encode()))))
+            elif 'ip' in entry:
+                asyncio.run(self._set_oids((
+                    f"{OID_hm2AgentPortSecurityIPAddressAdd}.{ifidx}",
+                    OctetString(f"{v} {entry['ip']}".encode()))))
+
+    def delete_port_security(self, interface, vlan=None, mac=None, ip=None,
+                             entries=None):
+        if entries is None:
+            if mac is not None:
+                entries = [{'vlan': vlan, 'mac': mac}]
+            elif ip is not None:
+                entries = [{'vlan': vlan, 'ip': ip}]
+            else:
+                raise ValueError("Provide mac=, ip=, or entries=")
+
+        ifmap = asyncio.run(self._build_ifindex_map(SnmpEngine()))
+        name_to_idx = {n: idx for idx, n in ifmap.items()}
+        ifidx = name_to_idx.get(interface)
+        if ifidx is None:
+            raise ValueError(f"Unknown interface '{interface}'")
+
+        for entry in entries:
+            v = entry.get('vlan', vlan)
+            if 'mac' in entry:
+                asyncio.run(self._set_oids((
+                    f"{OID_hm2AgentPortSecurityMACAddressRemove}.{ifidx}",
+                    OctetString(f"{v} {entry['mac']}".encode()))))
+            elif 'ip' in entry:
+                asyncio.run(self._set_oids((
+                    f"{OID_hm2AgentPortSecurityIPAddressRemove}.{ifidx}",
+                    OctetString(f"{v} {entry['ip']}".encode()))))
+
+    # ------------------------------------------------------------------
+    # DHCP Snooping
+    # ------------------------------------------------------------------
+
+    def get_dhcp_snooping(self, interface=None):
+        return asyncio.run(self._get_dhcp_snooping_async(interface))
+
+    async def _get_dhcp_snooping_async(self, interface=None):
+        engine = SnmpEngine()
+
+        # Scalars — global config
+        scalars = await self._get_scalar(
+            OID_hm2AgentDhcpSnoopingAdminMode,
+            OID_hm2AgentDhcpSnoopingVerifyMac,
+        )
+
+        # Per-VLAN table walk (indexed by VlanIndex = OID suffix)
+        vlan_rows = await self._walk_columns({
+            'enable': OID_hm2AgentDhcpSnoopingVlanEnable,
+        }, engine)
+
+        # Per-port table walk
+        port_rows = await self._walk_columns({
+            'trust': OID_hm2AgentDhcpSnoopingIfTrustEnable,
+            'log': OID_hm2AgentDhcpSnoopingIfLogEnable,
+            'rate_limit': OID_hm2AgentDhcpSnoopingIfRateLimit,
+            'burst_interval': OID_hm2AgentDhcpSnoopingIfBurstInterval,
+            'auto_disable': OID_hm2AgentDhcpSnoopingIfAutoDisable,
+        }, engine)
+
+        ifmap = await self._build_ifindex_map(engine)
+
+        # Build VLANs dict (suffix IS the VLAN ID)
+        vlans = {}
+        for suffix, cols in vlan_rows.items():
+            vid = int(suffix.lstrip('.'))
+            if vid > 0:
+                vlans[vid] = {
+                    'enabled': _snmp_int(cols.get('enable', 2)) == 1,
+                }
+
+        # Filter interfaces
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for suffix, cols in port_rows.items():
+            ifidx = suffix.lstrip('.')
+            name = ifmap.get(ifidx, '')
+            if not name or name.startswith('cpu') or name.startswith('vlan'):
+                continue
+            if want is not None and name not in want:
+                continue
+
+            ports[name] = {
+                'trusted': _snmp_int(cols.get('trust', 2)) == 1,
+                'log': _snmp_int(cols.get('log', 2)) == 1,
+                'rate_limit': _snmp_int(cols.get('rate_limit', -1)),
+                'burst_interval': _snmp_int(
+                    cols.get('burst_interval', 1)),
+                'auto_disable': _snmp_int(
+                    cols.get('auto_disable', 1)) == 1,
+            }
+
+        return {
+            'enabled': _snmp_int(scalars.get(
+                OID_hm2AgentDhcpSnoopingAdminMode, 2)) == 1,
+            'verify_mac': _snmp_int(scalars.get(
+                OID_hm2AgentDhcpSnoopingVerifyMac, 2)) == 1,
+            'vlans': vlans,
+            'ports': ports,
+        }
+
+    def set_dhcp_snooping(self, interface=None, enabled=None,
+                          verify_mac=None, vlan=None, vlan_enabled=None,
+                          trusted=None, log=None, rate_limit=None,
+                          burst_interval=None, auto_disable=None,
+                          **kwargs):
+        sets = []
+
+        # Global settings
+        if enabled is not None:
+            sets.append((
+                OID_hm2AgentDhcpSnoopingAdminMode + '.0',
+                Integer32(1 if enabled else 2)))
+        if verify_mac is not None:
+            sets.append((
+                OID_hm2AgentDhcpSnoopingVerifyMac + '.0',
+                Integer32(1 if verify_mac else 2)))
+
+        # Per-VLAN
+        if vlan is not None and vlan_enabled is not None:
+            vlans = [vlan] if isinstance(vlan, int) else list(vlan)
+            for vid in vlans:
+                sets.append((
+                    f"{OID_hm2AgentDhcpSnoopingVlanEnable}.{vid}",
+                    Integer32(1 if vlan_enabled else 2)))
+
+        # Per-port
+        if interface is not None:
+            interfaces = ([interface] if isinstance(interface, str)
+                          else list(interface))
+            ifmap = asyncio.run(self._build_ifindex_map(SnmpEngine()))
+            name_to_idx = {n: idx for idx, n in ifmap.items()}
+
+            for iface in interfaces:
+                ifidx = name_to_idx.get(iface)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                if trusted is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDhcpSnoopingIfTrustEnable}.{ifidx}",
+                        Integer32(1 if trusted else 2)))
+                if log is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDhcpSnoopingIfLogEnable}.{ifidx}",
+                        Integer32(1 if log else 2)))
+                if rate_limit is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDhcpSnoopingIfRateLimit}.{ifidx}",
+                        Integer32(int(rate_limit))))
+                if burst_interval is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDhcpSnoopingIfBurstInterval}.{ifidx}",
+                        Integer32(int(burst_interval))))
+                if auto_disable is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDhcpSnoopingIfAutoDisable}.{ifidx}",
+                        Integer32(1 if auto_disable else 2)))
+
+        if sets:
+            asyncio.run(self._set_oids(*sets))
+
+    # ------------------------------------------------------------------
+    # ARP Inspection (DAI)
+    # ------------------------------------------------------------------
+
+    def get_arp_inspection(self, interface=None):
+        return asyncio.run(self._get_arp_inspection_async(interface))
+
+    async def _get_arp_inspection_async(self, interface=None):
+        engine = SnmpEngine()
+
+        # Scalars — global validation flags
+        scalars = await self._get_scalar(
+            OID_hm2AgentDaiSrcMacValidate,
+            OID_hm2AgentDaiDstMacValidate,
+            OID_hm2AgentDaiIPValidate,
+        )
+
+        # Per-VLAN table walk (suffix = VID)
+        vlan_rows = await self._walk_columns({
+            'enable': OID_hm2AgentDaiVlanDynArpInspEnable,
+            'log': OID_hm2AgentDaiVlanLoggingEnable,
+            'acl_name': OID_hm2AgentDaiVlanArpAclName,
+            'acl_static': OID_hm2AgentDaiVlanArpAclStaticFlag,
+            'binding_check': OID_hm2AgentDaiVlanBindingCheckEnable,
+        }, engine)
+
+        # Per-port table walk
+        port_rows = await self._walk_columns({
+            'trust': OID_hm2AgentDaiIfTrustEnable,
+            'rate_limit': OID_hm2AgentDaiIfRateLimit,
+            'burst_interval': OID_hm2AgentDaiIfBurstInterval,
+            'auto_disable': OID_hm2AgentDaiIfAutoDisable,
+        }, engine)
+
+        ifmap = await self._build_ifindex_map(engine)
+
+        # Build VLANs dict
+        vlans = {}
+        for suffix, cols in vlan_rows.items():
+            vid = int(suffix.lstrip('.'))
+            if vid > 0:
+                acl_raw = cols.get('acl_name', '')
+                acl_name = str(acl_raw).strip('\x00').strip() if acl_raw else ''
+                vlans[vid] = {
+                    'enabled': _snmp_int(cols.get('enable', 2)) == 1,
+                    'log': _snmp_int(cols.get('log', 2)) == 1,
+                    'acl_name': acl_name,
+                    'acl_static': _snmp_int(
+                        cols.get('acl_static', 2)) == 1,
+                    'binding_check': _snmp_int(
+                        cols.get('binding_check', 2)) == 1,
+                }
+
+        # Filter interfaces
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for suffix, cols in port_rows.items():
+            ifidx = suffix.lstrip('.')
+            name = ifmap.get(ifidx, '')
+            if not name or name.startswith('cpu') or name.startswith('vlan'):
+                continue
+            if want is not None and name not in want:
+                continue
+
+            ports[name] = {
+                'trusted': _snmp_int(cols.get('trust', 2)) == 1,
+                'rate_limit': _snmp_int(cols.get('rate_limit', -1)),
+                'burst_interval': _snmp_int(
+                    cols.get('burst_interval', 1)),
+                'auto_disable': _snmp_int(
+                    cols.get('auto_disable', 1)) == 1,
+            }
+
+        return {
+            'validate_src_mac': _snmp_int(scalars.get(
+                OID_hm2AgentDaiSrcMacValidate, 2)) == 1,
+            'validate_dst_mac': _snmp_int(scalars.get(
+                OID_hm2AgentDaiDstMacValidate, 2)) == 1,
+            'validate_ip': _snmp_int(scalars.get(
+                OID_hm2AgentDaiIPValidate, 2)) == 1,
+            'vlans': vlans,
+            'ports': ports,
+        }
+
+    def set_arp_inspection(self, interface=None,
+                           validate_src_mac=None, validate_dst_mac=None,
+                           validate_ip=None,
+                           vlan=None, vlan_enabled=None, vlan_log=None,
+                           vlan_binding_check=None,
+                           trusted=None, rate_limit=None,
+                           burst_interval=None, auto_disable=None,
+                           **kwargs):
+        sets = []
+
+        # Global validation flags
+        if validate_src_mac is not None:
+            sets.append((
+                OID_hm2AgentDaiSrcMacValidate + '.0',
+                Integer32(1 if validate_src_mac else 2)))
+        if validate_dst_mac is not None:
+            sets.append((
+                OID_hm2AgentDaiDstMacValidate + '.0',
+                Integer32(1 if validate_dst_mac else 2)))
+        if validate_ip is not None:
+            sets.append((
+                OID_hm2AgentDaiIPValidate + '.0',
+                Integer32(1 if validate_ip else 2)))
+
+        # Per-VLAN
+        if vlan is not None:
+            vlans_list = [vlan] if isinstance(vlan, int) else list(vlan)
+            for vid in vlans_list:
+                if vlan_enabled is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDaiVlanDynArpInspEnable}.{vid}",
+                        Integer32(1 if vlan_enabled else 2)))
+                if vlan_log is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDaiVlanLoggingEnable}.{vid}",
+                        Integer32(1 if vlan_log else 2)))
+                if vlan_binding_check is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDaiVlanBindingCheckEnable}.{vid}",
+                        Integer32(1 if vlan_binding_check else 2)))
+
+        # Per-port
+        if interface is not None:
+            interfaces = ([interface] if isinstance(interface, str)
+                          else list(interface))
+            ifmap = asyncio.run(self._build_ifindex_map(SnmpEngine()))
+            name_to_idx = {n: idx for idx, n in ifmap.items()}
+
+            for iface in interfaces:
+                ifidx = name_to_idx.get(iface)
+                if ifidx is None:
+                    raise ValueError(f"Unknown interface '{iface}'")
+                if trusted is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDaiIfTrustEnable}.{ifidx}",
+                        Integer32(1 if trusted else 2)))
+                if rate_limit is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDaiIfRateLimit}.{ifidx}",
+                        Integer32(int(rate_limit))))
+                if burst_interval is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDaiIfBurstInterval}.{ifidx}",
+                        Integer32(int(burst_interval))))
+                if auto_disable is not None:
+                    sets.append((
+                        f"{OID_hm2AgentDaiIfAutoDisable}.{ifidx}",
+                        Integer32(1 if auto_disable else 2)))
+
+        if sets:
+            asyncio.run(self._set_oids(*sets))
+
+    # -------------------------------------------------------------------
+    # IP Source Guard
+    # -------------------------------------------------------------------
+
+    def get_ip_source_guard(self, interface=None):
+        return asyncio.run(self._get_ip_source_guard_async(interface))
+
+    async def _get_ip_source_guard_async(self, interface=None):
+        engine = SnmpEngine()
+
+        # Per-port table walk
+        port_rows = await self._walk_columns({
+            'verify_source': OID_hm2AgentIpsgIfVerifySource,
+            'port_security': OID_hm2AgentIpsgIfPortSecurity,
+        }, engine)
+
+        # Static binding table walk
+        static_rows = await self._walk_columns({
+            'ifindex': OID_hm2AgentStaticIpsgBindingIfIndex,
+            'vlan_id': OID_hm2AgentStaticIpsgBindingVlanId,
+            'mac': OID_hm2AgentStaticIpsgBindingMacAddr,
+            'ip': OID_hm2AgentStaticIpsgBindingIpAddr,
+            'row_status': OID_hm2AgentStaticIpsgBindingRowStatus,
+            'hw_status': OID_hm2AgentStaticIpsgBindingHwStatus,
+        }, engine)
+
+        # Dynamic binding table walk
+        dynamic_rows = await self._walk_columns({
+            'ifindex': OID_hm2AgentDynamicIpsgBindingIfIndex,
+            'vlan_id': OID_hm2AgentDynamicIpsgBindingVlanId,
+            'mac': OID_hm2AgentDynamicIpsgBindingMacAddr,
+            'ip': OID_hm2AgentDynamicIpsgBindingIpAddr,
+            'hw_status': OID_hm2AgentDynamicIpsgBindingHwStatus,
+        }, engine)
+
+        ifmap = await self._build_ifindex_map(engine)
+
+        # Filter interfaces
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for suffix, cols in port_rows.items():
+            ifidx = suffix.lstrip('.')
+            name = ifmap.get(ifidx, '')
+            if not name or name.startswith('cpu') or name.startswith('vlan'):
+                continue
+            if want is not None and name not in want:
+                continue
+
+            ports[name] = {
+                'verify_source': _snmp_int(
+                    cols.get('verify_source', 2)) == 1,
+                'port_security': _snmp_int(
+                    cols.get('port_security', 2)) == 1,
+            }
+
+        # Static bindings
+        static_bindings = []
+        for suffix, cols in static_rows.items():
+            ifidx = str(_snmp_int(cols.get('ifindex', 0)))
+            iface = ifmap.get(ifidx, ifidx)
+            if want is not None and iface not in want:
+                continue
+            mac_val = cols.get('mac', '')
+            static_bindings.append({
+                'interface': iface,
+                'vlan_id': _snmp_int(cols.get('vlan_id', 0)),
+                'mac_address': _format_mac(mac_val) if mac_val else '',
+                'ip_address': str(cols.get('ip', '')),
+                'active': _snmp_int(cols.get('row_status', 0)) == 1,
+                'hw_status': _snmp_int(cols.get('hw_status', 2)) == 1,
+            })
+
+        # Dynamic bindings
+        dynamic_bindings = []
+        for suffix, cols in dynamic_rows.items():
+            ifidx = str(_snmp_int(cols.get('ifindex', 0)))
+            iface = ifmap.get(ifidx, ifidx)
+            if want is not None and iface not in want:
+                continue
+            mac_val = cols.get('mac', '')
+            dynamic_bindings.append({
+                'interface': iface,
+                'vlan_id': _snmp_int(cols.get('vlan_id', 0)),
+                'mac_address': _format_mac(mac_val) if mac_val else '',
+                'ip_address': str(cols.get('ip', '')),
+                'hw_status': _snmp_int(cols.get('hw_status', 2)) == 1,
+            })
+
+        return {
+            'ports': ports,
+            'static_bindings': static_bindings,
+            'dynamic_bindings': dynamic_bindings,
+        }
+
+    def set_ip_source_guard(self, interface=None,
+                            verify_source=None, port_security=None,
+                            **kwargs):
+        if interface is None:
+            return
+
+        sets = []
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
+        ifmap = asyncio.run(self._build_ifindex_map(SnmpEngine()))
+        name_to_idx = {n: idx for idx, n in ifmap.items()}
+
+        for iface in interfaces:
+            ifidx = name_to_idx.get(iface)
+            if ifidx is None:
+                raise ValueError(f"Unknown interface '{iface}'")
+            if verify_source is not None:
+                sets.append((
+                    f"{OID_hm2AgentIpsgIfVerifySource}.{ifidx}",
+                    Integer32(1 if verify_source else 2)))
+            if port_security is not None:
+                sets.append((
+                    f"{OID_hm2AgentIpsgIfPortSecurity}.{ifidx}",
+                    Integer32(1 if port_security else 2)))
+
+        if sets:
+            asyncio.run(self._set_oids(*sets))

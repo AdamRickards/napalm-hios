@@ -1071,3 +1071,219 @@ class HIOSDriver(NetworkDriver):
         if self.active_protocol in ('mops', 'offline'):
             return self._get_active_connection().get_staged_mutations()
         raise NotImplementedError("get_staged_mutations is only available via MOPS")
+
+    # ------------------------------------------------------------------
+    # Signal Contact / Device Monitor / Device Security / Banner
+    # ------------------------------------------------------------------
+
+    def get_signal_contact(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_signal_contact()
+        raise NotImplementedError("get_signal_contact is not implemented for this protocol")
+
+    def set_signal_contact(self, contact_id=1, mode=None,
+                           manual_state=None, trap_enabled=None,
+                           monitoring=None, power_supply=None,
+                           link_alarm=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_signal_contact(
+                contact_id=contact_id, mode=mode,
+                manual_state=manual_state, trap_enabled=trap_enabled,
+                monitoring=monitoring, power_supply=power_supply,
+                link_alarm=link_alarm)
+        raise NotImplementedError("set_signal_contact is not implemented for this protocol")
+
+    def get_device_monitor(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_device_monitor()
+        raise NotImplementedError("get_device_monitor is not implemented for this protocol")
+
+    def set_device_monitor(self, trap_enabled=None, monitoring=None,
+                           power_supply=None, link_alarm=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_device_monitor(
+                trap_enabled=trap_enabled, monitoring=monitoring,
+                power_supply=power_supply, link_alarm=link_alarm)
+        raise NotImplementedError("set_device_monitor is not implemented for this protocol")
+
+    def get_devsec_status(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_devsec_status()
+        raise NotImplementedError("get_devsec_status is not implemented for this protocol")
+
+    def set_devsec_status(self, trap_enabled=None, monitoring=None,
+                          no_link=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_devsec_status(
+                trap_enabled=trap_enabled, monitoring=monitoring,
+                no_link=no_link)
+        raise NotImplementedError("set_devsec_status is not implemented for this protocol")
+
+    def get_banner(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_banner()
+        raise NotImplementedError("get_banner is not implemented for this protocol")
+
+    def set_banner(self, pre_login_enabled=None, pre_login_text=None,
+                   cli_login_enabled=None, cli_login_text=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_banner(
+                pre_login_enabled=pre_login_enabled,
+                pre_login_text=pre_login_text,
+                cli_login_enabled=cli_login_enabled,
+                cli_login_text=cli_login_text)
+        raise NotImplementedError("set_banner is not implemented for this protocol")
+
+    # ------------------------------------------------------------------
+    # Session Config / IP Restrict
+    # ------------------------------------------------------------------
+
+    def get_session_config(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_session_config()
+        raise NotImplementedError("get_session_config is not implemented for this protocol")
+
+    def set_session_config(self, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_session_config(**kwargs)
+        raise NotImplementedError("set_session_config is not implemented for this protocol")
+
+    def get_ip_restrict(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_ip_restrict()
+        raise NotImplementedError("get_ip_restrict is not implemented for this protocol")
+
+    def set_ip_restrict(self, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_ip_restrict(**kwargs)
+        raise NotImplementedError("set_ip_restrict is not implemented for this protocol")
+
+    def add_ip_restrict_rule(self, index, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().add_ip_restrict_rule(index, **kwargs)
+        raise NotImplementedError("add_ip_restrict_rule is not implemented for this protocol")
+
+    def delete_ip_restrict_rule(self, index):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().delete_ip_restrict_rule(index)
+        raise NotImplementedError("delete_ip_restrict_rule is not implemented for this protocol")
+
+    def get_dns(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_dns()
+        raise NotImplementedError("get_dns is not implemented for this protocol")
+
+    def set_dns(self, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_dns(**kwargs)
+        raise NotImplementedError("set_dns is not implemented for this protocol")
+
+    def add_dns_server(self, address):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().add_dns_server(address)
+        raise NotImplementedError("add_dns_server is not implemented for this protocol")
+
+    def delete_dns_server(self, address):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().delete_dns_server(address)
+        raise NotImplementedError("delete_dns_server is not implemented for this protocol")
+
+    def get_poe(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_poe()
+        raise NotImplementedError("get_poe is not implemented for this protocol")
+
+    def set_poe(self, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_poe(**kwargs)
+        raise NotImplementedError("set_poe is not implemented for this protocol")
+
+    def get_remote_auth(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_remote_auth()
+        raise NotImplementedError("get_remote_auth is not implemented for this protocol")
+
+    def get_users(self):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_users()
+        raise NotImplementedError("get_users is not implemented for this protocol")
+
+    def set_user(self, name, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().set_user(name, **kwargs)
+        raise NotImplementedError("set_user is not implemented for this protocol")
+
+    def delete_user(self, name):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().delete_user(name)
+        raise NotImplementedError("delete_user is not implemented for this protocol")
+
+    def add_snmp_trap_dest(self, name, address, port=162,
+                           security_model='v3', security_name='admin',
+                           security_level='authpriv'):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().add_snmp_trap_dest(
+                name, address, port=port,
+                security_model=security_model,
+                security_name=security_name,
+                security_level=security_level)
+        raise NotImplementedError("add_snmp_trap_dest is not implemented for this protocol")
+
+    def delete_snmp_trap_dest(self, name):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().delete_snmp_trap_dest(name)
+        raise NotImplementedError("delete_snmp_trap_dest is not implemented for this protocol")
+
+    def get_port_security(self, interface=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_port_security(interface=interface)
+        raise NotImplementedError("get_port_security is not implemented for this protocol")
+
+    def set_port_security(self, interface=None, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_port_security(interface=interface, **kwargs)
+        raise NotImplementedError("set_port_security is not implemented for this protocol")
+
+    def add_port_security(self, interface, vlan=None, mac=None, ip=None,
+                          entries=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().add_port_security(
+                interface, vlan=vlan, mac=mac, ip=ip, entries=entries)
+        raise NotImplementedError("add_port_security is not implemented for this protocol")
+
+    def delete_port_security(self, interface, vlan=None, mac=None, ip=None,
+                             entries=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh'):
+            return self._get_active_connection().delete_port_security(
+                interface, vlan=vlan, mac=mac, ip=ip, entries=entries)
+        raise NotImplementedError("delete_port_security is not implemented for this protocol")
+
+    def get_dhcp_snooping(self, interface=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_dhcp_snooping(interface=interface)
+        raise NotImplementedError("get_dhcp_snooping is not implemented for this protocol")
+
+    def set_dhcp_snooping(self, interface=None, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_dhcp_snooping(interface=interface, **kwargs)
+        raise NotImplementedError("set_dhcp_snooping is not implemented for this protocol")
+
+    def get_arp_inspection(self, interface=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_arp_inspection(interface=interface)
+        raise NotImplementedError("get_arp_inspection is not implemented for this protocol")
+
+    def set_arp_inspection(self, interface=None, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_arp_inspection(interface=interface, **kwargs)
+        raise NotImplementedError("set_arp_inspection is not implemented for this protocol")
+
+    def get_ip_source_guard(self, interface=None):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().get_ip_source_guard(interface=interface)
+        raise NotImplementedError("get_ip_source_guard is not implemented for this protocol")
+
+    def set_ip_source_guard(self, interface=None, **kwargs):
+        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
+            return self._get_active_connection().set_ip_source_guard(interface=interface, **kwargs)
+        raise NotImplementedError("set_ip_source_guard is not implemented for this protocol")

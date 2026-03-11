@@ -9,6 +9,8 @@ from napalm_hios.snmp_hios import (
     _parse_fw_version, _snmp_str, _snmp_int, _snmp_ip,
     _decode_capabilities, _decode_portlist,
     _format_mrp_domain_id, _decode_implied_string,
+    _decode_bits_snmp, _encode_bits_snmp,
+    _TLS_VERSIONS, _SSH_HMAC,
     OID_hm2FMNvmState, OID_hm2FMEnvmState, OID_hm2FMBootParamState,
     OID_hm2FMActionActivateKey, OID_hm2FMActionActivate_save,
     OID_sysDescr, OID_sysName, OID_sysUpTime, OID_sysContact, OID_sysLocation,
@@ -113,6 +115,79 @@ from napalm_hios.snmp_hios import (
     OID_hm2ExtNvmConfigLoadPriority, OID_hm2ExtNvmConfigSave,
     OID_hm2AgentDot1qBridgeMvrpMode, OID_hm2AgentDot1qBridgeMmrpMode,
     _OID_DEVSEC_ALL,
+    OID_hm2PreLoginBannerAdminStatus, OID_hm2PreLoginBannerText,
+    OID_hm2CliLoginBannerAdminStatus, OID_hm2CliLoginBannerText,
+    OID_hm2SshSessionTimeout, OID_hm2SshMaxSessionsCount,
+    OID_hm2SshSessionsCount,
+    OID_hm2SshOutboundSessionTimeout, OID_hm2SshOutboundMaxSessionsCount,
+    OID_hm2SshOutboundSessionsCount,
+    OID_hm2TelnetServerSessionsTimeOut, OID_hm2TelnetServerMaxSessions,
+    OID_hm2TelnetServerSessionsCount,
+    OID_hm2WebIntfTimeOut, OID_hm2CliLoginTimeoutSerial,
+    OID_hm2NetconfSessionTimeout, OID_hm2NetconfMaxSessions,
+    OID_hm2NetconfSessionsCount,
+    OID_hm2RmaOperation, OID_hm2RmaLoggingGlobal,
+    OID_hm2SnmpTrapServiceAdminStatus,
+    OID_hm2UserSnmpAuthType, OID_hm2UserSnmpEncType,
+    OID_hm2DnsClientAdminState, OID_hm2DnsClientConfigSource,
+    OID_hm2DnsClientDefaultDomainName, OID_hm2DnsClientRequestTimeout,
+    OID_hm2DnsClientRequestRetransmits, OID_hm2DnsClientCacheAdminState,
+    OID_hm2DnsClientServerAddressType, OID_hm2DnsClientServerAddress,
+    OID_hm2DnsClientServerRowStatus,
+    OID_hm2DnsClientServerDiagAddressType, OID_hm2DnsClientServerDiagAddress,
+    OID_hm2PoeMgmtAdminStatus, OID_hm2PoeMgmtReservedPower,
+    OID_hm2PoeMgmtDeliveredCurrent,
+    OID_hm2PoeMgmtPortAdminEnable, OID_hm2PoeMgmtPortConsumptionPower,
+    OID_hm2PoeMgmtPortDetectionStatus, OID_hm2PoeMgmtPortPowerPriority,
+    OID_hm2PoeMgmtPortPowerClassification, OID_hm2PoeMgmtPortName,
+    OID_hm2PoeMgmtPortClassValid, OID_hm2PoeMgmtPortFastStartup,
+    OID_hm2PoeMgmtPortPowerLimit,
+    OID_hm2PoeMgmtModulePower, OID_hm2PoeMgmtModuleMaximumPower,
+    OID_hm2PoeMgmtModuleReservedPower, OID_hm2PoeMgmtModuleDeliveredPower,
+    OID_hm2PoeMgmtModulePowerSource, OID_hm2PoeMgmtModuleUsageThreshold,
+    OID_hm2PoeMgmtModuleNotifCtlEnable,
+    OID_hm2AgentRadiusServerRowStatus,
+    OID_hm2AgentTacacsServerStatus,
+    OID_hm2LdapClientAdminState,
+    OID_hm2UserLockoutStatus, OID_hm2UserPwdPolicyChk,
+    OID_hm2UserPassword,
+    OID_hm2AgentGlobalPortSecurityMode,
+    OID_hm2AgentPortSecurityOperationMode,
+    OID_hm2AgentPortSecurityMode,
+    OID_hm2AgentPortSecurityDynamicLimit,
+    OID_hm2AgentPortSecurityStaticLimit,
+    OID_hm2AgentPortSecurityAutoDisable,
+    OID_hm2AgentPortSecurityViolationTrapMode,
+    OID_hm2AgentPortSecurityViolationTrapFrequency,
+    OID_hm2AgentPortSecurityDynamicCount,
+    OID_hm2AgentPortSecurityStaticCount,
+    OID_hm2AgentPortSecurityStaticIpCount,
+    OID_hm2AgentPortSecurityLastDiscardedMAC,
+    OID_hm2AgentPortSecurityStaticMACs,
+    OID_hm2AgentPortSecurityStaticIPs,
+    OID_hm2AgentPortSecurityMACAddressAdd,
+    OID_hm2AgentPortSecurityMACAddressRemove,
+    OID_hm2AgentPortSecurityIPAddressAdd,
+    OID_hm2AgentPortSecurityIPAddressRemove,
+    OID_hm2AgentDhcpSnoopingAdminMode,
+    OID_hm2AgentDhcpSnoopingVerifyMac,
+    OID_hm2AgentDhcpSnoopingVlanIndex,
+    OID_hm2AgentDhcpSnoopingVlanEnable,
+    OID_hm2AgentDhcpSnoopingIfTrustEnable,
+    OID_hm2AgentDhcpSnoopingIfLogEnable,
+    OID_hm2AgentDhcpSnoopingIfRateLimit,
+    OID_hm2AgentDhcpSnoopingIfBurstInterval,
+    OID_hm2AgentDhcpSnoopingIfAutoDisable,
+    OID_hm2AgentDaiSrcMacValidate,
+    OID_hm2AgentDaiDstMacValidate,
+    OID_hm2AgentDaiIPValidate,
+    OID_hm2AgentDaiVlanDynArpInspEnable,
+    OID_hm2AgentDaiVlanLoggingEnable,
+    OID_hm2AgentDaiVlanBindingCheckEnable,
+    OID_hm2AgentDaiIfTrustEnable,
+    OID_hm2AgentDaiIfRateLimit,
+    OID_hm2AgentDaiIfBurstInterval,
+    OID_hm2AgentDaiIfAutoDisable,
 )
 from napalm.base.exceptions import ConnectionException
 
@@ -848,23 +923,36 @@ class TestSNMPHIOS(unittest.TestCase):
         async def mock_walk_columns(oid_map, engine=None):
             return {
                 # admin: a=97 d=100 m=109 i=105 n=110 (IMPLIED, no length prefix)
-                '97.100.109.105.110': {'role': 15, 'status': 1},
+                '.97.100.109.105.110': {
+                    'role': 15, 'locked': 2, 'policy_check': 2,
+                    'snmp_auth': 1, 'snmp_enc': 1, 'row_status': 1,
+                },
                 # guest: g=103 u=117 e=101 s=115 t=116
-                '103.117.101.115.116': {'role': 1, 'status': 1},
-                # inactive user 'test' — should be filtered
-                '116.101.115.116': {'role': 15, 'status': 6},
+                '.103.117.101.115.116': {
+                    'role': 1, 'locked': 2, 'policy_check': 2,
+                    'snmp_auth': 1, 'snmp_enc': 1, 'row_status': 1,
+                },
+                # inactive user 'test'
+                '.116.101.115.116': {
+                    'role': 15, 'locked': 2, 'policy_check': 2,
+                    'snmp_auth': 1, 'snmp_enc': 1, 'row_status': 2,
+                },
             }
 
         with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns):
             users = self.snmp.get_users()
 
-        self.assertIn('admin', users)
-        self.assertEqual(users['admin']['level'], 15)
-        self.assertEqual(users['admin']['password'], '')
-        self.assertEqual(users['admin']['sshkeys'], [])
-        self.assertIn('guest', users)
-        self.assertEqual(users['guest']['level'], 1)
-        self.assertNotIn('test', users)  # inactive user filtered
+        names = {u['name'] for u in users}
+        self.assertIn('admin', names)
+        self.assertIn('guest', names)
+        self.assertIn('test', names)
+        admin = next(u for u in users if u['name'] == 'admin')
+        self.assertEqual(admin['role'], 'administrator')
+        self.assertTrue(admin['active'])
+        guest = next(u for u in users if u['name'] == 'guest')
+        self.assertEqual(guest['role'], 'guest')
+        test = next(u for u in users if u['name'] == 'test')
+        self.assertFalse(test['active'])  # notInService
 
     # ------------------------------------------------------------------
     # get_ntp_servers
@@ -3406,6 +3494,1898 @@ class TestSNMPSnmpConfig(unittest.TestCase):
             self.snmp.set_snmp_config(v1=True)
         self.assertEqual(len(set_calls), 1)
         self.assertIn(OID_hm2SnmpV1AdminStatus, set_calls[0][0])
+
+
+class TestSNMPSignalContact(unittest.TestCase):
+    """Test SNMP signal contact getter/setter."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_signal_contact(self):
+        """get_signal_contact returns correct shape from BRS50 data."""
+        async def mock_walk_columns(oid_map, engine=None):
+            # Check which table we're querying by checking OID prefixes
+            keys = list(oid_map.keys())
+            if 'mode' in oid_map or 'trap_en' in oid_map:
+                # Common entry — indexed by SigConID
+                return {'.1': {
+                    'trap_en': 2, 'trap_cause': 10, 'trap_cause_idx': 0,
+                    'mode': 2, 'oper_state': 1, 'oper_ts': 1773134373,
+                    'manual': 2,
+                    'link_failure': 2, 'temperature': 1,
+                    'envm_removal': 2, 'envm_not_in_sync': 2,
+                    'ring_redundancy': 2,
+                }}
+            elif 'ts' in oid_map:
+                # Status table
+                return {'.1.6': {
+                    'ts': 1773135114, 'cause': 2, 'cause_idx': 2,
+                }}
+            return {}
+        async def mock_walk(oid, engine=None):
+            if 'PSState' in str(oid) or '.2.1.1' in str(oid):
+                return {'.1.1': 1, '.1.2': 1}
+            elif 'LinkAlarm' in str(oid) or '.3.1.1' in str(oid):
+                return {'.1.1': 2, '.1.2': 2, '.1.3': 2}
+            return {}
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2', '3': '1/3'}
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_signal_contact()
+        self.assertIn(1, result)
+        sc1 = result[1]
+        self.assertEqual(sc1['mode'], 'monitor')
+        self.assertFalse(sc1['trap_enabled'])
+        self.assertTrue(sc1['monitoring']['temperature'])
+        self.assertFalse(sc1['monitoring']['link_failure'])
+        self.assertTrue(sc1['power_supply'][1])
+        self.assertFalse(sc1['link_alarm']['1/1'])
+        self.assertEqual(sc1['status']['oper_state'], 'open')
+
+    def test_set_signal_contact_mode(self):
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_signal_contact(contact_id=1, mode='deviceSecurity')
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn('.5.', set_calls[0][0])  # mode OID
+
+
+class TestSNMPDeviceMonitor(unittest.TestCase):
+    """Test SNMP device monitor getter/setter."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_device_monitor(self):
+        """get_device_monitor returns correct shape via _walk_columns."""
+        async def mock_walk_columns(oid_map, engine=None):
+            keys = list(oid_map.keys())
+            if 'trap_en' in oid_map:
+                return {'.1': {
+                    'trap_en': 1, 'trap_cause': 2, 'trap_cause_idx': 2,
+                    'oper_state': 2, 'oper_ts': 1773132810,
+                    'link_failure': 2, 'temperature': 1,
+                    'envm_removal': 2, 'envm_not_in_sync': 2,
+                    'ring_redundancy': 2,
+                }}
+            elif 'ts' in oid_map:
+                return {'.1': {
+                    'ts': 1773132810, 'cause': 2, 'cause_idx': 2,
+                }}
+            return {}
+        async def mock_walk(oid, engine=None):
+            if '.2.1.1' in str(oid):
+                return {'.1.1': 1, '.1.2': 1}
+            elif '.3.1.1' in str(oid):
+                return {'.1.1': 2, '.1.2': 2}
+            return {}
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2'}
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_device_monitor()
+        self.assertTrue(result['trap_enabled'])
+        self.assertTrue(result['monitoring']['temperature'])
+        self.assertFalse(result['monitoring']['link_failure'])
+        self.assertEqual(result['status']['oper_state'], 'error')
+        self.assertEqual(result['status']['cause'], 'power-supply')
+        self.assertEqual(result['status']['cause_index'], 2)
+        self.assertTrue(result['power_supply'][1])
+
+    def test_set_device_monitor_trap(self):
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_device_monitor(trap_enabled=False)
+        self.assertEqual(len(set_calls), 1)
+
+
+class TestSNMPDevSecStatus(unittest.TestCase):
+    """Test SNMP device security status getter/setter."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_devsec_status(self):
+        """get_devsec_status returns 19 monitors via _walk_columns(.0)."""
+        async def mock_walk_columns(oid_map, engine=None):
+            keys = list(oid_map.keys())
+            if 'trap_en' in oid_map:
+                return {'.0': {
+                    'trap_en': 2, 'trap_cause': 17, 'trap_cause_idx': 0,
+                    'oper_state': 2, 'oper_ts': 1773135123,
+                    'password_change': 1, 'password_min_length': 1,
+                    'password_policy_not_configured': 1,
+                    'password_policy_bypass': 1,
+                    'telnet_enabled': 1, 'http_enabled': 1,
+                    'snmp_unsecure': 1, 'sysmon_enabled': 1,
+                    'envm_update_enabled': 1, 'no_link_enabled': 1,
+                    'hidiscovery_enabled': 1,
+                    'envm_config_load_unsecure': 1,
+                    'iec61850_mms_enabled': 1,
+                    'https_cert_warning': 1,
+                    'modbus_tcp_enabled': 1, 'ethernet_ip_enabled': 1,
+                    'profinet_enabled': 1,
+                    'secure_boot_disabled': 1, 'dev_mode_enabled': 1,
+                }}
+            elif 'ts' in oid_map:
+                return {
+                    '.1': {'ts': 1773056467, 'cause': 13, 'cause_idx': 0},
+                    '.4': {'ts': 1773056470, 'cause': 10, 'cause_idx': 0},
+                }
+            return {}
+        async def mock_walk(oid, engine=None):
+            return {'.1': 2, '.2': 2, '.3': 2}
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2', '3': '1/3'}
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk_columns), \
+             patch.object(self.snmp, '_walk', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_devsec_status()
+        self.assertFalse(result['trap_enabled'])
+        self.assertEqual(len(result['monitoring']), 19)
+        self.assertTrue(result['monitoring']['password_change'])
+        self.assertTrue(result['monitoring']['sysmon_enabled'])
+        self.assertEqual(result['status']['oper_state'], 'error')
+        self.assertEqual(result['status']['cause'], 'sysmon-enabled')
+        self.assertEqual(len(result['status']['events']), 2)
+        self.assertFalse(result['no_link']['1/1'])
+
+    def test_set_devsec_status_monitoring(self):
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_devsec_status(monitoring={'sysmon_enabled': False})
+        self.assertEqual(len(set_calls), 1)
+
+
+class TestSNMPBanner(unittest.TestCase):
+    """Test SNMP banner getter/setter."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_banner_defaults(self):
+        """get_banner factory defaults — both disabled, empty."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2PreLoginBannerAdminStatus: 2,
+                OID_hm2PreLoginBannerText: '',
+                OID_hm2CliLoginBannerAdminStatus: 2,
+                OID_hm2CliLoginBannerText: '',
+            }
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_banner()
+        self.assertFalse(result['pre_login']['enabled'])
+        self.assertEqual(result['pre_login']['text'], '')
+        self.assertFalse(result['cli_login']['enabled'])
+
+    def test_get_banner_with_text(self):
+        """get_banner with enabled pre-login banner."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2PreLoginBannerAdminStatus: 1,
+                OID_hm2PreLoginBannerText: 'Hello World',
+                OID_hm2CliLoginBannerAdminStatus: 2,
+                OID_hm2CliLoginBannerText: '',
+            }
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_banner()
+        self.assertTrue(result['pre_login']['enabled'])
+        self.assertEqual(result['pre_login']['text'], 'Hello World')
+
+    def test_set_banner_pre_login(self):
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_banner(pre_login_enabled=True,
+                                 pre_login_text='Test')
+        self.assertEqual(len(set_calls), 2)  # enabled + text
+
+
+class TestSNMPSessionConfig(unittest.TestCase):
+    """Test SNMP session config getter/setter."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_session_config(self):
+        """get_session_config returns all protocol groups."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2SshSessionTimeout: 5,
+                OID_hm2SshMaxSessionsCount: 5,
+                OID_hm2SshSessionsCount: 0,
+                OID_hm2SshOutboundSessionTimeout: 0,
+                OID_hm2SshOutboundMaxSessionsCount: 0,
+                OID_hm2SshOutboundSessionsCount: 0,
+                OID_hm2TelnetServerSessionsTimeOut: 5,
+                OID_hm2TelnetServerMaxSessions: 5,
+                OID_hm2TelnetServerSessionsCount: 0,
+                OID_hm2WebIntfTimeOut: 5,
+                OID_hm2CliLoginTimeoutSerial: 5,
+                OID_hm2NetconfSessionTimeout: 3600,
+                OID_hm2NetconfMaxSessions: 5,
+                OID_hm2NetconfSessionsCount: 0,
+            }
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar):
+            result = self.snmp.get_session_config()
+        self.assertEqual(result['ssh']['timeout'], 5)
+        self.assertEqual(result['ssh']['max_sessions'], 5)
+        self.assertEqual(result['telnet']['timeout'], 5)
+        self.assertEqual(result['web']['timeout'], 5)
+        self.assertEqual(result['serial']['timeout'], 5)
+        self.assertEqual(result['netconf']['timeout'], 60)
+
+    def test_set_session_config_ssh(self):
+        """set_session_config sets SSH timeout via SNMP."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_session_config(ssh_timeout=10)
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2SshSessionTimeout, set_calls[0][0])
+
+
+class TestSNMPIpRestrict(unittest.TestCase):
+    """Test SNMP IP restrict getter/setter."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_ip_restrict(self):
+        """get_ip_restrict returns scalars + rules."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2RmaOperation: 2,
+                OID_hm2RmaLoggingGlobal: 2,
+            }
+        async def mock_walk(columns, engine=None):
+            return {}  # no rules
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_ip_restrict()
+        self.assertFalse(result['enabled'])
+        self.assertFalse(result['logging'])
+        self.assertEqual(result['rules'], [])
+
+    def test_set_ip_restrict_enable(self):
+        """set_ip_restrict enables RMA via SNMP."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_ip_restrict(enabled=True)
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2RmaOperation, set_calls[0][0])
+
+
+class TestSNMPSnmpConfigExtended(unittest.TestCase):
+    """Test SNMP extended snmp_config (trap_service, v3_users)."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    def test_get_snmp_config_with_users(self):
+        """get_snmp_config returns v3_users and trap_service."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2SnmpV1AdminStatus: 2,
+                OID_hm2SnmpV2AdminStatus: 2,
+                OID_hm2SnmpV3AdminStatus: 1,
+                OID_hm2SnmpPortNumber: 161,
+                OID_hm2SnmpTrapServiceAdminStatus: 1,
+            }
+        walk_calls = [0]
+        async def mock_walk(columns, engine=None):
+            walk_calls[0] += 1
+            if walk_calls[0] == 1:
+                # v3 user walk — IMPLIED string suffix (no length prefix)
+                return {
+                    '97.100.109.105.110': {
+                        'auth': 1, 'enc': 1, 'status': 1,
+                    }
+                }
+            # trap walks return empty
+            return {}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_snmp_config()
+        self.assertTrue(result['trap_service'])
+        self.assertEqual(len(result['v3_users']), 1)
+        self.assertEqual(result['v3_users'][0]['name'], 'admin')
+        self.assertEqual(result['v3_users'][0]['auth_type'], 'md5')
+        self.assertEqual(result['v3_users'][0]['enc_type'], 'des')
+
+    def test_set_snmp_config_trap_service(self):
+        """set_snmp_config enables trap service."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_snmp_config(trap_service=True)
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2SnmpTrapServiceAdminStatus, set_calls[0][0])
+
+
+class TestSNMPDns(unittest.TestCase):
+    """Test SNMP DNS client getter/setter/CRUD."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    # --- get_dns ---
+
+    def test_get_dns_factory_defaults(self):
+        """get_dns factory defaults — disabled, no servers."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2DnsClientAdminState: 2,
+                OID_hm2DnsClientConfigSource: 2,
+                OID_hm2DnsClientDefaultDomainName: '',
+                OID_hm2DnsClientRequestTimeout: 3,
+                OID_hm2DnsClientRequestRetransmits: 2,
+                OID_hm2DnsClientCacheAdminState: 1,
+            }
+        async def mock_walk(columns, engine=None):
+            return {}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_dns()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['config_source'], 'mgmt-dhcp')
+        self.assertEqual(result['domain_name'], '')
+        self.assertEqual(result['timeout'], 3)
+        self.assertEqual(result['retransmits'], 2)
+        self.assertTrue(result['cache_enabled'])
+        self.assertEqual(result['servers'], [])
+        self.assertEqual(result['active_servers'], [])
+
+    def test_get_dns_with_server(self):
+        """get_dns with DNS enabled and a configured server."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2DnsClientAdminState: 1,
+                OID_hm2DnsClientConfigSource: 1,
+                OID_hm2DnsClientDefaultDomainName: 'test.local',
+                OID_hm2DnsClientRequestTimeout: 5,
+                OID_hm2DnsClientRequestRetransmits: 3,
+                OID_hm2DnsClientCacheAdminState: 2,
+            }
+        walk_calls = [0]
+        async def mock_walk(columns, engine=None):
+            walk_calls[0] += 1
+            if walk_calls[0] == 1:
+                # cfg table
+                return {
+                    '1': {
+                        'addr_type': 1,
+                        'addr': '0xc0a80301',
+                        'row_status': 1,
+                    },
+                }
+            elif walk_calls[0] == 2:
+                # diag table
+                return {
+                    '1': {
+                        'addr_type': 1,
+                        'addr': '0xc0a80301',
+                    },
+                }
+            return {}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_dns()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['config_source'], 'user')
+        self.assertEqual(result['domain_name'], 'test.local')
+        self.assertEqual(result['timeout'], 5)
+        self.assertEqual(result['retransmits'], 3)
+        self.assertFalse(result['cache_enabled'])
+        self.assertEqual(result['servers'], ['192.168.3.1'])
+        self.assertEqual(result['active_servers'], ['192.168.3.1'])
+
+    def test_get_dns_skips_inactive_rows(self):
+        """get_dns ignores servers with RowStatus=6 (destroyed)."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2DnsClientAdminState: 1,
+                OID_hm2DnsClientConfigSource: 1,
+                OID_hm2DnsClientDefaultDomainName: '',
+                OID_hm2DnsClientRequestTimeout: 3,
+                OID_hm2DnsClientRequestRetransmits: 2,
+                OID_hm2DnsClientCacheAdminState: 1,
+            }
+        walk_calls = [0]
+        async def mock_walk(columns, engine=None):
+            walk_calls[0] += 1
+            if walk_calls[0] == 1:
+                return {
+                    '1': {
+                        'addr_type': 1,
+                        'addr': '0xc0a80301',
+                        'row_status': 6,
+                    },
+                }
+            return {}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_dns()
+        self.assertEqual(result['servers'], [])
+
+    def test_get_dns_multiple_servers(self):
+        """get_dns returns multiple configured servers."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2DnsClientAdminState: 1,
+                OID_hm2DnsClientConfigSource: 1,
+                OID_hm2DnsClientDefaultDomainName: '',
+                OID_hm2DnsClientRequestTimeout: 3,
+                OID_hm2DnsClientRequestRetransmits: 2,
+                OID_hm2DnsClientCacheAdminState: 1,
+            }
+        walk_calls = [0]
+        async def mock_walk(columns, engine=None):
+            walk_calls[0] += 1
+            if walk_calls[0] == 1:
+                return {
+                    '1': {
+                        'addr_type': 1,
+                        'addr': '0xc0a80301',
+                        'row_status': 1,
+                    },
+                    '2': {
+                        'addr_type': 1,
+                        'addr': '0x0a000001',
+                        'row_status': 1,
+                    },
+                }
+            return {}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_dns()
+        self.assertEqual(result['servers'], ['192.168.3.1', '10.0.0.1'])
+
+    # --- set_dns ---
+
+    def test_set_dns_enable(self):
+        """set_dns enables DNS client via SNMP."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_dns(enabled=True)
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2DnsClientAdminState, set_calls[0][0])
+
+    def test_set_dns_multiple_fields(self):
+        """set_dns sets multiple scalar fields."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_dns(
+                cache_enabled=False, timeout=10, retransmits=5)
+        self.assertEqual(len(set_calls), 3)
+        oids_set = [c[0] for c in set_calls]
+        self.assertTrue(any(
+            OID_hm2DnsClientRequestTimeout in o for o in oids_set))
+        self.assertTrue(any(
+            OID_hm2DnsClientRequestRetransmits in o for o in oids_set))
+        self.assertTrue(any(
+            OID_hm2DnsClientCacheAdminState in o for o in oids_set))
+
+    def test_set_dns_invalid_config_source(self):
+        """set_dns raises ValueError for invalid config_source."""
+        with self.assertRaises(ValueError):
+            self.snmp.set_dns(config_source='invalid')
+
+    # --- add_dns_server ---
+
+    def test_add_dns_server_empty_table(self):
+        """add_dns_server picks index 1 when table is empty."""
+        set_calls = []
+        async def mock_walk(columns, engine=None):
+            return {}
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.add_dns_server('192.168.3.1')
+        # Should use index 1
+        oids_set = [c[0] for c in set_calls]
+        self.assertTrue(any('.1' in o and 'RowStatus' not in o
+                            for o in oids_set)
+                        or any(o.endswith('.1') for o in oids_set))
+        # RowStatus=4 (createAndGo)
+        rs_calls = [(o, v) for o, v in set_calls
+                     if OID_hm2DnsClientServerRowStatus in o]
+        self.assertEqual(len(rs_calls), 1)
+
+    def test_add_dns_server_picks_next_free(self):
+        """add_dns_server skips used index 1, picks 2."""
+        set_calls = []
+        async def mock_walk(columns, engine=None):
+            return {'1': {'row_status': 1}}
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.add_dns_server('10.0.0.1')
+        # Check index 2 used
+        rs_calls = [(o, v) for o, v in set_calls
+                     if OID_hm2DnsClientServerRowStatus in o]
+        self.assertTrue(rs_calls[0][0].endswith('.2'))
+
+    def test_add_dns_server_full_table(self):
+        """add_dns_server raises ValueError when all 4 slots used."""
+        async def mock_walk(columns, engine=None):
+            return {
+                '1': {'row_status': 1},
+                '2': {'row_status': 1},
+                '3': {'row_status': 1},
+                '4': {'row_status': 1},
+            }
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            with self.assertRaises(ValueError) as ctx:
+                self.snmp.add_dns_server('10.0.0.5')
+        self.assertIn('4 DNS server slots', str(ctx.exception))
+
+    # --- delete_dns_server ---
+
+    def test_delete_dns_server(self):
+        """delete_dns_server destroys correct row."""
+        set_calls = []
+        async def mock_walk(columns, engine=None):
+            return {
+                '2': {
+                    'addr': '0xc0a80301',
+                    'row_status': 1,
+                },
+            }
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.delete_dns_server('192.168.3.1')
+        self.assertEqual(len(set_calls), 1)
+        self.assertTrue(set_calls[0][0].endswith('.2'))
+
+    def test_delete_dns_server_not_found(self):
+        """delete_dns_server raises ValueError when IP not in table."""
+        async def mock_walk(columns, engine=None):
+            return {
+                '1': {
+                    'addr': '0xc0a80301',
+                    'row_status': 1,
+                },
+            }
+        with patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            with self.assertRaises(ValueError) as ctx:
+                self.snmp.delete_dns_server('10.10.10.10')
+        self.assertIn('not found', str(ctx.exception))
+
+
+class TestSNMPPoe(unittest.TestCase):
+    """Test SNMP PoE getter/setter."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    # --- get_poe ---
+
+    def test_get_poe_factory_defaults(self):
+        """get_poe factory defaults — disabled, empty ports/modules."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2PoeMgmtAdminStatus: 2,
+                OID_hm2PoeMgmtReservedPower: 0,
+                OID_hm2PoeMgmtDeliveredCurrent: 0,
+            }
+        walk_calls = [0]
+        async def mock_walk(columns, engine=None):
+            walk_calls[0] += 1
+            return {}
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_poe()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['power_w'], 0)
+        self.assertEqual(result['delivered_current_ma'], 0)
+        self.assertEqual(result['modules'], {})
+        self.assertEqual(result['ports'], {})
+
+    def test_get_poe_with_port_and_module(self):
+        """get_poe with enabled PoE, ports, and modules."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2PoeMgmtAdminStatus: 1,
+                OID_hm2PoeMgmtReservedPower: 30,
+                OID_hm2PoeMgmtDeliveredCurrent: 250,
+            }
+        walk_calls = [0]
+        async def mock_walk(columns, engine=None):
+            walk_calls[0] += 1
+            if walk_calls[0] == 1:
+                # Port table
+                return {
+                    '1': {
+                        'admin': 1,
+                        'consumption': 5300,
+                        'status': 3,
+                        'priority': 2,
+                        'classification': 5,
+                        'name': 'AP',
+                        'class_valid': 1,
+                        'fast_startup': 1,
+                        'power_limit': 15400,
+                    },
+                }
+            elif walk_calls[0] == 2:
+                # Module table
+                return {
+                    '1.1': {
+                        'unit': 1, 'slot': 1,
+                        'power': 370, 'max_power': 370,
+                        'reserved': 30, 'delivered': 5,
+                        'source': 0, 'threshold': 90,
+                        'notif': 1,
+                    },
+                }
+            return {}
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_poe()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['power_w'], 30)
+        # Module
+        self.assertIn('1/1', result['modules'])
+        mod = result['modules']['1/1']
+        self.assertEqual(mod['budget_w'], 370)
+        self.assertEqual(mod['source'], 'internal')
+        self.assertTrue(mod['notifications'])
+        # Port
+        self.assertIn('1/1', result['ports'])
+        port = result['ports']['1/1']
+        self.assertTrue(port['enabled'])
+        self.assertEqual(port['status'], 'delivering')
+        self.assertEqual(port['priority'], 'high')
+        self.assertEqual(port['classification'], 'class4')
+        self.assertEqual(port['consumption_mw'], 5300)
+        self.assertEqual(port['power_limit_mw'], 15400)
+        self.assertTrue(port['fast_startup'])
+
+    def test_get_poe_class_invalid(self):
+        """get_poe classification is None when class_valid=0."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2PoeMgmtAdminStatus: 1,
+                OID_hm2PoeMgmtReservedPower: 0,
+                OID_hm2PoeMgmtDeliveredCurrent: 0,
+            }
+        walk_calls = [0]
+        async def mock_walk(columns, engine=None):
+            walk_calls[0] += 1
+            if walk_calls[0] == 1:
+                return {
+                    '1': {
+                        'admin': 1, 'consumption': 0,
+                        'status': 2, 'priority': 3,
+                        'classification': 1, 'name': '',
+                        'class_valid': 0, 'fast_startup': 2,
+                        'power_limit': 0,
+                    },
+                }
+            return {}
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_poe()
+        self.assertIsNone(result['ports']['1/1']['classification'])
+
+    # --- set_poe ---
+
+    def test_set_poe_global_enable(self):
+        """set_poe(enabled=True) sends correct SNMP OID."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set):
+            self.snmp.set_poe(enabled=True)
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2PoeMgmtAdminStatus, set_calls[0][0])
+
+    def test_set_poe_per_port_disable(self):
+        """set_poe per-port disable sends correct OIDs."""
+        set_calls = []
+        async def mock_set(*pairs):
+            for oid, val in pairs:
+                set_calls.append((oid, val))
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2'}
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            self.snmp.set_poe(interface='1/1', enabled=False)
+        self.assertEqual(len(set_calls), 1)
+        self.assertIn(OID_hm2PoeMgmtPortAdminEnable, set_calls[0][0])
+
+    def test_set_poe_invalid_priority(self):
+        """set_poe raises ValueError for invalid priority."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        with patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            with self.assertRaises(ValueError):
+                self.snmp.set_poe(
+                    interface='1/1', priority='invalid')
+
+
+    # --- get_remote_auth ---
+
+    def test_get_remote_auth_all_disabled(self):
+        """get_remote_auth factory defaults — nothing configured."""
+        async def mock_scalar(*oids):
+            return {OID_hm2LdapClientAdminState: 2}
+        async def mock_walk(columns, engine=None):
+            return {}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_remote_auth()
+        self.assertFalse(result['radius']['enabled'])
+        self.assertFalse(result['tacacs']['enabled'])
+        self.assertFalse(result['ldap']['enabled'])
+
+    def test_get_remote_auth_radius_active(self):
+        """get_remote_auth with one active RADIUS server."""
+        async def mock_scalar(*oids):
+            return {OID_hm2LdapClientAdminState: 2}
+        walk_calls = [0]
+        async def mock_walk(columns, engine=None):
+            walk_calls[0] += 1
+            if walk_calls[0] == 1:
+                # RADIUS — one active server
+                return {'1': {'row_status': 1}}
+            return {}  # TACACS+ — empty
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_remote_auth()
+        self.assertTrue(result['radius']['enabled'])
+        self.assertFalse(result['tacacs']['enabled'])
+        self.assertFalse(result['ldap']['enabled'])
+
+    def test_get_remote_auth_ldap_enabled(self):
+        """get_remote_auth with LDAP globally enabled."""
+        async def mock_scalar(*oids):
+            return {OID_hm2LdapClientAdminState: 1}
+        async def mock_walk(columns, engine=None):
+            return {}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_remote_auth()
+        self.assertFalse(result['radius']['enabled'])
+        self.assertFalse(result['tacacs']['enabled'])
+        self.assertTrue(result['ldap']['enabled'])
+
+    def test_get_remote_auth_tacacs_active(self):
+        """get_remote_auth with one active TACACS+ server."""
+        async def mock_scalar(*oids):
+            return {OID_hm2LdapClientAdminState: 2}
+        walk_calls = [0]
+        async def mock_walk(columns, engine=None):
+            walk_calls[0] += 1
+            if walk_calls[0] == 1:
+                return {}  # RADIUS — empty
+            return {'1.4.10.0.0.1': {'row_status': 1}}  # TACACS+ active
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk):
+            result = self.snmp.get_remote_auth()
+        self.assertFalse(result['radius']['enabled'])
+        self.assertTrue(result['tacacs']['enabled'])
+        self.assertFalse(result['ldap']['enabled'])
+
+
+    # --- get_users ---
+
+    def test_get_users_single_admin(self):
+        """get_users with single admin user."""
+        async def mock_walk(columns, engine=None):
+            return {
+                '.97.100.109.105.110': {
+                    'role': 15, 'locked': 2,
+                    'policy_check': 2, 'snmp_auth': 1,
+                    'snmp_enc': 1, 'row_status': 1,
+                },
+            }
+        with patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk):
+            result = self.snmp.get_users()
+        self.assertEqual(len(result), 1)
+        u = result[0]
+        self.assertEqual(u['name'], 'admin')
+        self.assertEqual(u['role'], 'administrator')
+        self.assertFalse(u['locked'])
+        self.assertFalse(u['policy_check'])
+        self.assertEqual(u['snmp_auth'], 'md5')
+        self.assertEqual(u['snmp_enc'], 'des')
+        self.assertTrue(u['active'])
+
+    def test_get_users_multiple(self):
+        """get_users with multiple users."""
+        async def mock_walk(columns, engine=None):
+            return {
+                '.97.100.109.105.110': {
+                    'role': 15, 'locked': 2, 'policy_check': 2,
+                    'snmp_auth': 2, 'snmp_enc': 2, 'row_status': 1,
+                },
+                '.111.112.101.114.97.116.111.114': {
+                    'role': 13, 'locked': 2, 'policy_check': 1,
+                    'snmp_auth': 1, 'snmp_enc': 0, 'row_status': 2,
+                },
+            }
+        with patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk):
+            result = self.snmp.get_users()
+        self.assertEqual(len(result), 2)
+        names = {u['name'] for u in result}
+        self.assertIn('admin', names)
+        self.assertIn('operator', names)
+        oper = next(u for u in result if u['name'] == 'operator')
+        self.assertEqual(oper['role'], 'operator')
+        self.assertTrue(oper['policy_check'])
+        self.assertEqual(oper['snmp_enc'], 'none')
+        self.assertFalse(oper['active'])
+
+    def test_set_user_create_new(self):
+        """set_user creates new user via SNMP with 3-step sequence."""
+        async def mock_walk(columns, engine=None):
+            return {}  # No existing users
+        async def mock_set(*pairs):
+            pass
+        with patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as mock_s:
+            self.snmp.set_user('newuser', password='Test1234!',
+                               role='operator')
+        calls = mock_s.call_args_list
+        # Step 1: createAndWait
+        self.assertEqual(calls[0][0][0][1].hasValue(), True)
+        # Step 2: password
+        self.assertEqual(len(calls[1][0]), 1)
+        # Step 3: activate + role
+        self.assertEqual(len(calls), 3)
+
+    def test_set_user_requires_password_for_new(self):
+        """set_user raises ValueError for new user without password."""
+        async def mock_walk(columns, engine=None):
+            return {}
+        with patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk):
+            with self.assertRaises(ValueError):
+                self.snmp.set_user('newuser', role='guest')
+
+    def test_set_user_update_existing(self):
+        """set_user updates existing user (single SET, no create)."""
+        async def mock_walk(columns, engine=None):
+            return {
+                '.97.100.109.105.110': {
+                    'role': 15, 'locked': 2, 'policy_check': 2,
+                    'snmp_auth': 1, 'snmp_enc': 1, 'row_status': 1,
+                },
+            }
+        async def mock_set(*pairs):
+            pass
+        with patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as mock_s:
+            self.snmp.set_user('admin', role='operator')
+        # Update = single SET call (no createAndWait sequence)
+        self.assertEqual(len(mock_s.call_args_list), 1)
+
+    def test_set_user_invalid_role(self):
+        """set_user raises ValueError for invalid role."""
+        async def mock_walk(columns, engine=None):
+            return {
+                '.97.100.109.105.110': {'row_status': 1},
+            }
+        with patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk):
+            with self.assertRaises(ValueError):
+                self.snmp.set_user('admin', role='superadmin')
+
+    def test_delete_user(self):
+        """delete_user sends destroy(6) via SNMP."""
+        async def mock_set(*pairs):
+            pass
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as mock_s:
+            self.snmp.delete_user('testuser')
+        call_args = mock_s.call_args[0]
+        self.assertIn('.9.', call_args[0][0])  # status column
+        self.assertEqual(int(call_args[0][1]), 6)  # destroy
+
+
+class TestSNMPBitsCodec(unittest.TestCase):
+    """Test SNMP BITS OctetString decode/encode."""
+
+    def test_decode_bits_snmp_bytes(self):
+        """Decode raw bytes to algorithm names."""
+        # Bit 2 = 0x20
+        result = _decode_bits_snmp(b'\x20', _TLS_VERSIONS)
+        self.assertEqual(result, ['tlsv1.2'])
+
+    def test_decode_bits_snmp_octetstring(self):
+        """Decode pysnmp-like OctetString."""
+        class FakeOctet:
+            def __bytes__(self):
+                return b'\xd8'  # bits 0,1,3,4
+        result = _decode_bits_snmp(FakeOctet(), _SSH_HMAC)
+        self.assertEqual(result, [
+            'hmac-sha1', 'hmac-sha2-256',
+            'hmac-sha1-etm@openssh.com',
+            'hmac-sha2-256-etm@openssh.com',
+        ])
+
+    def test_decode_bits_snmp_empty(self):
+        self.assertEqual(_decode_bits_snmp(b'', _TLS_VERSIONS), [])
+        self.assertEqual(_decode_bits_snmp(None, _TLS_VERSIONS), [])
+
+    def test_encode_bits_snmp_roundtrip(self):
+        """Encode then decode gives same list."""
+        names = ['hmac-sha2-256', 'hmac-sha2-256-etm@openssh.com']
+        encoded = _encode_bits_snmp(names, _SSH_HMAC)
+        decoded = _decode_bits_snmp(encoded, _SSH_HMAC)
+        self.assertEqual(decoded, names)
+
+
+class TestSNMPTrapDestCRUD(unittest.TestCase):
+    """Test SNMP add/delete SNMP trap destination."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS.__new__(SNMPHIOS)
+        self.snmp.hostname = '198.51.100.1'
+        self.snmp.port = 161
+        self.snmp.username = 'admin'
+        self.snmp.password = 'private'
+        self.snmp._auth_proto = 'sha'
+        self.snmp._priv_proto = 'aes128'
+        self.snmp._context_name = ''
+        self.snmp.timeout = 10
+
+    def test_add_snmp_trap_dest_v3(self):
+        """add_snmp_trap_dest creates params and addr entries via SNMP."""
+        async def mock_set(*pairs):
+            pass
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as mock_s:
+            self.snmp.add_snmp_trap_dest(
+                'nms1', '192.168.1.100', port=162,
+                security_model='v3', security_name='admin',
+                security_level='authpriv')
+        # 6 SET calls: params create/set/activate + addr create/set/activate
+        self.assertEqual(len(mock_s.call_args_list), 6)
+
+    def test_add_snmp_trap_dest_v1_forces_noauth(self):
+        """v1 security_level forced to noauth regardless of input."""
+        set_calls = []
+        async def mock_set(*pairs):
+            set_calls.append(pairs)
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set):
+            self.snmp.add_snmp_trap_dest(
+                'trap1', '10.0.0.1', security_model='v1',
+                security_name='public', security_level='authpriv')
+        # Params step 2 (index 1): security_level should be noauth(1)
+        params_set = set_calls[1]
+        # Find the security level OID value
+        level_vals = [int(v) for oid, v in params_set
+                      if '.5.' in str(oid)]  # secLevel column
+        self.assertIn(1, level_vals)  # 1 = noauth
+
+    def test_add_snmp_trap_dest_invalid_model(self):
+        """Raises ValueError for invalid security_model."""
+        with self.assertRaises(ValueError):
+            self.snmp.add_snmp_trap_dest(
+                'bad', '10.0.0.1', security_model='v4')
+
+    def test_delete_snmp_trap_dest(self):
+        """delete_snmp_trap_dest destroys both addr and params."""
+        async def mock_set(*pairs):
+            pass
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as mock_s:
+            self.snmp.delete_snmp_trap_dest('nms1')
+        self.assertEqual(len(mock_s.call_args_list), 2)
+
+    def test_decode_taddress_snmp_bytes(self):
+        """_decode_taddress_snmp handles raw bytes."""
+        result = SNMPHIOS._decode_taddress_snmp(
+            b'\xc0\xa8\x01\x64\x00\xa2')
+        self.assertEqual(result, '192.168.1.100:162')
+
+    def test_decode_taddress_snmp_octetstring(self):
+        """_decode_taddress_snmp handles pysnmp OctetString."""
+        class FakeOctetString:
+            def __bytes__(self):
+                return b'\x0a\x00\x00\x01\x00\xa2'
+            def __str__(self):
+                return 'garbage'
+        result = SNMPHIOS._decode_taddress_snmp(FakeOctetString())
+        self.assertEqual(result, '10.0.0.1:162')
+
+    def test_get_trap_dest_v1_normalises_level(self):
+        """Getter normalises security_level to noauth for v1/v2c."""
+        # Mock OctetString that behaves like pysnmp's:
+        # str() gives decoded text, bytes() gives raw bytes
+        class FakeStr:
+            def __init__(self, s):
+                self._s = s
+            def __str__(self):
+                return self._s
+
+        class FakeTAddr:
+            def __bytes__(self):
+                return b'\x0a\x00\x00\x01\x00\xa2'
+
+        # Suffix: IMPLIED string = ASCII codes, no length prefix
+        # nms1 = 110.109.115.49
+        suffix = '110.109.115.49'
+        async def mock_walk(columns, engine=None):
+            if 'model' in columns:
+                # params table
+                return {suffix: {
+                    'model': 1, 'sec_name': FakeStr('pub'),
+                    'sec_level': 3}}
+            else:
+                # addr table
+                return {suffix: {
+                    'taddr': FakeTAddr(),
+                    'params': FakeStr('nms1')}}
+        with patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk):
+            import asyncio
+            from pysnmp.hlapi.v3arch.asyncio import SnmpEngine
+            result = asyncio.run(
+                self.snmp._get_trap_dests_async(SnmpEngine()))
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['security_model'], 'v1')
+        self.assertEqual(result[0]['security_level'], 'noauth')
+
+
+class TestSNMPPortSecurity(unittest.TestCase):
+    """Test SNMP port security getter/setter/CRUD."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS('192.168.1.254', 'admin', 'private', 10)
+        self.snmp._connected = True
+
+    # --- _parse_portsec_macs / _parse_portsec_ips ---
+
+    def test_parse_portsec_macs(self):
+        result = self.snmp._parse_portsec_macs(
+            '1 aa:bb:cc:dd:ee:ff,2 11:22:33:44:55:66')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {'vlan': 1, 'mac': 'aa:bb:cc:dd:ee:ff'})
+        self.assertEqual(result[1], {'vlan': 2, 'mac': '11:22:33:44:55:66'})
+
+    def test_parse_portsec_macs_empty(self):
+        self.assertEqual(self.snmp._parse_portsec_macs(''), [])
+        self.assertEqual(self.snmp._parse_portsec_macs(None), [])
+
+    def test_parse_portsec_ips(self):
+        result = self.snmp._parse_portsec_ips(
+            '1 192.168.1.1,2 10.0.0.1')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {'vlan': 1, 'ip': '192.168.1.1'})
+        self.assertEqual(result[1], {'vlan': 2, 'ip': '10.0.0.1'})
+
+    def test_parse_portsec_ips_empty(self):
+        self.assertEqual(self.snmp._parse_portsec_ips(''), [])
+
+    # --- get_port_security ---
+
+    def test_get_port_security_all(self):
+        """get_port_security() returns global + per-port data."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2AgentGlobalPortSecurityMode: 1,
+                OID_hm2AgentPortSecurityOperationMode: 1,
+            }
+        async def mock_walk(columns, engine=None):
+            return {
+                '.1': {
+                    'mode': 1, 'dyn_limit': 10, 'static_limit': 5,
+                    'auto_disable': 1, 'trap_mode': 2, 'trap_freq': 0,
+                    'dyn_count': 3, 'static_count': 1,
+                    'static_ip_count': 0,
+                    'last_mac': '', 'static_macs': '1 aa:bb:cc:dd:ee:ff',
+                    'static_ips': '',
+                },
+            }
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_port_security()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['mode'], 'mac-based')
+        self.assertIn('1/1', result['ports'])
+        port = result['ports']['1/1']
+        self.assertTrue(port['enabled'])
+        self.assertEqual(port['dynamic_limit'], 10)
+        self.assertEqual(port['static_limit'], 5)
+        self.assertEqual(port['dynamic_count'], 3)
+        self.assertEqual(port['static_count'], 1)
+        self.assertTrue(port['auto_disable'])
+        self.assertFalse(port['violation_trap_mode'])
+        self.assertEqual(len(port['static_macs']), 1)
+
+    def test_get_port_security_disabled(self):
+        """get_port_security() with global disabled."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2AgentGlobalPortSecurityMode: 2,
+                OID_hm2AgentPortSecurityOperationMode: 1,
+            }
+        async def mock_walk(columns, engine=None):
+            return {}
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_port_security()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['ports'], {})
+
+    def test_get_port_security_ip_mode(self):
+        """get_port_security() with ip-based mode."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2AgentGlobalPortSecurityMode: 1,
+                OID_hm2AgentPortSecurityOperationMode: 2,
+            }
+        async def mock_walk(columns, engine=None):
+            return {}
+        async def mock_ifmap(engine=None):
+            return {}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_port_security()
+        self.assertEqual(result['mode'], 'ip-based')
+
+    def test_get_port_security_filter_interface(self):
+        """get_port_security(interface='1/2') filters to that port."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2AgentGlobalPortSecurityMode: 1,
+                OID_hm2AgentPortSecurityOperationMode: 1,
+            }
+        async def mock_walk(columns, engine=None):
+            return {
+                '.1': {
+                    'mode': 2, 'dyn_limit': 600, 'static_limit': 64,
+                    'auto_disable': 1, 'trap_mode': 2, 'trap_freq': 0,
+                    'dyn_count': 0, 'static_count': 0,
+                    'static_ip_count': 0, 'last_mac': '',
+                    'static_macs': '', 'static_ips': '',
+                },
+                '.2': {
+                    'mode': 1, 'dyn_limit': 200, 'static_limit': 32,
+                    'auto_disable': 1, 'trap_mode': 2, 'trap_freq': 0,
+                    'dyn_count': 0, 'static_count': 0,
+                    'static_ip_count': 0, 'last_mac': '',
+                    'static_macs': '', 'static_ips': '',
+                },
+            }
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2'}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_port_security(interface='1/2')
+        self.assertEqual(list(result['ports'].keys()), ['1/2'])
+        self.assertTrue(result['ports']['1/2']['enabled'])
+
+    def test_get_port_security_skips_cpu_vlan(self):
+        """get_port_security() skips cpu/vlan pseudo-interfaces."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2AgentGlobalPortSecurityMode: 1,
+                OID_hm2AgentPortSecurityOperationMode: 1,
+            }
+        async def mock_walk(columns, engine=None):
+            return {
+                '.1': {
+                    'mode': 2, 'dyn_limit': 600, 'static_limit': 64,
+                    'auto_disable': 1, 'trap_mode': 2, 'trap_freq': 0,
+                    'dyn_count': 0, 'static_count': 0,
+                    'static_ip_count': 0, 'last_mac': '',
+                    'static_macs': '', 'static_ips': '',
+                },
+                '.100': {
+                    'mode': 2, 'dyn_limit': 600, 'static_limit': 64,
+                    'auto_disable': 1, 'trap_mode': 2, 'trap_freq': 0,
+                    'dyn_count': 0, 'static_count': 0,
+                    'static_ip_count': 0, 'last_mac': '',
+                    'static_macs': '', 'static_ips': '',
+                },
+            }
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '100': 'cpu0'}
+        with patch.object(self.snmp, '_get_scalar', side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns', side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map', side_effect=mock_ifmap):
+            result = self.snmp.get_port_security()
+        self.assertIn('1/1', result['ports'])
+        self.assertNotIn('cpu0', result['ports'])
+
+    # --- set_port_security ---
+
+    def test_set_port_security_global_enable(self):
+        """set_port_security(enabled=True) sets global scalar."""
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_set_oids', side_effect=mock_set) as m:
+            self.snmp.set_port_security(enabled=True, mode='ip-based')
+        self.assertEqual(m.call_count, 1)
+        args = m.call_args[0]
+        oids_set = [a[0] for a in args]
+        self.assertTrue(any(OID_hm2AgentGlobalPortSecurityMode in o
+                            for o in oids_set))
+        self.assertTrue(any(OID_hm2AgentPortSecurityOperationMode in o
+                            for o in oids_set))
+
+    def test_set_port_security_invalid_mode(self):
+        """set_port_security(mode='invalid') raises ValueError."""
+        with self.assertRaises(ValueError):
+            self.snmp.set_port_security(mode='invalid')
+
+    def test_set_port_security_per_port(self):
+        """set_port_security('1/1', dynamic_limit=10) per-port."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.set_port_security('1/1', dynamic_limit=10)
+        self.assertEqual(m.call_count, 1)
+        oid_str = m.call_args[0][0][0]
+        self.assertIn(OID_hm2AgentPortSecurityDynamicLimit, oid_str)
+        self.assertIn('.1', oid_str)  # ifIndex 1
+
+    def test_set_port_security_unknown_interface(self):
+        """set_port_security with unknown interface raises ValueError."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            with self.assertRaises(ValueError):
+                self.snmp.set_port_security('9/9', enabled=True)
+
+    # --- add_port_security ---
+
+    def test_add_port_security_mac(self):
+        """add_port_security sends OctetString with 'VLAN MAC'."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.add_port_security('1/1', vlan=1,
+                                        mac='aa:bb:cc:dd:ee:ff')
+        self.assertEqual(m.call_count, 1)
+        oid_str = m.call_args[0][0][0]
+        self.assertIn(OID_hm2AgentPortSecurityMACAddressAdd, oid_str)
+        val = m.call_args[0][0][1]
+        self.assertEqual(bytes(val), b'1 aa:bb:cc:dd:ee:ff')
+
+    def test_add_port_security_ip(self):
+        """add_port_security with IP entry."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.add_port_security('1/1', vlan=5, ip='10.0.0.1')
+        oid_str = m.call_args[0][0][0]
+        self.assertIn(OID_hm2AgentPortSecurityIPAddressAdd, oid_str)
+        val = m.call_args[0][0][1]
+        self.assertEqual(bytes(val), b'5 10.0.0.1')
+
+    def test_add_port_security_bulk(self):
+        """Bulk add sends one _set_oids per entry."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.add_port_security('1/1', entries=[
+                {'vlan': 1, 'mac': 'aa:bb:cc:dd:ee:ff'},
+                {'vlan': 2, 'mac': '11:22:33:44:55:66'},
+            ])
+        self.assertEqual(m.call_count, 2)
+
+    def test_add_port_security_no_args(self):
+        """add_port_security with no mac/ip/entries raises ValueError."""
+        with self.assertRaises(ValueError):
+            self.snmp.add_port_security('1/1')
+
+    def test_add_port_security_unknown_interface(self):
+        """add_port_security with unknown interface raises ValueError."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            with self.assertRaises(ValueError):
+                self.snmp.add_port_security('9/9', vlan=1,
+                                            mac='aa:bb:cc:dd:ee:ff')
+
+    # --- delete_port_security ---
+
+    def test_delete_port_security_mac(self):
+        """delete_port_security sends MACAddressRemove OID."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.delete_port_security('1/1', vlan=1,
+                                           mac='aa:bb:cc:dd:ee:ff')
+        oid_str = m.call_args[0][0][0]
+        self.assertIn(OID_hm2AgentPortSecurityMACAddressRemove, oid_str)
+
+    def test_delete_port_security_ip(self):
+        """delete_port_security sends IPAddressRemove OID."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.delete_port_security('1/1', vlan=1,
+                                           ip='10.0.0.1')
+        oid_str = m.call_args[0][0][0]
+        self.assertIn(OID_hm2AgentPortSecurityIPAddressRemove, oid_str)
+
+    def test_delete_port_security_no_args(self):
+        """delete_port_security with no mac/ip/entries raises ValueError."""
+        with self.assertRaises(ValueError):
+            self.snmp.delete_port_security('1/1')
+
+
+class TestSNMPDhcpSnooping(unittest.TestCase):
+    """Tests for get_dhcp_snooping / set_dhcp_snooping via SNMP."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS.__new__(SNMPHIOS)
+        self.snmp._target = None
+        self.snmp._auth = None
+        self.snmp._context = None
+
+    def test_get_dhcp_snooping_all(self):
+        """get_dhcp_snooping() returns global + vlans + ports."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2AgentDhcpSnoopingAdminMode: 1,
+                OID_hm2AgentDhcpSnoopingVerifyMac: 2,
+            }
+
+        async def mock_walk(columns, engine=None):
+            # Determine table by checking columns
+            if 'trust' in columns:
+                # Per-port table
+                return {
+                    '.1': {
+                        'trust': 1, 'log': 2, 'rate_limit': 15,
+                        'burst_interval': 1, 'auto_disable': 1,
+                    },
+                    '.2': {
+                        'trust': 2, 'log': 1, 'rate_limit': -1,
+                        'burst_interval': 5, 'auto_disable': 2,
+                    },
+                }
+            else:
+                # VLAN table (suffix IS the VID)
+                return {
+                    '.1': {'enable': 1},
+                    '.100': {'enable': 2},
+                }
+
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2'}
+
+        with patch.object(self.snmp, '_get_scalar',
+                          side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            result = self.snmp.get_dhcp_snooping()
+
+        self.assertTrue(result['enabled'])
+        self.assertFalse(result['verify_mac'])
+        self.assertEqual(len(result['vlans']), 2)
+        self.assertTrue(result['vlans'][1]['enabled'])
+        self.assertFalse(result['vlans'][100]['enabled'])
+        self.assertEqual(len(result['ports']), 2)
+        p1 = result['ports']['1/1']
+        self.assertTrue(p1['trusted'])
+        self.assertFalse(p1['log'])
+        self.assertEqual(p1['rate_limit'], 15)
+        self.assertTrue(p1['auto_disable'])
+        p2 = result['ports']['1/2']
+        self.assertFalse(p2['trusted'])
+        self.assertTrue(p2['log'])
+        self.assertEqual(p2['rate_limit'], -1)
+        self.assertFalse(p2['auto_disable'])
+
+    def test_get_dhcp_snooping_single_interface(self):
+        """get_dhcp_snooping('1/1') filters to one port."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2AgentDhcpSnoopingAdminMode: 2,
+                OID_hm2AgentDhcpSnoopingVerifyMac: 2,
+            }
+
+        async def mock_walk(columns, engine=None):
+            if 'trust' in columns:
+                return {
+                    '.1': {'trust': 1, 'log': 2, 'rate_limit': -1,
+                           'burst_interval': 1, 'auto_disable': 1},
+                    '.2': {'trust': 2, 'log': 2, 'rate_limit': -1,
+                           'burst_interval': 1, 'auto_disable': 1},
+                }
+            return {}
+
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2'}
+
+        with patch.object(self.snmp, '_get_scalar',
+                          side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            result = self.snmp.get_dhcp_snooping('1/1')
+
+        self.assertEqual(len(result['ports']), 1)
+        self.assertIn('1/1', result['ports'])
+
+    def test_get_dhcp_snooping_skips_cpu_vlan(self):
+        """CPU and VLAN interfaces are excluded."""
+        async def mock_scalar(*oids):
+            return {OID_hm2AgentDhcpSnoopingAdminMode: 2,
+                    OID_hm2AgentDhcpSnoopingVerifyMac: 2}
+
+        async def mock_walk(columns, engine=None):
+            if 'trust' in columns:
+                return {
+                    '.100': {'trust': 2, 'log': 2, 'rate_limit': -1,
+                             'burst_interval': 1, 'auto_disable': 1},
+                    '.200': {'trust': 2, 'log': 2, 'rate_limit': -1,
+                             'burst_interval': 1, 'auto_disable': 1},
+                }
+            return {}
+
+        async def mock_ifmap(engine=None):
+            return {'100': 'cpu0', '200': 'vlan1'}
+
+        with patch.object(self.snmp, '_get_scalar',
+                          side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            result = self.snmp.get_dhcp_snooping()
+
+        self.assertEqual(len(result['ports']), 0)
+
+    def test_set_dhcp_snooping_global(self):
+        """set_dhcp_snooping(enabled=True) sets global admin mode."""
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.set_dhcp_snooping(enabled=True)
+        oid, val = m.call_args[0][0]
+        self.assertIn(OID_hm2AgentDhcpSnoopingAdminMode, oid)
+        self.assertEqual(int(val), 1)
+
+    def test_set_dhcp_snooping_verify_mac(self):
+        """set_dhcp_snooping(verify_mac=False) disables MAC verify."""
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.set_dhcp_snooping(verify_mac=False)
+        oid, val = m.call_args[0][0]
+        self.assertIn(OID_hm2AgentDhcpSnoopingVerifyMac, oid)
+        self.assertEqual(int(val), 2)
+
+    def test_set_dhcp_snooping_vlan(self):
+        """set_dhcp_snooping(vlan=1, vlan_enabled=True)."""
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.set_dhcp_snooping(vlan=1, vlan_enabled=True)
+        oid, val = m.call_args[0][0]
+        self.assertIn(OID_hm2AgentDhcpSnoopingVlanEnable, oid)
+        self.assertTrue(oid.endswith('.1'))
+        self.assertEqual(int(val), 1)
+
+    def test_set_dhcp_snooping_port(self):
+        """set_dhcp_snooping('1/1', trusted=True) sets per-port."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.set_dhcp_snooping('1/1', trusted=True,
+                                        rate_limit=15)
+        calls = m.call_args[0]
+        oids_set = [c[0] for c in calls]
+        self.assertTrue(any(OID_hm2AgentDhcpSnoopingIfTrustEnable in o
+                            for o in oids_set))
+        self.assertTrue(any(OID_hm2AgentDhcpSnoopingIfRateLimit in o
+                            for o in oids_set))
+
+    def test_set_dhcp_snooping_multi_port(self):
+        """set_dhcp_snooping(['1/1', '1/2'], trusted=True)."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2'}
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.set_dhcp_snooping(['1/1', '1/2'], trusted=True)
+        # Should set trust OID for both ports
+        calls = m.call_args[0]
+        trust_oids = [c[0] for c in calls
+                      if OID_hm2AgentDhcpSnoopingIfTrustEnable in c[0]]
+        self.assertEqual(len(trust_oids), 2)
+
+    def test_set_dhcp_snooping_unknown_interface(self):
+        """set_dhcp_snooping('9/9', ...) raises ValueError."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            with self.assertRaises(ValueError):
+                self.snmp.set_dhcp_snooping('9/9', trusted=True)
+
+
+class TestSNMPArpInspection(unittest.TestCase):
+    """Tests for get_arp_inspection / set_arp_inspection via SNMP."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS.__new__(SNMPHIOS)
+        self.snmp._target = None
+        self.snmp._auth = None
+        self.snmp._context = None
+
+    def test_get_arp_inspection_all(self):
+        """get_arp_inspection() returns globals + vlans + ports."""
+        async def mock_scalar(*oids):
+            return {
+                OID_hm2AgentDaiSrcMacValidate: 1,
+                OID_hm2AgentDaiDstMacValidate: 2,
+                OID_hm2AgentDaiIPValidate: 1,
+            }
+
+        async def mock_walk(columns, engine=None):
+            if 'trust' in columns:
+                return {
+                    '.1': {'trust': 1, 'rate_limit': 15,
+                           'burst_interval': 1, 'auto_disable': 1},
+                    '.2': {'trust': 2, 'rate_limit': -1,
+                           'burst_interval': 5, 'auto_disable': 2},
+                }
+            else:
+                return {
+                    '.1': {'enable': 1, 'log': 2, 'acl_name': '',
+                           'acl_static': 2, 'binding_check': 1},
+                    '.100': {'enable': 2, 'log': 1, 'acl_name': '',
+                             'acl_static': 2, 'binding_check': 2},
+                }
+
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2'}
+
+        with patch.object(self.snmp, '_get_scalar',
+                          side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            result = self.snmp.get_arp_inspection()
+
+        self.assertTrue(result['validate_src_mac'])
+        self.assertFalse(result['validate_dst_mac'])
+        self.assertTrue(result['validate_ip'])
+        self.assertEqual(len(result['vlans']), 2)
+        self.assertTrue(result['vlans'][1]['enabled'])
+        self.assertTrue(result['vlans'][1]['binding_check'])
+        self.assertFalse(result['vlans'][100]['enabled'])
+        self.assertEqual(len(result['ports']), 2)
+        self.assertTrue(result['ports']['1/1']['trusted'])
+        self.assertFalse(result['ports']['1/2']['trusted'])
+
+    def test_get_arp_inspection_single_interface(self):
+        """get_arp_inspection('1/1') filters to one port."""
+        async def mock_scalar(*oids):
+            return {OID_hm2AgentDaiSrcMacValidate: 2,
+                    OID_hm2AgentDaiDstMacValidate: 2,
+                    OID_hm2AgentDaiIPValidate: 2}
+
+        async def mock_walk(columns, engine=None):
+            if 'trust' in columns:
+                return {
+                    '.1': {'trust': 1, 'rate_limit': -1,
+                           'burst_interval': 1, 'auto_disable': 1},
+                    '.2': {'trust': 2, 'rate_limit': -1,
+                           'burst_interval': 1, 'auto_disable': 1},
+                }
+            return {}
+
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2'}
+
+        with patch.object(self.snmp, '_get_scalar',
+                          side_effect=mock_scalar), \
+             patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            result = self.snmp.get_arp_inspection('1/1')
+
+        self.assertEqual(len(result['ports']), 1)
+        self.assertIn('1/1', result['ports'])
+
+    def test_set_arp_inspection_global(self):
+        """set_arp_inspection(validate_src_mac=True)."""
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.set_arp_inspection(validate_src_mac=True)
+        oid, val = m.call_args[0][0]
+        self.assertIn(OID_hm2AgentDaiSrcMacValidate, oid)
+        self.assertEqual(int(val), 1)
+
+    def test_set_arp_inspection_vlan(self):
+        """set_arp_inspection(vlan=1, vlan_enabled=True)."""
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.set_arp_inspection(vlan=1, vlan_enabled=True)
+        oid, val = m.call_args[0][0]
+        self.assertIn(OID_hm2AgentDaiVlanDynArpInspEnable, oid)
+        self.assertEqual(int(val), 1)
+
+    def test_set_arp_inspection_port(self):
+        """set_arp_inspection('1/1', trusted=True)."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        async def mock_set(*args):
+            pass
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_set_oids',
+                          side_effect=mock_set) as m:
+            self.snmp.set_arp_inspection('1/1', trusted=True,
+                                         rate_limit=15)
+        calls = m.call_args[0]
+        oids_set = [c[0] for c in calls]
+        self.assertTrue(any(OID_hm2AgentDaiIfTrustEnable in o
+                            for o in oids_set))
+        self.assertTrue(any(OID_hm2AgentDaiIfRateLimit in o
+                            for o in oids_set))
+
+    def test_set_arp_inspection_unknown_interface(self):
+        """set_arp_inspection('9/9', ...) raises ValueError."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            with self.assertRaises(ValueError):
+                self.snmp.set_arp_inspection('9/9', trusted=True)
+
+
+class TestSNMPIpSourceGuard(unittest.TestCase):
+    """Tests for get_ip_source_guard / set_ip_source_guard via SNMP."""
+
+    def setUp(self):
+        self.snmp = SNMPHIOS.__new__(SNMPHIOS)
+        self.snmp._target = None
+        self.snmp._auth = None
+        self.snmp._context = None
+
+    def test_get_ip_source_guard_all(self):
+        """get_ip_source_guard() returns ports + bindings."""
+        call_count = [0]
+
+        async def mock_walk(columns, engine=None):
+            call_count[0] += 1
+            if 'verify_source' in columns:
+                return {
+                    '.1': {'verify_source': 1, 'port_security': 1},
+                    '.2': {'verify_source': 2, 'port_security': 2},
+                }
+            else:
+                return {}
+
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2'}
+
+        with patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            result = self.snmp.get_ip_source_guard()
+
+        self.assertEqual(len(result['ports']), 2)
+        self.assertTrue(result['ports']['1/1']['verify_source'])
+        self.assertTrue(result['ports']['1/1']['port_security'])
+        self.assertFalse(result['ports']['1/2']['verify_source'])
+        self.assertEqual(result['static_bindings'], [])
+        self.assertEqual(result['dynamic_bindings'], [])
+
+    def test_get_ip_source_guard_single_interface(self):
+        """get_ip_source_guard('1/1') filters to one port."""
+        async def mock_walk(columns, engine=None):
+            if 'verify_source' in columns:
+                return {
+                    '.1': {'verify_source': 1, 'port_security': 2},
+                    '.2': {'verify_source': 2, 'port_security': 2},
+                }
+            return {}
+
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1', '2': '1/2'}
+
+        with patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            result = self.snmp.get_ip_source_guard('1/1')
+
+        self.assertEqual(len(result['ports']), 1)
+        self.assertIn('1/1', result['ports'])
+
+    def test_get_ip_source_guard_skips_cpu(self):
+        """CPU interfaces excluded."""
+        async def mock_walk(columns, engine=None):
+            if 'verify_source' in columns:
+                return {
+                    '.100': {'verify_source': 2, 'port_security': 2},
+                }
+            return {}
+
+        async def mock_ifmap(engine=None):
+            return {'100': 'cpu0'}
+
+        with patch.object(self.snmp, '_walk_columns',
+                          side_effect=mock_walk), \
+             patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            result = self.snmp.get_ip_source_guard()
+
+        self.assertEqual(len(result['ports']), 0)
+
+    def test_set_ip_source_guard_enable(self):
+        """set_ip_source_guard('1/1', verify_source=True)."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap), \
+             patch.object(self.snmp, '_set_oids') as m:
+            m.return_value = None
+            self.snmp.set_ip_source_guard('1/1', verify_source=True)
+            oid, val = m.call_args[0][0]
+            self.assertIn('5.1.1', oid)  # VerifySource column
+            self.assertEqual(int(val), 1)
+
+    def test_set_ip_source_guard_unknown_interface(self):
+        """set_ip_source_guard('9/9', ...) raises ValueError."""
+        async def mock_ifmap(engine=None):
+            return {'1': '1/1'}
+
+        with patch.object(self.snmp, '_build_ifindex_map',
+                          side_effect=mock_ifmap):
+            with self.assertRaises(ValueError):
+                self.snmp.set_ip_source_guard('9/9', verify_source=True)
+
+    def test_set_ip_source_guard_no_interface(self):
+        """set_ip_source_guard(interface=None) is no-op."""
+        self.snmp.set_ip_source_guard()
 
 
 if __name__ == '__main__':

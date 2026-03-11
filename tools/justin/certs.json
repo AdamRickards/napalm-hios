@@ -1,0 +1,19 @@
+{
+  "_source": "Derived from local/reference/62443/certs.yaml",
+  "families": {
+    "BRS":     {"cert": "968/CSP 1040.00/25", "sl_c": 2, "valid_until": "2030-07-17"},
+    "BXS":     {"cert": "968/CSP 1040.00/25", "sl_c": 2, "valid_until": "2030-07-17"},
+    "GRS10x":  {"cert": "968/CSP 1042.00/25", "sl_c": 2, "valid_until": "2030-09-10"},
+    "GRS10x0": {"cert": "968/CSP 1042.00/25", "sl_c": 2, "valid_until": "2030-09-10"},
+    "GRS1042": {"cert": "968/CSP 1042.00/25", "sl_c": 2, "valid_until": "2030-09-10"},
+    "GRS20":   {"cert": "968/CSP 1042.00/25", "sl_c": 2, "valid_until": "2030-09-10"},
+    "RSP":     {"cert": "968/CSP 1056.00/25", "sl_c": 1, "valid_until": "2030-10-29"},
+    "RSPE":    {"cert": "968/CSP 1056.00/25", "sl_c": 1, "valid_until": "2030-10-29"},
+    "OS":      {"cert": "968/CSP 1056.00/25", "sl_c": 1, "valid_until": "2030-10-29"},
+    "MSP":     {"cert": "968/CSP 1057.00/25", "sl_c": 2, "valid_until": "2030-10-29"},
+    "OS3":     {"cert": "968/CSP 1057.00/25", "sl_c": 2, "valid_until": "2030-10-29"},
+    "BXP":     {"cert": "968/CSP 1057.00/25", "sl_c": 2, "valid_until": "2030-10-29"},
+    "EAGLE40": {"cert": "968/CSA 1002.00/22", "sl_c": 1, "valid_until": null, "note": "HiSecOS, ISASecure CSA"},
+    "DRAGON":  {"cert": null, "sl_c": null, "note": "Uncertified (VxWorks, no HiOS 10.x port)"}
+  }
+}

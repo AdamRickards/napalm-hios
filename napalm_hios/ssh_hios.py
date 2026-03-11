@@ -9,6 +9,15 @@ import time
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_int(val, default=0):
+    """Safely convert string to int."""
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
 # Auto-disable reason → category mapping (CLI doesn't show category)
 _AD_REASON_CATEGORY = {
     'link-flap': 'port-monitor', 'crc-error': 'port-monitor',
@@ -16,6 +25,91 @@ _AD_REASON_CATEGORY = {
     'arp-rate': 'network-security', 'bpdu-rate': 'l2-redundancy',
     'port-security': 'network-security', 'overload-detection': 'port-monitor',
     'speed-duplex': 'port-monitor', 'loop-protection': 'l2-redundancy',
+}
+
+# Signal Contact / Device Monitor: CLI mode → MOPS mode name
+_SC_CLI_MODE = {
+    'manual': 'manual', 'monitor': 'monitor',
+    'device-status': 'deviceState',
+    'security-status': 'deviceSecurity',
+    'dev-sec-status': 'deviceStateAndSecurity',
+}
+_SC_CLI_MODE_REV = {v: k for k, v in _SC_CLI_MODE.items()}
+
+# Signal Contact / Device Monitor: CLI display name → dict key
+_SC_CLI_SENSE = {
+    'Link Failure': 'link_failure',
+    'Temperature': 'temperature',
+    'Fan Failure': 'fan',
+    'Module Removal': 'module_removal',
+    'ACA not present': 'envm_removal',
+    'ACA not in sync': 'envm_not_in_sync',
+    'Ring Redundancy': 'ring_redundancy',
+    'Ethernet Loops': 'ethernet_loops',
+    'Humidity': 'humidity',
+    'STP Port Block': 'stp_port_block',
+}
+
+# Dict key → CLI config command suffix (signal-contact + device-status)
+_SENSE_CLI_CMD = {
+    'link_failure': 'link-failure',
+    'temperature': 'temperature',
+    'fan': 'fan-failure',
+    'module_removal': 'module-removal',
+    'envm_removal': 'envm-removal',
+    'envm_not_in_sync': 'envm-not-in-sync',
+    'ring_redundancy': 'ring-redundancy',
+    'ethernet_loops': 'ethernet-loops',
+    'humidity': 'humidity',
+    'stp_port_block': 'stp-blocking',
+}
+
+# Security status: CLI display name → dict key
+_DEVSEC_CLI_SENSE = {
+    'Password default settings unchanged': 'password_change',
+    'Minimum password length less than 8': 'password_min_length',
+    'Password policy settings deactivated': 'password_policy_not_configured',
+    'User password policy check deactivated': 'password_policy_bypass',
+    'Telnet server active': 'telnet_enabled',
+    'HTTP server active': 'http_enabled',
+    'SNMP unencrypted': 'snmp_unsecure',
+    'Access to System Monitor possible': 'sysmon_enabled',
+    'Saving the config on the ENVM possible': 'envm_update_enabled',
+    'Link interrupted on enabled device ports': 'no_link_enabled',
+    'Access with HiDiscovery is possible': 'hidiscovery_enabled',
+    'Loading unencrypted configuration from ENVM': 'envm_config_load_unsecure',
+    'IEC 61850 MMS is enabled': 'iec61850_mms_enabled',
+    'Auto generated HTTPS certificate in use': 'https_cert_warning',
+    'Modbus TCP/IP server active': 'modbus_tcp_enabled',
+    'EtherNet/IP protocol active': 'ethernet_ip_enabled',
+    'PROFINET protocol active': 'profinet_enabled',
+    'PML LLDP Protocol is disabled': 'pml_disabled',
+    'Secure Boot is inactive': 'secure_boot_disabled',
+    'Support Mode is active': 'dev_mode_enabled',
+}
+
+# Dict key → CLI config command suffix for security-status
+_DEVSEC_SENSE_CLI_CMD = {
+    'password_change': 'pwd-change',
+    'password_min_length': 'pwd-min-length',
+    'password_policy_not_configured': 'pwd-str-not-config',
+    'password_policy_bypass': 'bypass-pwd-strength',
+    'telnet_enabled': 'telnet-enabled',
+    'http_enabled': 'http-enabled',
+    'snmp_unsecure': 'snmp-unsecure',
+    'sysmon_enabled': 'sysmon-enabled',
+    'envm_update_enabled': 'extnvm-upd-enabled',
+    'no_link_enabled': 'no-link-enabled',
+    'hidiscovery_enabled': 'hidisc-enabled',
+    'envm_config_load_unsecure': 'extnvm-load-unsecure',
+    'iec61850_mms_enabled': 'iec61850-mms-enabled',
+    'https_cert_warning': 'https-certificate',
+    'modbus_tcp_enabled': 'modbus-tcp-enabled',
+    'ethernet_ip_enabled': 'ethernet-ip-enabled',
+    'profinet_enabled': 'profinet-io-enabled',
+    'pml_disabled': 'pml-disabled',
+    'secure_boot_disabled': 'secure-boot-disabled',
+    'dev_mode_enabled': 'support-mode-enabled',
 }
 
 class SSHHIOS:
@@ -3563,10 +3657,16 @@ class SSHHIOS:
                     'enabled': _parse_enabled(
                         'HTTPS status', https_out),
                     'port': _parse_port('HTTPS', https_out, 443),
+                    'tls_versions': [],
+                    'tls_cipher_suites': [],
                 },
                 'ssh': {
                     'enabled': _parse_enabled(
                         'SSH server status', ssh_out),
+                    'hmac_algorithms': [],
+                    'kex_algorithms': [],
+                    'encryption_algorithms': [],
+                    'host_key_algorithms': [],
                 },
                 'telnet': {
                     'enabled': _parse_enabled(
@@ -3659,8 +3759,14 @@ class SSHHIOS:
                      ethernet_ip=None, opcua=None, modbus=None,
                      unsigned_sw=None, aca_auto_update=None,
                      aca_config_write=None, aca_config_load=None,
-                     mvrp=None, mmrp=None, devsec_monitors=None):
-        """Set service enable/disable via CLI."""
+                     mvrp=None, mmrp=None, devsec_monitors=None,
+                     **kwargs):
+        """Set service enable/disable via CLI.
+
+        Cipher kwargs (tls_versions, tls_cipher_suites, ssh_hmac,
+        ssh_kex, ssh_encryption, ssh_host_key) are silently ignored —
+        no CLI equivalent exists. Use MOPS or SNMP for cipher config.
+        """
         self._config_mode()
         try:
             if http is not None:
@@ -3757,6 +3863,42 @@ class SSHHIOS:
         """Read SNMP configuration via CLI."""
         output = self.cli('show snmp access')['show snmp access']
         d = parse_dot_keys(output)
+
+        # Trap service status
+        trap_service = d.get(
+            'SNMP trap service',
+            d.get('Trap service', 'disabled')
+        ).strip().lower() in ('enable', 'enabled')
+
+        # v3 user auth/enc — parse 'show snmp notification users'
+        v3_users = []
+        try:
+            users_out = self.cli(
+                'show snmp notification users')[
+                'show snmp notification users']
+            v3_users = self._parse_snmp_v3_users(users_out)
+        except Exception:
+            pass
+
+        # Trap destinations — v1/v2c from 'show snmp trap',
+        # v3 from 'show snmp notification hosts'
+        trap_destinations = []
+        try:
+            trap_out = self.cli(
+                'show snmp trap')['show snmp trap']
+            trap_destinations.extend(
+                self._parse_trap_v1v2c(trap_out))
+        except Exception:
+            pass
+        try:
+            hosts_out = self.cli(
+                'show snmp notification hosts')[
+                'show snmp notification hosts']
+            trap_destinations.extend(
+                self._parse_trap_v3(hosts_out))
+        except Exception:
+            pass
+
         return {
             'versions': {
                 'v1': d.get(
@@ -3768,10 +3910,130 @@ class SSHHIOS:
             },
             'port': int(d.get('SNMP port number', '161').strip()),
             'communities': [],
+            'trap_service': trap_service,
+            'v3_users': v3_users,
+            'trap_destinations': trap_destinations,
         }
 
-    def set_snmp_config(self, v1=None, v2=None, v3=None):
-        """Set SNMP version enable/disable via CLI."""
+    def _parse_snmp_v3_users(self, text):
+        """Parse v3 user auth/enc from 'show snmp notification users'."""
+        users = []
+        lines = text.splitlines()
+        past_header = False
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if '---' in stripped:
+                past_header = True
+                continue
+            if not past_header:
+                continue
+            parts = stripped.split()
+            if len(parts) < 3:
+                continue
+            name = parts[0]
+            auth = parts[1].lower() if len(parts) > 1 else ''
+            enc = parts[2].lower() if len(parts) > 2 else 'none'
+            if auth in ('none', '-', ''):
+                auth = ''
+            if enc in ('-',):
+                enc = 'none'
+            users.append({
+                'name': name,
+                'auth_type': auth,
+                'enc_type': enc,
+            })
+        return users
+
+    def _parse_trap_v1v2c(self, text):
+        """Parse v1/v2c trap dests from 'show snmp trap'.
+
+        Output has two sections separated by '---' lines:
+        1. Status/community (after first ---)
+        2. Trap table (after last ---)
+        We want the table section (last ---).
+        """
+        destinations = []
+        lines = text.splitlines()
+        # Find last separator line index
+        last_sep = -1
+        for i, line in enumerate(lines):
+            if '---' in line:
+                last_sep = i
+        if last_sep < 0:
+            return destinations
+        for line in lines[last_sep + 1:]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            parts = stripped.split()
+            if len(parts) < 2:
+                continue
+            # Format: name  ip:port  [x]
+            name = parts[0]
+            address = parts[1]
+            destinations.append({
+                'name': name,
+                'address': address,
+                'security_model': 'v1',
+                'security_name': '',
+                'security_level': 'noauth',
+            })
+        return destinations
+
+    def _parse_trap_v3(self, text):
+        """Parse v3 trap dests from 'show snmp notification hosts'.
+
+        Two-line format per entry:
+          Line 1: name  ip:port  status
+          Line 2: user  secLevel  type
+        """
+        destinations = []
+        lines = text.splitlines()
+        past_header = False
+        data_lines = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if '---' in stripped:
+                past_header = True
+                continue
+            if not past_header:
+                continue
+            data_lines.append(stripped)
+        # Process in pairs
+        for i in range(0, len(data_lines) - 1, 2):
+            line1 = data_lines[i].split()
+            line2 = data_lines[i + 1].split()
+            if len(line1) < 2 or len(line2) < 2:
+                continue
+            name = line1[0]
+            address = line1[1]
+            sec_name = line2[0]
+            sec_level = line2[1].lower()
+            # Normalise HiOS level names
+            level_map = {
+                'noauthnopriv': 'noauth',
+                'authnopriv': 'auth',
+                'authpriv': 'authpriv',
+            }
+            sec_level = level_map.get(
+                sec_level.replace('-', '').replace('_', ''),
+                sec_level)
+            destinations.append({
+                'name': name,
+                'address': address,
+                'security_model': 'v3',
+                'security_name': sec_name,
+                'security_level': sec_level,
+            })
+        return destinations
+
+    def set_snmp_config(self, v1=None, v2=None, v3=None,
+                        trap_service=None):
+        """Set SNMP version enable/disable and trap service via CLI."""
         self._config_mode()
         try:
             if v1 is not None:
@@ -3783,6 +4045,60 @@ class SSHHIOS:
             if v3 is not None:
                 self.cli('snmp access version v3'
                          if v3 else 'no snmp access version v3')
+            if trap_service is not None:
+                self.cli('snmp trap operation'
+                         if trap_service
+                         else 'no snmp trap operation')
+        finally:
+            self._exit_config_mode()
+
+    _SSH_SEC_LEVEL_MAP = {
+        'noauth': 'no-auth',
+        'auth': 'auth-no-priv',
+        'authpriv': 'auth-priv',
+    }
+
+    def add_snmp_trap_dest(self, name, address, port=162,
+                           security_model='v3', security_name='admin',
+                           security_level='authpriv'):
+        """Add an SNMP trap destination via CLI.
+
+        v1/v2c: snmp trap add <name> <ip>:<port>
+        v3:     snmp notification host add <name> <ip>:<port>
+                user <username> <level>
+        """
+        if security_model not in ('v1', 'v2c', 'v3'):
+            raise ValueError(
+                f"Invalid security_model '{security_model}': "
+                f"use 'v1', 'v2c', or 'v3'")
+        if security_level not in self._SSH_SEC_LEVEL_MAP:
+            raise ValueError(
+                f"Invalid security_level '{security_level}': "
+                f"use 'noauth', 'auth', or 'authpriv'")
+
+        addr = f'{address}:{port}' if port != 162 else address
+        self._config_mode()
+        try:
+            if security_model in ('v1', 'v2c'):
+                self.cli(f'snmp trap add {name} {addr}')
+            else:
+                level = self._SSH_SEC_LEVEL_MAP[security_level]
+                self.cli(
+                    f'snmp notification host add {name} {addr} '
+                    f'user {security_name} {level}')
+        finally:
+            self._exit_config_mode()
+
+    def delete_snmp_trap_dest(self, name):
+        """Delete an SNMP trap destination via CLI."""
+        self._config_mode()
+        try:
+            # Try both — v3 notification host first, then v1/v2c trap
+            try:
+                self.cli(
+                    f'snmp notification host delete {name}')
+            except Exception:
+                self.cli(f'snmp trap delete {name}')
         finally:
             self._exit_config_mode()
 
@@ -3845,6 +4161,1907 @@ class SSHHIOS:
             if min_special is not None:
                 self.cli(
                     f'passwords min-special-chars {int(min_special)}')
+        finally:
+            self._exit_config_mode()
+
+    # ── Signal Contact ────────────────────────────────────────────
+
+    @staticmethod
+    def _extract_table_rows(text, header_pattern):
+        """Extract data rows from a CLI table identified by header
+        line pattern.  Returns list of whitespace-split field lists."""
+        rows = []
+        lines = text.splitlines()
+        header_found = False
+        sep_found = False
+        for line in lines:
+            stripped = line.strip()
+            if not header_found:
+                if re.search(header_pattern, stripped):
+                    header_found = True
+                continue
+            if not sep_found:
+                if (re.match(r'^[-\s]+$', stripped)
+                        and '---' in stripped):
+                    sep_found = True
+                continue
+            if not stripped:
+                break
+            if (stripped.endswith(':')
+                    and '....' not in stripped
+                    and len(stripped) < 50):
+                break
+            fields = stripped.split()
+            if fields:
+                rows.append(fields)
+        return rows
+
+    @staticmethod
+    def _parse_events_section(text):
+        """Parse events table (Time stamp / Event / Info) from CLI."""
+        events = []
+        in_events = False
+        past_sep = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not in_events:
+                if re.search(r'Time stamp\s+Event', stripped):
+                    in_events = True
+                continue
+            if not past_sep:
+                if (re.match(r'^[-\s]+$', stripped)
+                        and '---' in stripped):
+                    past_sep = True
+                continue
+            if not stripped:
+                break
+            m = re.match(
+                r'\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})'
+                r'\s+(\S+)\s*(.*)', line)
+            if m:
+                info_text = m.group(3).strip()
+                info_num = 0
+                if info_text and info_text != '-':
+                    nums = re.findall(r'\d+', info_text)
+                    if nums:
+                        info_num = int(nums[-1])
+                events.append({
+                    'cause': m.group(2),
+                    'info': info_num,
+                    'timestamp': m.group(1).strip(),
+                })
+        return events
+
+    def get_signal_contact(self):
+        """Read signal contact configuration and status via CLI."""
+        result = {}
+        for cid in (1, 2):
+            cmd = f'show signal-contact {cid} all'
+            output = self.cli(cmd)[cmd]
+            if 'Error' in output or 'Invalid' in output:
+                continue
+            d = parse_dot_keys(output)
+            cli_mode = d.get('Mode', 'monitor').strip()
+            manual_raw = d.get(
+                'State (Manual Setting)', 'close').strip()
+
+            monitoring = {}
+            for cli_name, key in _SC_CLI_SENSE.items():
+                val = d.get(cli_name)
+                if val is not None:
+                    monitoring[key] = (
+                        val.strip().lower() == 'monitored')
+
+            power_supply = {}
+            for row in self._extract_table_rows(
+                    output, r'Power Supply\s+Status'):
+                try:
+                    power_supply[int(row[0])] = (
+                        row[1].lower() == 'monitored')
+                except (ValueError, IndexError):
+                    pass
+
+            link_alarm = {}
+            for row in self._extract_table_rows(
+                    output, r'Intf\s+Status'):
+                if len(row) >= 2 and '/' in row[0]:
+                    link_alarm[row[0]] = row[1].lower() in (
+                        'monitored', 'enable', 'enabled')
+
+            trap_raw = d.get(
+                'Trap Status', 'disabled').strip().lower()
+
+            result[cid] = {
+                'mode': _SC_CLI_MODE.get(cli_mode, cli_mode),
+                'manual_state': manual_raw.split()[0],
+                'trap_enabled': trap_raw in (
+                    'enable', 'enabled'),
+                'monitoring': monitoring,
+                'power_supply': power_supply,
+                'link_alarm': link_alarm,
+                'status': {
+                    'oper_state': d.get(
+                        'Operating State (current)',
+                        'close').strip(),
+                    'last_change': d.get(
+                        'Time of last state change',
+                        '').strip(),
+                    'cause': d.get(
+                        'Trap Cause', 'none').strip(),
+                    'cause_index': int(d.get(
+                        'Trap Cause Index', '0').strip()),
+                    'events': self._parse_events_section(
+                        output),
+                },
+            }
+        return result
+
+    def set_signal_contact(self, contact_id=1, mode=None,
+                           manual_state=None, trap_enabled=None,
+                           monitoring=None, power_supply=None,
+                           link_alarm=None):
+        """Configure signal contact relay via CLI."""
+        n = contact_id
+        self._config_mode()
+        try:
+            if mode is not None:
+                cli_mode = _SC_CLI_MODE_REV.get(mode)
+                if cli_mode is None:
+                    raise ValueError(
+                        f"Invalid mode '{mode}'. Valid: "
+                        f"{', '.join(sorted(_SC_CLI_MODE_REV))}")
+                self.cli(
+                    f'signal-contact {n} mode {cli_mode}')
+            if manual_state is not None:
+                self.cli(
+                    f'signal-contact {n} state {manual_state}')
+            if trap_enabled is not None:
+                prefix = '' if trap_enabled else 'no '
+                self.cli(f'{prefix}signal-contact {n} trap')
+            if monitoring:
+                for key, enabled in monitoring.items():
+                    cli_cmd = _SENSE_CLI_CMD.get(key)
+                    if cli_cmd is None:
+                        raise ValueError(
+                            f"Unknown sense flag '{key}'")
+                    prefix = '' if enabled else 'no '
+                    self.cli(
+                        f'{prefix}signal-contact {n} '
+                        f'monitor {cli_cmd}')
+            if power_supply:
+                for ps_id, enabled in power_supply.items():
+                    prefix = '' if enabled else 'no '
+                    self.cli(
+                        f'{prefix}signal-contact {n} '
+                        f'monitor power-supply {ps_id}')
+            if link_alarm:
+                for port, enabled in link_alarm.items():
+                    self._enter_interface(port)
+                    prefix = '' if enabled else 'no '
+                    self.cli(
+                        f'{prefix}signal-contact {n} '
+                        f'link-alarm')
+                    self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    # ── Device Monitor ────────────────────────────────────────────
+
+    def get_device_monitor(self):
+        """Read device status monitoring via CLI."""
+        output = self.cli(
+            'show device-status all')['show device-status all']
+        d = parse_dot_keys(output)
+
+        monitoring = {}
+        for cli_name, key in _SC_CLI_SENSE.items():
+            val = d.get(cli_name)
+            if val is not None:
+                monitoring[key] = (
+                    val.strip().lower() == 'monitored')
+
+        power_supply = {}
+        for row in self._extract_table_rows(
+                output, r'Power Supply\s+Status'):
+            try:
+                power_supply[int(row[0])] = (
+                    row[1].lower() == 'monitored')
+            except (ValueError, IndexError):
+                pass
+
+        link_alarm = {}
+        for row in self._extract_table_rows(
+                output, r'Intf\s+Status'):
+            if len(row) >= 2 and '/' in row[0]:
+                link_alarm[row[0]] = row[1].lower() in (
+                    'monitored', 'enable', 'enabled')
+
+        trap_raw = d.get(
+            'Trap Status', 'disabled').strip().lower()
+
+        return {
+            'trap_enabled': trap_raw in (
+                'enable', 'enabled'),
+            'monitoring': monitoring,
+            'power_supply': power_supply,
+            'link_alarm': link_alarm,
+            'status': {
+                'oper_state': d.get(
+                    'Operating State (current)',
+                    'ok').strip(),
+                'last_change': d.get(
+                    'Time of last state change',
+                    '').strip(),
+                'cause': d.get(
+                    'Trap Cause', 'none').strip(),
+                'cause_index': int(d.get(
+                    'Trap Cause Index', '0').strip()),
+                'events': self._parse_events_section(output),
+            },
+        }
+
+    def set_device_monitor(self, trap_enabled=None,
+                           monitoring=None, power_supply=None,
+                           link_alarm=None):
+        """Configure device status monitoring via CLI."""
+        self._config_mode()
+        try:
+            if trap_enabled is not None:
+                prefix = '' if trap_enabled else 'no '
+                self.cli(f'{prefix}device-status trap')
+            if monitoring:
+                for key, enabled in monitoring.items():
+                    cli_cmd = _SENSE_CLI_CMD.get(key)
+                    if cli_cmd is None:
+                        raise ValueError(
+                            f"Unknown sense flag '{key}'")
+                    prefix = '' if enabled else 'no '
+                    self.cli(
+                        f'{prefix}device-status monitor '
+                        f'{cli_cmd}')
+            if power_supply:
+                for ps_id, enabled in power_supply.items():
+                    prefix = '' if enabled else 'no '
+                    self.cli(
+                        f'{prefix}device-status monitor '
+                        f'power-supply {ps_id}')
+            if link_alarm:
+                for port, enabled in link_alarm.items():
+                    self._enter_interface(port)
+                    prefix = '' if enabled else 'no '
+                    self.cli(
+                        f'{prefix}device-status link-alarm')
+                    self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    # ── Device Security Status ────────────────────────────────────
+
+    def get_devsec_status(self):
+        """Read security status monitoring via CLI."""
+        output = self.cli(
+            'show security-status all')[
+            'show security-status all']
+        d = parse_dot_keys(output)
+
+        monitoring = {}
+        for cli_name, key in _DEVSEC_CLI_SENSE.items():
+            val = d.get(cli_name)
+            if val is not None:
+                monitoring[key] = (
+                    val.strip().lower() == 'monitored')
+            else:
+                # Fallback: long keys may lack enough dots
+                # for parse_dot_keys (e.g. "Loading ... ENVM")
+                for line in output.splitlines():
+                    if cli_name in line:
+                        monitoring[key] = (
+                            'monitored' in line.lower())
+                        break
+
+        no_link = {}
+        for row in self._extract_table_rows(
+                output, r'Intf\s+Status'):
+            if len(row) >= 2 and '/' in row[0]:
+                no_link[row[0]] = row[1].lower() in (
+                    'enable', 'enabled')
+
+        trap_raw = d.get(
+            'Trap', d.get('Trap Status', 'disabled')
+        ).strip().lower()
+
+        return {
+            'trap_enabled': trap_raw in (
+                'enable', 'enabled'),
+            'monitoring': monitoring,
+            'no_link': no_link,
+            'status': {
+                'oper_state': d.get(
+                    'OperState', 'ok').strip(),
+                'last_change': d.get(
+                    'Time of last state change',
+                    '').strip(),
+                'cause': d.get(
+                    'Trap Cause', 'none').strip(),
+                'cause_index': int(d.get(
+                    'Trap Cause Index', '0').strip()),
+                'events': self._parse_events_section(output),
+            },
+        }
+
+    def set_devsec_status(self, trap_enabled=None,
+                          monitoring=None, no_link=None):
+        """Configure security status monitoring via CLI."""
+        self._config_mode()
+        try:
+            if trap_enabled is not None:
+                prefix = '' if trap_enabled else 'no '
+                self.cli(f'{prefix}security-status trap')
+            if monitoring:
+                for key, enabled in monitoring.items():
+                    cli_cmd = _DEVSEC_SENSE_CLI_CMD.get(key)
+                    if cli_cmd is None:
+                        raise ValueError(
+                            f"Unknown sense flag '{key}'")
+                    prefix = '' if enabled else 'no '
+                    self.cli(
+                        f'{prefix}security-status monitor '
+                        f'{cli_cmd}')
+            if no_link:
+                for port, enabled in no_link.items():
+                    self._enter_interface(port)
+                    prefix = '' if enabled else 'no '
+                    self.cli(
+                        f'{prefix}security-status no-link')
+                    self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    # ── Banner ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_banner_text(output, key_prefix):
+        """Extract banner text that may appear on continuation
+        line(s) below the dot-key header."""
+        lines = output.splitlines()
+        capture = False
+        text_lines = []
+        for line in lines:
+            if capture:
+                stripped = line.strip()
+                # Stop at next dot-key or separator or empty
+                if ('....' in stripped or not stripped
+                        or re.match(r'^[-=]+$', stripped)):
+                    break
+                text_lines.append(stripped)
+            elif key_prefix in line and '....' in line:
+                # Check inline value after dots
+                _, _, val = line.partition('....')
+                val = val.strip().lstrip('.')
+                if val:
+                    return val
+                capture = True
+        return '\n'.join(text_lines)
+
+    def get_banner(self):
+        """Read pre-login and CLI login banner via CLI."""
+        pre_out = self.cli(
+            'show system pre-login-banner')[
+            'show system pre-login-banner']
+        cli_out = self.cli(
+            'show cli global')['show cli global']
+        pre_d = parse_dot_keys(pre_out)
+        cli_d = parse_dot_keys(cli_out)
+
+        return {
+            'pre_login': {
+                'enabled': pre_d.get(
+                    'Login banner status',
+                    'disabled').strip().lower()
+                    in ('enable', 'enabled'),
+                'text': self._parse_banner_text(
+                    pre_out, 'Login banner text'),
+            },
+            'cli_login': {
+                'enabled': cli_d.get(
+                    'CLI banner status',
+                    'disabled').strip().lower()
+                    in ('enable', 'enabled'),
+                'text': self._parse_banner_text(
+                    cli_out, 'CLI banner text'),
+            },
+        }
+
+    def set_banner(self, pre_login_enabled=None,
+                   pre_login_text=None,
+                   cli_login_enabled=None,
+                   cli_login_text=None):
+        """Set pre-login and/or CLI login banner via CLI."""
+        self._config_mode()
+        try:
+            if pre_login_enabled is not None:
+                if pre_login_enabled:
+                    self.cli(
+                        'system pre-login-banner operation')
+                else:
+                    self.cli(
+                        'no system pre-login-banner operation')
+            if pre_login_text is not None:
+                self.cli(
+                    f'system pre-login-banner text '
+                    f'{pre_login_text}')
+            if cli_login_enabled is not None:
+                if cli_login_enabled:
+                    self.cli('cli banner operation')
+                else:
+                    self.cli('no cli banner operation')
+            if cli_login_text is not None:
+                self.cli(f'cli banner text {cli_login_text}')
+        finally:
+            self._exit_config_mode()
+
+    # ------------------------------------------------------------------
+    # Session Config
+    # ------------------------------------------------------------------
+
+    def get_session_config(self):
+        """Read session timeouts and max-sessions via CLI."""
+        ssh_out = self.cli(
+            'show sessions ssh')['show sessions ssh']
+        tel_out = self.cli(
+            'show sessions telnet')['show sessions telnet']
+        web_out = self.cli(
+            'show sessions web')['show sessions web']
+        cli_out = self.cli(
+            'show cli global')['show cli global']
+        serial_phys = self.cli(
+            'show physical-interfaces serial'
+        )['show physical-interfaces serial']
+        envm_phys = self.cli(
+            'show physical-interfaces envm'
+        )['show physical-interfaces envm']
+
+        ssh_d = parse_dot_keys(ssh_out)
+        tel_d = parse_dot_keys(tel_out)
+        web_d = parse_dot_keys(web_out)
+        cli_d = parse_dot_keys(cli_out)
+        ser_d = parse_dot_keys(serial_phys)
+        envm_d = parse_dot_keys(envm_phys)
+
+        def _is_enabled(d, *keys):
+            for k in keys:
+                v = d.get(k, '')
+                if v:
+                    return v.strip().lower() in (
+                        'enabled', 'enable', 'active', 'on')
+            return True  # default enabled
+
+        return {
+            'ssh': {
+                'timeout': int(ssh_d.get(
+                    'SSH session timeout [min]',
+                    ssh_d.get('Timeout [min]', '0')).strip()),
+                'max_sessions': int(ssh_d.get(
+                    'SSH max sessions',
+                    ssh_d.get('Max sessions', '0')).strip()),
+                'active_sessions': int(ssh_d.get(
+                    'SSH active sessions',
+                    ssh_d.get('Active sessions', '0')).strip()),
+            },
+            'ssh_outbound': {
+                'timeout': int(ssh_d.get(
+                    'SSH outbound timeout [min]',
+                    ssh_d.get('Outbound timeout [min]', '0')).strip()),
+                'max_sessions': int(ssh_d.get(
+                    'SSH outbound max sessions',
+                    ssh_d.get('Outbound max sessions', '0')).strip()),
+                'active_sessions': int(ssh_d.get(
+                    'SSH outbound active sessions',
+                    ssh_d.get('Outbound active sessions', '0')).strip()),
+            },
+            'telnet': {
+                'timeout': int(tel_d.get(
+                    'Telnet session timeout [min]',
+                    tel_d.get('Timeout [min]', '0')).strip()),
+                'max_sessions': int(tel_d.get(
+                    'Telnet max sessions',
+                    tel_d.get('Max sessions', '0')).strip()),
+                'active_sessions': int(tel_d.get(
+                    'Telnet active sessions',
+                    tel_d.get('Active sessions', '0')).strip()),
+            },
+            'web': {
+                'timeout': int(web_d.get(
+                    'Web interface timeout [min]',
+                    web_d.get('Timeout [min]', '0')).strip()),
+            },
+            'serial': {
+                'timeout': int(cli_d.get(
+                    'CLI serial timeout [min]',
+                    cli_d.get('Serial timeout [min]', '0')).strip()),
+                'enabled': _is_enabled(
+                    ser_d, 'State after next reboot',
+                    'Admin state', 'Operation'),
+                'oper_status': _is_enabled(
+                    ser_d, 'Current state', 'Oper state',
+                    'Operation'),
+            },
+            'envm': {
+                'enabled': _is_enabled(
+                    envm_d, 'State after next reboot',
+                    'Admin state', 'Operation'),
+                'oper_status': _is_enabled(
+                    envm_d, 'Current state', 'Oper state',
+                    'Operation'),
+            },
+            'netconf': {
+                'timeout': 0,
+                'max_sessions': 0,
+                'active_sessions': 0,
+            },
+        }
+
+    def set_session_config(self, ssh_timeout=None, ssh_max_sessions=None,
+                           ssh_outbound_timeout=None,
+                           ssh_outbound_max_sessions=None,
+                           telnet_timeout=None, telnet_max_sessions=None,
+                           web_timeout=None, serial_timeout=None,
+                           netconf_timeout=None,
+                           netconf_max_sessions=None,
+                           serial_enabled=None, envm_enabled=None):
+        """Set session timeouts and max-sessions via CLI."""
+        self._config_mode()
+        try:
+            if ssh_timeout is not None:
+                self.cli(f'ssh timeout {ssh_timeout}')
+            if ssh_max_sessions is not None:
+                self.cli(f'ssh max-sessions {ssh_max_sessions}')
+            if ssh_outbound_timeout is not None:
+                self.cli(
+                    f'ssh outbound timeout {ssh_outbound_timeout}')
+            if ssh_outbound_max_sessions is not None:
+                self.cli(
+                    f'ssh outbound max-sessions '
+                    f'{ssh_outbound_max_sessions}')
+            if telnet_timeout is not None:
+                self.cli(f'telnet timeout {telnet_timeout}')
+            if telnet_max_sessions is not None:
+                self.cli(
+                    f'telnet max-sessions {telnet_max_sessions}')
+            if web_timeout is not None:
+                self.cli(
+                    f'network management access web timeout '
+                    f'{web_timeout}')
+            if serial_timeout is not None:
+                self.cli(f'cli serial-timeout {serial_timeout}')
+            if serial_enabled is not None:
+                self.cli('physical-interfaces serial operation'
+                         if serial_enabled
+                         else 'no physical-interfaces serial operation')
+            if envm_enabled is not None:
+                self.cli('physical-interfaces envm operation'
+                         if envm_enabled
+                         else 'no physical-interfaces envm operation')
+        finally:
+            self._exit_config_mode()
+
+    # ------------------------------------------------------------------
+    # IP Restrict
+    # ------------------------------------------------------------------
+
+    def get_ip_restrict(self):
+        """Read restricted management access via CLI."""
+        global_out = self.cli(
+            'show network management access global')[
+            'show network management access global']
+        g = parse_dot_keys(global_out)
+
+        rules_out = self.cli(
+            'show network management access rules')[
+            'show network management access rules']
+
+        rules = self._parse_rma_rules(rules_out)
+
+        return {
+            'enabled': g.get(
+                'Restricted management access',
+                g.get('Operation', 'disabled')
+            ).strip().lower() in ('enable', 'enabled'),
+            'logging': g.get(
+                'Logging', 'disabled'
+            ).strip().lower() in ('enable', 'enabled'),
+            'rules': rules,
+        }
+
+    def _parse_rma_rules(self, text):
+        """Parse RMA rules table output."""
+        rules = []
+        lines = text.splitlines()
+        past_header = False
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if '---' in stripped and not past_header:
+                past_header = True
+                continue
+            if not past_header:
+                continue
+            # Table rows: Index IP/Mask HTTP HTTPS SNMP ...
+            parts = stripped.split()
+            if len(parts) < 3:
+                continue
+            try:
+                idx = int(parts[0])
+            except ValueError:
+                continue
+            # Parse IP/mask
+            ip_mask = parts[1] if len(parts) > 1 else '0.0.0.0/0'
+            if '/' in ip_mask:
+                ip, prefix = ip_mask.rsplit('/', 1)
+                try:
+                    prefix_len = int(prefix)
+                except ValueError:
+                    prefix_len = 0
+            else:
+                ip = ip_mask
+                prefix_len = 0
+
+            def _svc(val):
+                return val.strip().lower() in (
+                    'enable', 'enabled', 'yes', 'active')
+
+            services = {}
+            svc_names = [
+                'http', 'https', 'snmp', 'telnet', 'ssh',
+                'iec61850', 'modbus', 'ethernet_ip', 'profinet']
+            for i, sname in enumerate(svc_names):
+                if 2 + i < len(parts):
+                    services[sname] = _svc(parts[2 + i])
+                else:
+                    services[sname] = True
+
+            rules.append({
+                'index': idx,
+                'ip': ip,
+                'prefix_length': prefix_len,
+                'services': services,
+                'interface': '',
+                'per_rule_logging': False,
+                'log_counter': 0,
+            })
+        return rules
+
+    def set_ip_restrict(self, enabled=None, logging=None):
+        """Set global RMA enable/logging via CLI."""
+        self._config_mode()
+        try:
+            if enabled is not None:
+                if enabled:
+                    self.cli(
+                        'network management access operation')
+                else:
+                    self.cli(
+                        'no network management access operation')
+            if logging is not None:
+                if logging:
+                    self.cli(
+                        'network management access logging')
+                else:
+                    self.cli(
+                        'no network management access logging')
+        finally:
+            self._exit_config_mode()
+
+    def add_ip_restrict_rule(self, index, ip='0.0.0.0',
+                             prefix_length=0,
+                             http=True, https=True, snmp=True,
+                             telnet=True, ssh=True, iec61850=True,
+                             modbus=True, ethernet_ip=True,
+                             profinet=True,
+                             interface='',
+                             per_rule_logging=False):
+        """Create RMA rule via CLI."""
+        svc_parts = []
+        for name, val in [
+            ('http', http), ('https', https), ('snmp', snmp),
+            ('telnet', telnet), ('ssh', ssh),
+            ('iec61850-mms', iec61850),
+            ('modbus-tcp', modbus),
+            ('ethernet-ip', ethernet_ip),
+            ('profinet-io', profinet),
+        ]:
+            svc_parts.append(
+                f'{name} enable' if val else f'{name} disable')
+        svc_str = ' '.join(svc_parts)
+        cmd = (f'network management access add {index} '
+               f'ip {ip} mask {prefix_length} {svc_str}')
+        self._config_mode()
+        try:
+            self.cli(cmd)
+        finally:
+            self._exit_config_mode()
+
+    def delete_ip_restrict_rule(self, index):
+        """Delete RMA rule by index via CLI."""
+        self._config_mode()
+        try:
+            self.cli(
+                f'network management access delete {index}')
+        finally:
+            self._exit_config_mode()
+
+    # ------------------------------------------------------------------
+    # DNS Client
+    # ------------------------------------------------------------------
+
+    _DNS_SOURCE_MAP = {
+        'user': 'user', 'mgmt-dhcp': 'mgmt-dhcp',
+        'provider': 'provider',
+    }
+
+    def get_dns(self):
+        """Read DNS client configuration via CLI."""
+        results = self.cli([
+            'show dns client info',
+            'show dns client servers',
+            'show dns client servers extern',
+        ])
+
+        # Scalars from dot-key output
+        info = parse_dot_keys(
+            results['show dns client info'])
+
+        enabled = False
+        for k, v in info.items():
+            if 'client status' in k.lower():
+                enabled = v.strip().lower() in (
+                    'enable', 'enabled')
+                break
+
+        cache_enabled = False
+        for k, v in info.items():
+            if 'cache status' in k.lower():
+                cache_enabled = v.strip().lower() in (
+                    'enable', 'enabled')
+                break
+
+        config_source = 'mgmt-dhcp'
+        for k, v in info.items():
+            if 'configuration source' in k.lower():
+                config_source = v.strip().lower()
+                break
+
+        domain_name = ''
+        for k, v in info.items():
+            if 'domain name' in k.lower():
+                domain_name = v.strip()
+                break
+
+        timeout = 3
+        for k, v in info.items():
+            if 'timeout' in k.lower():
+                try:
+                    timeout = int(v.strip())
+                except ValueError:
+                    pass
+                break
+
+        retransmits = 2
+        for k, v in info.items():
+            if 'retransmit' in k.lower():
+                try:
+                    retransmits = int(v.strip())
+                except ValueError:
+                    pass
+                break
+
+        # Server table: "No. | IP address | Active"
+        servers = []
+        active_servers = []
+        srv_out = results['show dns client servers']
+        for fields in parse_table(srv_out, min_fields=2):
+            try:
+                int(fields[0])  # index column
+            except (ValueError, IndexError):
+                continue
+            addr = fields[1]
+            if addr and addr != '0.0.0.0':
+                servers.append(addr)
+                # Active column: [x] = active
+                if len(fields) >= 3 and '[x]' in fields[2]:
+                    active_servers.append(addr)
+
+        # Extern servers (DHCP-provided) — also active
+        ext_out = results['show dns client servers extern']
+        for fields in parse_table(ext_out, min_fields=2):
+            try:
+                int(fields[0])
+            except (ValueError, IndexError):
+                continue
+            addr = fields[1]
+            if (addr and addr != '0.0.0.0'
+                    and addr not in active_servers):
+                active_servers.append(addr)
+
+        return {
+            'enabled': enabled,
+            'config_source': config_source,
+            'domain_name': domain_name,
+            'timeout': timeout,
+            'retransmits': retransmits,
+            'cache_enabled': cache_enabled,
+            'servers': servers,
+            'active_servers': active_servers,
+        }
+
+    def set_dns(self, enabled=None, config_source=None,
+                domain_name=None, timeout=None, retransmits=None,
+                cache_enabled=None):
+        """Set DNS client global configuration via CLI."""
+        self._config_mode()
+        try:
+            if enabled is not None:
+                if enabled:
+                    self.cli('dns client adminstate')
+                else:
+                    self.cli('no dns client adminstate')
+            if config_source is not None:
+                if config_source not in self._DNS_SOURCE_MAP:
+                    raise ValueError(
+                        f"config_source must be one of "
+                        f"{list(self._DNS_SOURCE_MAP)}, "
+                        f"got '{config_source}'")
+                self.cli(
+                    f'dns client source {config_source}')
+            if domain_name is not None:
+                self.cli(
+                    f'dns client domain-name {domain_name}')
+            if timeout is not None:
+                self.cli(f'dns client timeout {int(timeout)}')
+            if retransmits is not None:
+                self.cli(f'dns client retry {int(retransmits)}')
+            if cache_enabled is not None:
+                if cache_enabled:
+                    self.cli('dns client cache adminstate')
+                else:
+                    self.cli('no dns client cache adminstate')
+        finally:
+            self._exit_config_mode()
+
+    def add_dns_server(self, address):
+        """Add a DNS server via CLI. Auto-picks next free index."""
+        # Find used indices
+        srv_out = self.cli(
+            'show dns client servers')['show dns client servers']
+        used = set()
+        for fields in parse_table(srv_out, min_fields=2):
+            try:
+                used.add(int(fields[0]))
+            except (ValueError, IndexError):
+                continue
+        free_idx = None
+        for i in range(1, 5):
+            if i not in used:
+                free_idx = i
+                break
+        if free_idx is None:
+            raise ValueError("All 4 DNS server slots are in use")
+        self._config_mode()
+        try:
+            self.cli(
+                f'dns client servers add {free_idx} ip '
+                f'{address}')
+        finally:
+            self._exit_config_mode()
+
+    def delete_dns_server(self, address):
+        """Delete a DNS server by IP address via CLI."""
+        srv_out = self.cli(
+            'show dns client servers')['show dns client servers']
+        target_idx = None
+        for fields in parse_table(srv_out, min_fields=2):
+            try:
+                idx = int(fields[0])
+            except (ValueError, IndexError):
+                continue
+            if fields[1] == address:
+                target_idx = idx
+                break
+        if target_idx is None:
+            raise ValueError(
+                f"DNS server '{address}' not found")
+        self._config_mode()
+        try:
+            self.cli(
+                f'dns client servers delete {target_idx}')
+        finally:
+            self._exit_config_mode()
+
+    # ------------------------------------------------------------------
+    # PoE (Power over Ethernet)
+    # ------------------------------------------------------------------
+
+    _POE_STATUS_MAP = {
+        'disabled': 'disabled', 'searching': 'searching',
+        'delivering': 'delivering', 'deliveringpower': 'delivering',
+        'fault': 'fault', 'test': 'test',
+        'otherfault': 'other-fault', 'other-fault': 'other-fault',
+    }
+    _POE_PRIORITY_REV = {'critical': 'critical', 'high': 'high', 'low': 'low'}
+
+    def get_poe(self):
+        """Read PoE configuration via CLI."""
+        results = self.cli([
+            'show inlinepower global',
+            'show inlinepower port',
+            'show inlinepower slot',
+        ])
+
+        # --- global (dot-key) ---
+        info = parse_dot_keys(results['show inlinepower global'])
+        enabled = False
+        power_w = 0
+        delivered_ma = 0
+        for k, v in info.items():
+            kl = k.lower()
+            if 'admin mode' in kl:
+                enabled = v.strip().lower() in ('enable', 'enabled')
+            elif kl.startswith('reserved system power') or (
+                    'reserved' in kl and 'power' in kl
+                    and 'delivered' not in kl):
+                try:
+                    power_w = int(v.strip())
+                except ValueError:
+                    pass
+            elif 'delivered' in kl and 'current' in kl:
+                try:
+                    delivered_ma = int(v.strip())
+                except ValueError:
+                    pass
+
+        # --- modules (slot table) ---
+        modules = {}
+        slot_out = results['show inlinepower slot']
+        for fields in parse_table(slot_out, min_fields=5):
+            try:
+                slot = fields[0]
+                int(slot)  # must be numeric
+            except (ValueError, IndexError):
+                continue
+            src_raw = fields[5].strip().lower() if len(fields) > 5 else ''
+            modules[f"1/{slot}"] = {
+                'budget_w': _safe_int(fields[1]),
+                'max_w': _safe_int(fields[2]),
+                'reserved_w': _safe_int(fields[3]),
+                'delivered_w': _safe_int(fields[4]),
+                'source': 'external' if 'ext' in src_raw else 'internal',
+                'threshold_pct': _safe_int(
+                    fields[7]) if len(fields) > 7 else 90,
+                'notifications': (
+                    fields[6].strip().lower() in ('enable', 'enabled')
+                    if len(fields) > 6 else True),
+            }
+
+        # --- ports (multi-line: 3 lines per record) ---
+        ports = {}
+        port_out = results['show inlinepower port']
+        for record in parse_multiline_table(
+                port_out, lines_per_record=3, min_fields_first=3):
+            line1, line2, line3 = record
+            if not line1:
+                continue
+            iface = line1[0]  # e.g. '1/1'
+            poe_en = (line1[1].strip().lower() in ('enable', 'enabled')
+                      if len(line1) > 1 else True)
+
+            # line1: Intf  PoE-enable  Class  Status  Allowed-class  Auto-shutdown  Start
+            status_raw = (line1[3].strip().lower()
+                          if len(line1) > 3 else 'disabled')
+            status = self._POE_STATUS_MAP.get(
+                status_raw.replace(' ', ''), 'disabled')
+
+            class_raw = line1[2].strip() if len(line1) > 2 else ''
+            class_valid = status == 'delivering'
+            classification = None
+            if class_valid and class_raw:
+                try:
+                    classification = f"class{int(class_raw)}"
+                except ValueError:
+                    pass
+
+            # line2: Fast-start  Prio  Consumption[W]  Power-limit[W]  Max-observed[W]  End
+            fast_startup = False
+            priority = 'low'
+            consumption_mw = 0
+            power_limit_mw = 0
+            port_name = ''
+            if line2:
+                fast_startup = (line2[0].strip().lower() in (
+                    'enable', 'enabled') if line2 else False)
+                priority = line2[1].strip().lower() if len(
+                    line2) > 1 else 'low'
+                if priority not in ('critical', 'high', 'low'):
+                    priority = 'low'
+                # Consumption is in watts with decimals — convert to mW
+                try:
+                    consumption_mw = int(
+                        float(line2[2].strip()) * 1000
+                    ) if len(line2) > 2 else 0
+                except (ValueError, IndexError):
+                    consumption_mw = 0
+                try:
+                    power_limit_mw = int(
+                        float(line2[3].strip()) * 1000
+                    ) if len(line2) > 3 else 0
+                except (ValueError, IndexError):
+                    power_limit_mw = 0
+
+            ports[iface] = {
+                'enabled': poe_en,
+                'status': status,
+                'priority': priority,
+                'classification': classification,
+                'consumption_mw': consumption_mw,
+                'power_limit_mw': power_limit_mw,
+                'name': '',  # SSH port table doesn't show device name
+                'fast_startup': fast_startup,
+            }
+
+        return {
+            'enabled': enabled,
+            'power_w': power_w,
+            'delivered_current_ma': delivered_ma,
+            'modules': modules,
+            'ports': ports,
+        }
+
+    def set_poe(self, interface=None, enabled=None, priority=None,
+                power_limit_mw=None, name=None, fast_startup=None):
+        """Set PoE configuration via CLI.
+
+        Note: CLI power-limit is in watts; power_limit_mw is divided
+        by 1000 before sending (matching MOPS/SNMP milliwatt API).
+        """
+        self._config_mode()
+        try:
+            if interface is not None:
+                interfaces = ([interface] if isinstance(interface, str)
+                              else list(interface))
+                for iface in interfaces:
+                    self.cli(f'interface {iface}')
+                    if enabled is not None:
+                        self.cli(
+                            'inlinepower operation enable'
+                            if enabled
+                            else 'no inlinepower operation')
+                    if priority is not None:
+                        self.cli(
+                            f'inlinepower priority {priority}')
+                    if power_limit_mw is not None:
+                        watts = int(power_limit_mw) // 1000
+                        if watts == 0:
+                            self.cli(
+                                'inlinepower power-limit 0')
+                        else:
+                            self.cli(
+                                f'inlinepower power-limit '
+                                f'{watts}')
+                    if name is not None:
+                        self.cli(
+                            f'inlinepower name "{name}"'
+                            if name
+                            else 'inlinepower name " "')
+                    if fast_startup is not None:
+                        self.cli(
+                            'inlinepower fast-startup enable'
+                            if fast_startup
+                            else 'no inlinepower fast-startup')
+                    self.cli('exit')  # exit interface context
+            else:
+                if enabled is not None:
+                    self.cli(
+                        'inlinepower operation enable'
+                        if enabled
+                        else 'no inlinepower operation')
+        finally:
+            self._exit_config_mode()
+
+    # ------------------------------------------------------------------
+    # Remote Authentication
+    # ------------------------------------------------------------------
+
+    def get_remote_auth(self):
+        """Check whether remote authentication services are configured.
+
+        Returns::
+
+            {
+                'radius': {'enabled': True},
+                'tacacs': {'enabled': False},
+                'ldap': {'enabled': False},
+            }
+        """
+        # RADIUS — check if any auth servers are configured
+        radius_enabled = False
+        try:
+            output = self.cli(
+                'show radius auth servers')['show radius auth servers']
+            # If servers exist, output contains table rows with server data
+            for line in output.splitlines():
+                line = line.strip()
+                # Server lines start with an index number
+                if line and line[0].isdigit():
+                    radius_enabled = True
+                    break
+        except Exception:
+            pass
+
+        # TACACS+ — only available on 10.3+
+        tacacs_enabled = False
+        try:
+            output = self.cli(
+                'show tacacs server')['show tacacs server']
+            for line in output.splitlines():
+                line = line.strip()
+                if line and line[0].isdigit():
+                    tacacs_enabled = True
+                    break
+        except Exception:
+            pass
+
+        # LDAP — global admin state
+        ldap_enabled = False
+        try:
+            output = self.cli(
+                'show ldap global')['show ldap global']
+            for line in output.splitlines():
+                lower = line.strip().lower()
+                if 'operation' in lower or 'admin' in lower:
+                    if 'enable' in lower:
+                        ldap_enabled = True
+                    break
+        except Exception:
+            pass
+
+        return {
+            'radius': {'enabled': radius_enabled},
+            'tacacs': {'enabled': tacacs_enabled},
+            'ldap': {'enabled': ldap_enabled},
+        }
+
+    # ------------------------------------------------------------------
+    # User Management
+    # ------------------------------------------------------------------
+
+    _SSH_ROLE_MAP = {
+        'administrator': 'administrator',
+        'operator': 'operator',
+        'guest': 'guest',
+        'auditor': 'auditor',
+        'unauthorized': 'unauthorized',
+        'custom1': 'custom1', 'custom2': 'custom2', 'custom3': 'custom3',
+    }
+
+    def get_users(self):
+        """Get local user accounts.
+
+        Parses ``show users`` output::
+
+            (SNMPv3-)    (Password-)
+            User Name                         Authentication  PolicyCheck  Status
+            Access Mode                         Encryption                 Locked
+            --------------------------------  --------------  -----------  ------
+            admin                             md5             false        [x]
+            administrator                     des                          [ ]
+
+        Each user spans two lines: line 1 = name/auth/policy/status,
+        line 2 = role/encryption/blank/locked.
+        """
+        output = self.cli('show users')['show users']
+        lines = output.splitlines()
+
+        # Find the separator line (dashes)
+        data_start = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith('---'):
+                data_start = i + 1
+                break
+        if data_start is None:
+            return []
+
+        data_lines = lines[data_start:]
+        users = []
+        i = 0
+        while i + 1 < len(data_lines):
+            line1 = data_lines[i]
+            line2 = data_lines[i + 1]
+            if not line1.strip():
+                i += 1
+                continue
+
+            # Parse using column positions from the header
+            # Columns are fixed-width, aligned to header positions
+            # Name: 0-33, Auth: 34-49, PolicyCheck: 50-61, Status: 62+
+            name = line1[:34].strip()
+            auth = line1[34:50].strip().lower()
+            policy_str = line1[50:62].strip().lower()
+            status_str = line1[62:].strip()
+
+            role = line2[:34].strip().lower()
+            enc = line2[34:50].strip().lower()
+            # locked is at position 62+
+            locked_str = line2[62:].strip()
+
+            if not name:
+                i += 2
+                continue
+
+            active = status_str == '[x]'
+            locked = locked_str == '[x]'
+            policy_check = policy_str == 'true'
+
+            # Map auth/enc strings
+            if auth in ('md5', 'sha', 'sha1'):
+                snmp_auth = 'sha' if auth == 'sha1' else auth
+            else:
+                snmp_auth = 'md5'
+            enc_map = {
+                'none': 'none', 'des': 'des',
+                'aescfb128': 'aes128', 'aes128': 'aes128',
+                'aes256': 'aes256',
+            }
+            snmp_enc = enc_map.get(enc, 'des')
+
+            # Normalize role
+            role_normalized = self._SSH_ROLE_MAP.get(role, role)
+
+            users.append({
+                'name': name,
+                'role': role_normalized,
+                'locked': locked,
+                'policy_check': policy_check,
+                'snmp_auth': snmp_auth,
+                'snmp_enc': snmp_enc,
+                'active': active,
+                'default_password': False,  # SSH can't detect this
+            })
+            i += 2
+
+        return users
+
+    def set_user(self, name, password=None, role=None,
+                 snmp_auth_type=None, snmp_enc_type=None,
+                 snmp_auth_password=None, snmp_enc_password=None,
+                 policy_check=None, locked=None):
+        """Create or update a local user account via CLI."""
+        # Check if user exists by listing current users
+        existing_names = {u['name'] for u in self.get_users()}
+        is_new = name not in existing_names
+
+        self._config_mode()
+        try:
+            if is_new:
+                if password is None:
+                    raise ValueError(
+                        "password is required when creating a new user")
+                self.cli(f'users add {name}')
+                self.cli(f'users password {name} {password}')
+                self.cli(f'users enable {name}')
+            else:
+                if password is not None:
+                    self.cli(f'users password {name} {password}')
+
+            if role is not None:
+                self.cli(f'users access-role {name} {role}')
+            if snmp_auth_type is not None:
+                auth_str = 'sha1' if snmp_auth_type == 'sha' else snmp_auth_type
+                self.cli(f'users snmpv3 authentication {name} {auth_str}')
+            if snmp_enc_type is not None:
+                enc_map = {'none': 'none', 'des': 'des',
+                           'aes128': 'aescfb128', 'aes256': 'aes256'}
+                enc_str = enc_map.get(snmp_enc_type, snmp_enc_type)
+                self.cli(f'users snmpv3 encryption {name} {enc_str}')
+            if snmp_auth_password is not None:
+                self.cli(
+                    f'users snmpv3 password authentication '
+                    f'{name} {snmp_auth_password}')
+            if snmp_enc_password is not None:
+                self.cli(
+                    f'users snmpv3 password encryption '
+                    f'{name} {snmp_enc_password}')
+            if policy_check is not None:
+                val = 'enable' if policy_check else 'disable'
+                self.cli(f'users password-policy-check {name} {val}')
+            if locked is not None and not locked:
+                self.cli(f'users lock-status {name} unlock')
+        finally:
+            self._exit_config_mode()
+
+    def delete_user(self, name):
+        """Delete a local user account via CLI."""
+        self._config_mode()
+        try:
+            self.cli(f'users delete {name}')
+        finally:
+            self._exit_config_mode()
+
+    # ------------------------------------------------------------------
+    # Port Security
+    # ------------------------------------------------------------------
+
+    def _parse_port_security_table(self, output):
+        """Parse 'show port-security interface' two-line-per-port table."""
+        ports = {}
+        lines = output.strip().splitlines()
+        # Find the separator line
+        data_start = None
+        for i, line in enumerate(lines):
+            if line.startswith('------'):
+                data_start = i + 1
+                break
+        if data_start is None:
+            return ports
+
+        # Process pairs of lines
+        i = data_start
+        while i + 1 < len(lines):
+            line1 = lines[i].strip()
+            line2 = lines[i + 1].strip() if i + 1 < len(lines) else ''
+            if not line1:
+                i += 1
+                continue
+            parts1 = line1.split()
+            parts2 = line2.split()
+            if len(parts1) < 6 or not parts1[0].count('/'):
+                i += 1
+                continue
+            name = parts1[0]
+            ports[name] = {
+                'enabled': parts1[1] == 'enabled',
+                'dynamic_limit': int(parts1[2]),
+                'static_limit': int(parts1[3]),
+                'violation_trap_mode': parts1[4] == 'enabled',
+                'violation_trap_frequency': int(parts1[5]),
+                'dynamic_count': int(parts2[0]) if len(parts2) > 0 else 0,
+                'static_count': int(parts2[1]) if len(parts2) > 1 else 0,
+                'static_ip_count': 0,
+                'last_discarded_mac': (
+                    f"{parts2[3]}" if len(parts2) > 3 else ''),
+                'auto_disable': True,  # not in table view
+                'static_macs': [],
+                'static_ips': [],
+            }
+            i += 2
+        return ports
+
+    def _parse_port_security_detail(self, output):
+        """Parse 'show port-security interface X/Y' key-value format."""
+        d = {}
+        for line in output.strip().splitlines():
+            if '...' not in line:
+                continue
+            key, _, val = line.partition('...')
+            key = key.strip().lower()
+            val = val.strip('. ')
+            d[key] = val
+
+        if not d.get('interface'):
+            return {}
+
+        name = d['interface']
+        return {
+            name: {
+                'enabled': d.get('admin mode', 'disabled') == 'enabled',
+                'dynamic_limit': int(d.get('dynamic limit', '600')),
+                'static_limit': int(d.get('static limit', '64')),
+                'auto_disable': d.get('automatic disable',
+                                      'enabled') == 'enabled',
+                'violation_trap_mode': d.get(
+                    'violation trap mode', 'disabled') == 'enabled',
+                'violation_trap_frequency': int(
+                    d.get('violation trap frequency', '0')),
+                'dynamic_count': int(d.get('current dynamic', '0')),
+                'static_count': int(d.get('current static', '0')),
+                'static_ip_count': 0,
+                'last_discarded_mac': d.get(
+                    'last violating vlan id/mac', ''),
+                'static_macs': [],
+                'static_ips': [],
+            }
+        }
+
+    def get_port_security(self, interface=None):
+        """Return port security configuration via CLI."""
+        # Global state
+        glb_out = self.cli(['show port-security global'])
+        glb_text = glb_out.get('show port-security global', '')
+        enabled = 'enabled' in glb_text and 'disabled' not in glb_text
+
+        if interface is not None and isinstance(interface, str):
+            # Single port — use detailed view
+            cmd = f'show port-security interface {interface}'
+            out = self.cli([cmd])
+            ports = self._parse_port_security_detail(out.get(cmd, ''))
+        else:
+            # All ports or list — use table view
+            cmd = 'show port-security interface'
+            out = self.cli([cmd])
+            ports = self._parse_port_security_table(out.get(cmd, ''))
+            if interface is not None:
+                want = set(interface)
+                ports = {k: v for k, v in ports.items() if k in want}
+
+        return {
+            'enabled': enabled,
+            'mode': 'mac-based',  # CLI doesn't show mode in output
+            'ports': ports,
+        }
+
+    def set_port_security(self, interface=None, enabled=None, mode=None,
+                          dynamic_limit=None, static_limit=None,
+                          auto_disable=None, violation_trap_mode=None,
+                          violation_trap_frequency=None, move_macs=None,
+                          **kwargs):
+        """Set port security configuration via CLI."""
+        self._config_mode()
+        try:
+            if interface is not None:
+                interfaces = ([interface] if isinstance(interface, str)
+                              else list(interface))
+                for iface in interfaces:
+                    self.cli(f'interface {iface}')
+                    if enabled is not None:
+                        self.cli('port-security operation' if enabled
+                                 else 'no port-security operation')
+                    if dynamic_limit is not None:
+                        self.cli(
+                            f'port-security max-dynamic {int(dynamic_limit)}')
+                    if static_limit is not None:
+                        self.cli(
+                            f'port-security max-static {int(static_limit)}')
+                    if auto_disable is not None:
+                        self.cli('port-security auto-disable' if auto_disable
+                                 else 'no port-security auto-disable')
+                    if violation_trap_mode is not None:
+                        self.cli(
+                            'port-security violation-traps operation'
+                            if violation_trap_mode
+                            else 'no port-security violation-traps operation')
+                    if violation_trap_frequency is not None:
+                        self.cli(
+                            'port-security violation-traps frequency '
+                            f'{int(violation_trap_frequency)}')
+                    if move_macs:
+                        self.cli('port-security mac-address move')
+                    self.cli('exit')
+            else:
+                if enabled is not None:
+                    self.cli('port-security operation' if enabled
+                             else 'no port-security operation')
+                if mode is not None:
+                    self.cli(f'port-security mode {mode}')
+        finally:
+            self._exit_config_mode()
+
+    def add_port_security(self, interface, vlan=None, mac=None, ip=None,
+                          entries=None):
+        """Add static MAC/IP entries to port security via CLI."""
+        if entries is None:
+            if mac is not None:
+                entries = [{'vlan': vlan, 'mac': mac}]
+            elif ip is not None:
+                entries = [{'vlan': vlan, 'ip': ip}]
+            else:
+                raise ValueError("Provide mac=, ip=, or entries=")
+
+        self._config_mode()
+        try:
+            self.cli(f'interface {interface}')
+            for entry in entries:
+                v = entry.get('vlan', vlan)
+                if 'mac' in entry:
+                    self.cli(
+                        f"port-security mac-address add {entry['mac']} {v}")
+                elif 'ip' in entry:
+                    self.cli(
+                        f"port-security ip-address add {entry['ip']} {v}")
+            self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    def delete_port_security(self, interface, vlan=None, mac=None, ip=None,
+                             entries=None):
+        """Remove static MAC/IP entries from port security via CLI."""
+        if entries is None:
+            if mac is not None:
+                entries = [{'vlan': vlan, 'mac': mac}]
+            elif ip is not None:
+                entries = [{'vlan': vlan, 'ip': ip}]
+            else:
+                raise ValueError("Provide mac=, ip=, or entries=")
+
+        self._config_mode()
+        try:
+            self.cli(f'interface {interface}')
+            for entry in entries:
+                v = entry.get('vlan', vlan)
+                if 'mac' in entry:
+                    self.cli(
+                        f"port-security mac-address delete {entry['mac']} {v}")
+                elif 'ip' in entry:
+                    self.cli(
+                        f"port-security ip-address delete {entry['ip']} {v}")
+            self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    # ------------------------------------------------------------------
+    # DHCP Snooping
+    # ------------------------------------------------------------------
+
+    def get_dhcp_snooping(self, interface=None):
+        """Return DHCP snooping configuration via CLI."""
+        # Global settings
+        glb_out = self.cli(
+            ['show ip dhcp-snooping global']
+        ).get('show ip dhcp-snooping global', '')
+        gdata = parse_dot_keys(glb_out)
+        enabled = gdata.get('DHCP Snooping Mode',
+                            'disabled').strip() == 'enabled'
+        verify_mac = gdata.get('Source MAC Verification',
+                               'disabled').strip() == 'enabled'
+
+        # VLAN table
+        vlan_out = self.cli(
+            ['show ip dhcp-snooping vlan']
+        ).get('show ip dhcp-snooping vlan', '')
+        vlans = {}
+        for fields in parse_table(vlan_out, min_fields=2):
+            try:
+                vid = int(fields[0])
+            except (ValueError, IndexError):
+                continue
+            vlans[vid] = {
+                'enabled': fields[1].lower() in ('yes', 'enable',
+                                                  'enabled'),
+            }
+
+        # Per-interface table
+        intf_out = self.cli(
+            ['show ip dhcp-snooping interfaces']
+        ).get('show ip dhcp-snooping interfaces', '')
+
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for fields in parse_table(intf_out, min_fields=6):
+            if '/' not in fields[0]:
+                continue
+            name = fields[0]
+            if want is not None and name not in want:
+                continue
+            # Interface  Trust  Auto-Disable  Log  RateLimit  BurstInterval
+            # Values: yes/no or enable/disable
+            def _is_on(v):
+                return v.lower() in ('yes', 'enable', 'enabled')
+            ports[name] = {
+                'trusted': _is_on(fields[1]),
+                'log': _is_on(fields[3]),
+                'rate_limit': int(fields[4]) if fields[4] != '-' else -1,
+                'burst_interval': int(fields[5]) if fields[5] != '-' else 1,
+                'auto_disable': _is_on(fields[2]),
+            }
+
+        return {
+            'enabled': enabled,
+            'verify_mac': verify_mac,
+            'vlans': vlans,
+            'ports': ports,
+        }
+
+    def set_dhcp_snooping(self, interface=None, enabled=None,
+                          verify_mac=None, vlan=None, vlan_enabled=None,
+                          trusted=None, log=None, rate_limit=None,
+                          burst_interval=None, auto_disable=None,
+                          **kwargs):
+        """Set DHCP snooping configuration via CLI."""
+        self._config_mode()
+        try:
+            # Global settings
+            if enabled is not None:
+                self.cli('ip dhcp-snooping mode' if enabled
+                         else 'no ip dhcp-snooping mode')
+            if verify_mac is not None:
+                self.cli('ip dhcp-snooping verify-mac' if verify_mac
+                         else 'no ip dhcp-snooping verify-mac')
+
+            # Per-VLAN
+            if vlan is not None and vlan_enabled is not None:
+                vlans = [vlan] if isinstance(vlan, int) else list(vlan)
+                for vid in vlans:
+                    self.cli(f'vlan {vid}')
+                    self.cli('ip dhcp-snooping' if vlan_enabled
+                             else 'no ip dhcp-snooping')
+                    self.cli('exit')
+
+            # Per-port
+            if interface is not None:
+                interfaces = ([interface] if isinstance(interface, str)
+                              else list(interface))
+                for iface in interfaces:
+                    self.cli(f'interface {iface}')
+                    if trusted is not None:
+                        self.cli('ip dhcp-snooping trust' if trusted
+                                 else 'no ip dhcp-snooping trust')
+                    if log is not None:
+                        self.cli('ip dhcp-snooping log' if log
+                                 else 'no ip dhcp-snooping log')
+                    if rate_limit is not None:
+                        if int(rate_limit) < 0:
+                            self.cli('no ip dhcp-snooping limit')
+                        else:
+                            cmd = f'ip dhcp-snooping limit {int(rate_limit)}'
+                            if burst_interval is not None:
+                                cmd += f' {int(burst_interval)}'
+                            self.cli(cmd)
+                    elif burst_interval is not None:
+                        # burst_interval alone — need current rate_limit
+                        self.cli(
+                            f'ip dhcp-snooping limit 15 {int(burst_interval)}')
+                    if auto_disable is not None:
+                        self.cli('ip dhcp-snooping auto-disable'
+                                 if auto_disable
+                                 else 'no ip dhcp-snooping auto-disable')
+                    self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    # ------------------------------------------------------------------
+    # ARP Inspection (DAI)
+    # ------------------------------------------------------------------
+
+    def get_arp_inspection(self, interface=None):
+        """Return Dynamic ARP Inspection configuration via CLI."""
+        # Global settings
+        glb_out = self.cli(
+            ['show ip arp-inspection global']
+        ).get('show ip arp-inspection global', '')
+        gdata = parse_dot_keys(glb_out)
+        validate_src_mac = gdata.get(
+            'Source MAC Verification', 'disabled').strip() == 'enabled'
+        validate_dst_mac = gdata.get(
+            'Destination MAC Verification', 'disabled').strip() == 'enabled'
+        validate_ip = gdata.get(
+            'IP Address Verification', 'disabled').strip() == 'enabled'
+
+        # VLAN table
+        vlan_out = self.cli(
+            ['show ip arp-inspection vlan']
+        ).get('show ip arp-inspection vlan', '')
+        vlans = {}
+        for fields in parse_table(vlan_out, min_fields=5):
+            try:
+                vid = int(fields[0])
+            except (ValueError, IndexError):
+                continue
+            def _is_on(v):
+                return v.lower() in ('yes', 'enable', 'enabled')
+            vlans[vid] = {
+                'enabled': _is_on(fields[1]),
+                'log': _is_on(fields[2]),
+                'binding_check': _is_on(fields[3]),
+                'acl_static': _is_on(fields[4]),
+                'acl_name': fields[5] if len(fields) > 5 else '',
+            }
+
+        # Per-interface table
+        intf_out = self.cli(
+            ['show ip arp-inspection interfaces']
+        ).get('show ip arp-inspection interfaces', '')
+
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for fields in parse_table(intf_out, min_fields=5):
+            if '/' not in fields[0]:
+                continue
+            name = fields[0]
+            if want is not None and name not in want:
+                continue
+            # Interface  Trust  Auto-Disable  RateLimit  BurstInterval
+            def _is_on(v):
+                return v.lower() in ('yes', 'enable', 'enabled')
+            ports[name] = {
+                'trusted': _is_on(fields[1]),
+                'rate_limit': int(fields[3]) if fields[3] != '-' else -1,
+                'burst_interval': int(fields[4]) if fields[4] != '-' else 1,
+                'auto_disable': _is_on(fields[2]),
+            }
+
+        return {
+            'validate_src_mac': validate_src_mac,
+            'validate_dst_mac': validate_dst_mac,
+            'validate_ip': validate_ip,
+            'vlans': vlans,
+            'ports': ports,
+        }
+
+    def set_arp_inspection(self, interface=None,
+                           validate_src_mac=None, validate_dst_mac=None,
+                           validate_ip=None,
+                           vlan=None, vlan_enabled=None, vlan_log=None,
+                           vlan_binding_check=None,
+                           trusted=None, rate_limit=None,
+                           burst_interval=None, auto_disable=None,
+                           **kwargs):
+        """Set Dynamic ARP Inspection configuration via CLI."""
+        self._config_mode()
+        try:
+            # Global validation flags
+            if validate_src_mac is not None:
+                self.cli('ip arp-inspection verify src-mac'
+                         if validate_src_mac
+                         else 'no ip arp-inspection verify src-mac')
+            if validate_dst_mac is not None:
+                self.cli('ip arp-inspection verify dst-mac'
+                         if validate_dst_mac
+                         else 'no ip arp-inspection verify dst-mac')
+            if validate_ip is not None:
+                self.cli('ip arp-inspection verify ip'
+                         if validate_ip
+                         else 'no ip arp-inspection verify ip')
+
+            # Per-VLAN
+            if vlan is not None:
+                vlans_list = [vlan] if isinstance(vlan, int) else list(vlan)
+                for vid in vlans_list:
+                    self.cli(f'vlan {vid}')
+                    if vlan_enabled is not None:
+                        self.cli('ip arp-inspection' if vlan_enabled
+                                 else 'no ip arp-inspection')
+                    if vlan_log is not None:
+                        self.cli(f'ip arp-inspection log {vid}'
+                                 if vlan_log
+                                 else f'no ip arp-inspection log {vid}')
+                    if vlan_binding_check is not None:
+                        # binding-check is a global per-VLAN toggle
+                        pass  # set via MOPS/SNMP only
+                    self.cli('exit')
+
+            # Per-port
+            if interface is not None:
+                interfaces = ([interface] if isinstance(interface, str)
+                              else list(interface))
+                for iface in interfaces:
+                    self.cli(f'interface {iface}')
+                    if trusted is not None:
+                        self.cli('ip arp-inspection trust' if trusted
+                                 else 'no ip arp-inspection trust')
+                    if rate_limit is not None:
+                        if int(rate_limit) < 0:
+                            self.cli('no ip arp-inspection limit')
+                        else:
+                            cmd = f'ip arp-inspection limit {int(rate_limit)}'
+                            if burst_interval is not None:
+                                cmd += f' {int(burst_interval)}'
+                            self.cli(cmd)
+                    elif burst_interval is not None:
+                        self.cli(
+                            f'ip arp-inspection limit 15 '
+                            f'{int(burst_interval)}')
+                    if auto_disable is not None:
+                        self.cli('ip arp-inspection auto-disable'
+                                 if auto_disable
+                                 else 'no ip arp-inspection auto-disable')
+                    self.cli('exit')
+        finally:
+            self._exit_config_mode()
+
+    # -------------------------------------------------------------------
+    # IP Source Guard
+    # -------------------------------------------------------------------
+
+    def get_ip_source_guard(self, interface=None):
+        """Return IP Source Guard configuration and bindings via CLI."""
+        # Per-interface table
+        intf_out = self.cli(
+            ['show ip source-guard interfaces']
+        ).get('show ip source-guard interfaces', '')
+
+        want = None
+        if interface is not None:
+            want = ({interface} if isinstance(interface, str)
+                    else set(interface))
+
+        ports = {}
+        for fields in parse_table(intf_out, min_fields=3):
+            if '/' not in fields[0]:
+                continue
+            name = fields[0]
+            if want is not None and name not in want:
+                continue
+            def _is_on(v):
+                return v.lower() in ('yes', 'enable', 'enabled')
+            ports[name] = {
+                'verify_source': _is_on(fields[1]),
+                'port_security': _is_on(fields[2]) if len(fields) > 2
+                                 else False,
+            }
+
+        # Static bindings
+        static_out = self.cli(
+            ['show ip source-guard bindings static']
+        ).get('show ip source-guard bindings static', '')
+        static_bindings = []
+        for fields in parse_table(static_out, min_fields=5):
+            if '/' not in fields[2]:
+                continue
+            iface = fields[2]
+            if want is not None and iface not in want:
+                continue
+            static_bindings.append({
+                'interface': iface,
+                'vlan_id': int(fields[3]) if fields[3].isdigit() else 0,
+                'mac_address': fields[0],
+                'ip_address': fields[1],
+                'active': fields[4].lower() in ('active', 'yes')
+                          if len(fields) > 4 else True,
+                'hw_status': fields[5].lower() in ('active', 'yes')
+                             if len(fields) > 5 else False,
+            })
+
+        # Dynamic bindings
+        dynamic_out = self.cli(
+            ['show ip source-guard bindings dynamic']
+        ).get('show ip source-guard bindings dynamic', '')
+        dynamic_bindings = []
+        for fields in parse_table(dynamic_out, min_fields=4):
+            if '/' not in fields[2]:
+                continue
+            iface = fields[2]
+            if want is not None and iface not in want:
+                continue
+            dynamic_bindings.append({
+                'interface': iface,
+                'vlan_id': int(fields[3]) if fields[3].isdigit() else 0,
+                'mac_address': fields[0],
+                'ip_address': fields[1],
+                'hw_status': fields[4].lower() in ('active', 'yes')
+                             if len(fields) > 4 else False,
+            })
+
+        return {
+            'ports': ports,
+            'static_bindings': static_bindings,
+            'dynamic_bindings': dynamic_bindings,
+        }
+
+    def set_ip_source_guard(self, interface=None,
+                            verify_source=None, port_security=None,
+                            **kwargs):
+        """Set IP Source Guard configuration via CLI."""
+        if interface is None:
+            return
+
+        interfaces = ([interface] if isinstance(interface, str)
+                      else list(interface))
+        self._config_mode()
+        try:
+            for iface in interfaces:
+                self.cli(f'interface {iface}')
+                if verify_source is not None:
+                    self.cli('ip source-guard mode' if verify_source
+                             else 'no ip source-guard mode')
+                if port_security is not None and port_security:
+                    self.cli('ip source-guard verify-mac')
+                self.cli('exit')
         finally:
             self._exit_config_mode()
 

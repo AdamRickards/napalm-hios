@@ -1832,8 +1832,21 @@ services = device.get_services('unsigned_sw', 'mvrp')
 ```python
 {
     'http': {'enabled': True, 'port': 80},
-    'https': {'enabled': True, 'port': 443},
-    'ssh': {'enabled': True},
+    'https': {
+        'enabled': True, 'port': 443,
+        'tls_versions': ['tlsv1.2'],
+        'tls_cipher_suites': [
+            'tls-ecdhe-rsa-with-aes-128-gcm-sha256',
+            'tls-ecdhe-rsa-with-aes-256-gcm-sha384',
+        ],
+    },
+    'ssh': {
+        'enabled': True,
+        'hmac_algorithms': ['hmac-sha2-256', 'hmac-sha2-256-etm@openssh.com'],
+        'kex_algorithms': ['diffie-hellman-group16-sha512', 'ecdh-sha2-nistp256'],
+        'encryption_algorithms': ['aes128-ctr', 'aes128-gcm@openssh.com'],
+        'host_key_algorithms': ['ecdsa-sha2-nistp256', 'ssh-ed25519'],
+    },
     'telnet': {'enabled': False},
     'snmp': {'v1': False, 'v2': False, 'v3': True, 'port': 161},
     'industrial': {
@@ -1885,8 +1898,34 @@ device.set_services(unsigned_sw=False, devsec_monitors=True)
 | `mvrp` | bool | MVRP global enable |
 | `mmrp` | bool | MMRP global enable |
 | `devsec_monitors` | bool | All 19 device security sense monitors |
+| `tls_versions` | list[str] | HTTPS TLS versions (MOPS/SNMP only) |
+| `tls_cipher_suites` | list[str] | HTTPS TLS cipher suites (MOPS/SNMP only) |
+| `ssh_hmac` | list[str] | SSH HMAC algorithms (MOPS/SNMP only) |
+| `ssh_kex` | list[str] | SSH key exchange algorithms (MOPS/SNMP only) |
+| `ssh_encryption` | list[str] | SSH encryption algorithms (MOPS/SNMP only) |
+| `ssh_host_key` | list[str] | SSH host key algorithms (MOPS/SNMP only) |
 
 `gvrp` and `gmrp` are read-only (`False`) — legacy protocols with no global toggle in HiOS MIBs.
+
+Cipher list parameters accept a list of algorithm names matching those returned by `get_services()`.
+SSH backend returns empty lists for cipher fields (no CLI equivalent) and does not support cipher SET.
+
+```python
+# Harden TLS — restrict to TLS 1.2 with GCM-only ciphers
+device.set_services(
+    tls_versions=['tlsv1.2'],
+    tls_cipher_suites=[
+        'tls-ecdhe-rsa-with-aes-128-gcm-sha256',
+        'tls-ecdhe-rsa-with-aes-256-gcm-sha384',
+    ])
+
+# Harden SSH — remove SHA1, keep SHA2 only
+device.set_services(
+    ssh_hmac=['hmac-sha2-256', 'hmac-sha2-256-etm@openssh.com'],
+    ssh_kex=['diffie-hellman-group16-sha512', 'ecdh-sha2-nistp256'])
+```
+
+JUSTIN cross-reference: `sec-crypto-ciphers` uses these fields to detect weak algorithms.
 
 ---
 
@@ -1920,6 +1959,1047 @@ Set SNMP version enable/disable.
 ```python
 device.set_snmp_config(v1=False, v2=False, v3=True)
 ```
+
+---
+
+## Signal Contact
+
+The signal contact is a physical relay on HiOS switches used for fault signalling. It can be driven by the device's own monitoring engine (temperature, link failure, PSU state, etc.), the device security engine, or set manually.
+
+### get_signal_contact()
+
+Returns signal contact configuration and status for all contacts (typically 1, some platforms have 2).
+
+```python
+sc = device.get_signal_contact()
+```
+
+```python
+{
+    1: {
+        'mode': 'monitor',           # manual/monitor/deviceState/deviceSecurity/deviceStateAndSecurity
+        'manual_state': 'close',     # open/close (for manual mode)
+        'trap_enabled': False,
+        'monitoring': {
+            'temperature': True,
+            'link_failure': False,
+            'envm_removal': False,
+            'envm_not_in_sync': False,
+            'ring_redundancy': False,
+            # Platform-dependent: fan, module_removal, ethernet_loops, humidity, stp_port_block
+        },
+        'power_supply': {1: True, 2: True},      # per-PSU monitoring
+        'link_alarm': {'1/1': False, '1/2': False, ...},  # per-port
+        'status': {
+            'oper_state': 'open',                 # open/close
+            'last_change': '2026-03-10 08:23:09',
+            'cause': 'power-supply',
+            'cause_index': 2,
+            'events': [
+                {'cause': 'power-supply', 'info': 2, 'timestamp': '2026-03-10 08:23:09'},
+            ],
+        },
+    }
+}
+```
+
+### set_signal_contact(contact_id=1, mode=None, manual_state=None, trap_enabled=None, monitoring=None, power_supply=None, link_alarm=None)
+
+Configure a signal contact. All parameters optional — only supplied values are changed.
+
+```python
+# Set to monitor device + security status
+device.set_signal_contact(contact_id=1, mode='deviceStateAndSecurity')
+
+# Unmonitor PSU 2 (intentionally unpowered)
+device.set_signal_contact(contact_id=1, power_supply={2: False})
+
+# Enable link alarm on specific port
+device.set_signal_contact(contact_id=1, link_alarm={'1/1': True})
+```
+
+| Parameter | Type | Values |
+|-----------|------|--------|
+| `mode` | str | `manual`, `monitor`, `deviceState`, `deviceSecurity`, `deviceStateAndSecurity` |
+| `manual_state` | str | `open`, `close` |
+| `trap_enabled` | bool | Enable/disable SNMP trap on relay change |
+| `monitoring` | dict | `{flag: bool}` — see monitoring keys above |
+| `power_supply` | dict | `{psu_id: bool}` |
+| `link_alarm` | dict | `{'port': bool}` |
+
+---
+
+## Device Monitor
+
+The device monitor engine tracks device health (temperature, PSU, link, NVM). When signal contact mode is `deviceState` or `deviceStateAndSecurity`, the relay is driven by this engine's oper_state.
+
+### get_device_monitor()
+
+Returns device monitor configuration and status (singleton — no contact ID).
+
+```python
+dm = device.get_device_monitor()
+```
+
+```python
+{
+    'trap_enabled': True,
+    'monitoring': {
+        'temperature': True,
+        'link_failure': False,
+        'envm_removal': False,
+        'envm_not_in_sync': False,
+        'ring_redundancy': False,
+    },
+    'power_supply': {1: True, 2: True},
+    'link_alarm': {'1/1': False, '1/2': False, ...},
+    'status': {
+        'oper_state': 'error',
+        'last_change': '2026-03-10 08:53:30',
+        'cause': 'power-supply',
+        'cause_index': 2,
+        'events': [...],
+    },
+}
+```
+
+### set_device_monitor(trap_enabled=None, monitoring=None, power_supply=None, link_alarm=None)
+
+Configure device monitor. Same parameters as signal contact (minus `mode` and `manual_state`).
+
+```python
+device.set_device_monitor(trap_enabled=True)
+device.set_device_monitor(monitoring={'temperature': True, 'link_failure': True})
+device.set_device_monitor(power_supply={2: False})
+```
+
+---
+
+## Device Security Status
+
+HiOS's built-in IEC 62443 compliance engine — 19 security monitors that flag configuration weaknesses. When signal contact mode is `deviceSecurity` or `deviceStateAndSecurity`, the relay is driven by this engine's oper_state.
+
+### get_devsec_status()
+
+Returns security monitor flags, per-port no-link monitoring, and status events.
+
+```python
+ds = device.get_devsec_status()
+```
+
+```python
+{
+    'trap_enabled': False,
+    'monitoring': {
+        'password_change': True,
+        'password_min_length': True,
+        'password_policy_not_configured': True,
+        'password_policy_bypass': True,
+        'telnet_enabled': True,
+        'http_enabled': True,
+        'snmp_unsecure': True,
+        'sysmon_enabled': True,
+        'envm_update_enabled': True,
+        'no_link_enabled': True,
+        'hidiscovery_enabled': True,
+        'envm_config_load_unsecure': True,
+        'iec61850_mms_enabled': True,
+        'https_cert_warning': True,
+        'modbus_tcp_enabled': True,
+        'ethernet_ip_enabled': True,
+        'profinet_enabled': True,
+        'secure_boot_disabled': True,
+        'dev_mode_enabled': True,
+        # Platform-dependent: pml_disabled
+    },
+    'no_link': {'1/1': False, '1/2': False, ...},  # per-port
+    'status': {
+        'oper_state': 'error',
+        'last_change': '2026-03-10 09:19:44',
+        'cause': 'sysmon-enabled',
+        'cause_index': 0,
+        'events': [
+            {'cause': 'password-policy-inactive', 'info': 0, 'timestamp': '2026-03-09 11:41:07'},
+            ...
+        ],
+    },
+}
+```
+
+### set_devsec_status(trap_enabled=None, monitoring=None, no_link=None)
+
+Configure device security monitors. Toggle individual monitors or per-port no-link detection.
+
+```python
+# Disable sysmon monitoring (intentionally accessible)
+device.set_devsec_status(monitoring={'sysmon_enabled': False})
+
+# Enable trap on security violation
+device.set_devsec_status(trap_enabled=True)
+```
+
+---
+
+## Banner
+
+Pre-login and CLI login banners (HM2-MGMTACCESS-MIB).
+
+### get_banner()
+
+Returns banner configuration for both pre-login and CLI login.
+
+```python
+banner = device.get_banner()
+```
+
+```python
+{
+    'pre_login': {
+        'enabled': True,
+        'text': 'Authorized use only',
+    },
+    'cli_login': {
+        'enabled': False,
+        'text': '',
+    },
+}
+```
+
+### set_banner(pre_login_enabled=None, pre_login_text=None, cli_login_enabled=None, cli_login_text=None)
+
+Configure pre-login and/or CLI login banners. All parameters optional.
+
+```python
+# Enable pre-login banner with text
+device.set_banner(pre_login_enabled=True, pre_login_text='Authorized use only')
+
+# Disable CLI banner
+device.set_banner(cli_login_enabled=False)
+
+# Set text (max 512 for pre-login, 1024 for CLI)
+device.set_banner(pre_login_text='Warning: unauthorized access prohibited')
+```
+
+---
+
+## Session Config
+
+### get_session_config()
+
+Read session timeout and max-sessions for all management protocols.
+
+```python
+sc = device.get_session_config()
+# {
+#     'ssh':          {'timeout': 5, 'max_sessions': 5, 'active_sessions': 1},
+#     'ssh_outbound': {'timeout': 5, 'max_sessions': 5, 'active_sessions': 0},
+#     'telnet':       {'timeout': 5, 'max_sessions': 5, 'active_sessions': 0},
+#     'web':          {'timeout': 5},
+#     'serial':       {'timeout': 5, 'enabled': True, 'oper_status': 'up'},
+#     'netconf':      {'timeout': 60, 'max_sessions': 5, 'active_sessions': 0},
+#     'envm':         {'enabled': False, 'oper_status': 'down'},
+# }
+```
+
+All timeouts in minutes (0 = disabled). NETCONF timeout is stored as seconds on device but normalised to minutes. `active_sessions` is a read-only runtime counter (offline returns 0). `enabled` and `oper_status` are physical interface admin/oper state from `hm2MgmtAccessPhysicalIntfGroup`. `oper_status` is `'up'` or `'down'`. Not all platforms have serial or ENVM interfaces — fields reflect hardware capability.
+
+### set_session_config(ssh_timeout=None, ssh_max_sessions=None, ssh_outbound_timeout=None, ssh_outbound_max_sessions=None, telnet_timeout=None, telnet_max_sessions=None, web_timeout=None, serial_timeout=None, serial_enabled=None, envm_enabled=None, netconf_timeout=None, netconf_max_sessions=None)
+
+Set session timeouts and max-sessions. All parameters optional, all timeouts in minutes.
+
+```python
+# Set all timeouts to 5 minutes
+device.set_session_config(ssh_timeout=5, telnet_timeout=5, web_timeout=5, serial_timeout=5)
+
+# Increase SSH max sessions
+device.set_session_config(ssh_max_sessions=3)
+
+# Disable ENVM CLI interface
+device.set_session_config(envm_enabled=False)
+
+# Disable serial console
+device.set_session_config(serial_enabled=False)
+```
+
+---
+
+## IP Restrict (Restricted Management Access)
+
+### get_ip_restrict()
+
+Read restricted management access configuration — global enable/logging and per-rule table (max 16 rules).
+
+```python
+rma = device.get_ip_restrict()
+# {
+#     'enabled': False,
+#     'logging': False,
+#     'rules': [
+#         {
+#             'index': 1,
+#             'ip': '192.168.1.0',
+#             'prefix_length': 24,
+#             'services': {
+#                 'http': True, 'https': True, 'snmp': True,
+#                 'telnet': True, 'ssh': True, 'iec61850': True,
+#                 'modbus': True, 'ethernet_ip': True, 'profinet': True,
+#             },
+#             'interface': '',
+#             'per_rule_logging': False,
+#             'log_counter': 0,
+#         },
+#     ],
+# }
+```
+
+### set_ip_restrict(enabled=None, logging=None)
+
+Set global RMA enable and logging. Both parameters optional.
+
+```python
+device.set_ip_restrict(enabled=True)
+device.set_ip_restrict(enabled=False, logging=True)
+```
+
+### add_ip_restrict_rule(index, ip='0.0.0.0', prefix_length=0, http=True, https=True, snmp=True, telnet=True, ssh=True, iec61850=True, modbus=True, ethernet_ip=True, profinet=True, interface='', per_rule_logging=False)
+
+Create a restricted management access rule at index 1-16 (RowStatus createAndGo). Service flags default to True (allow all).
+
+```python
+# Allow management from 192.168.60.0/24 via HTTPS and SSH only
+device.add_ip_restrict_rule(
+    1, ip='192.168.60.0', prefix_length=24,
+    http=False, snmp=False, telnet=False,
+    iec61850=False, modbus=False, ethernet_ip=False, profinet=False)
+
+# Then enable restriction
+device.set_ip_restrict(enabled=True)
+```
+
+### delete_ip_restrict_rule(index)
+
+Delete a restricted management access rule by index (RowStatus destroy).
+
+```python
+device.delete_ip_restrict_rule(1)
+```
+
+---
+
+## DNS Client
+
+### get_dns()
+
+Read DNS client global configuration and server list.
+
+```python
+dns = device.get_dns()
+# {
+#     'enabled': False,
+#     'config_source': 'mgmt-dhcp',
+#     'domain_name': '',
+#     'timeout': 3,
+#     'retransmits': 2,
+#     'cache_enabled': True,
+#     'servers': ['10.0.0.1', '10.0.0.2'],
+#     'active_servers': ['10.0.0.1'],
+# }
+```
+
+`config_source` values: `'user'` (manually configured), `'mgmt-dhcp'` (DHCP on management interface), `'provider'` (ISP/WAN DHCP/PPPoE). `servers` contains user-configured entries (up to 4). `active_servers` is a read-only runtime list that may include DHCP-provided servers not in `servers`. All timeouts in seconds.
+
+### set_dns(enabled=None, config_source=None, domain_name=None, timeout=None, retransmits=None, cache_enabled=None)
+
+Set DNS client global configuration. All parameters optional.
+
+```python
+device.set_dns(enabled=True, config_source='user', timeout=5)
+device.set_dns(domain_name='example.com')
+device.set_dns(cache_enabled=False)
+```
+
+### add_dns_server(address)
+
+Add a DNS server by IPv4 address. Auto-picks the next free slot (indices 1–4, max 4 servers).
+
+```python
+device.add_dns_server('8.8.8.8')
+device.add_dns_server('1.1.1.1')
+```
+
+Raises `ValueError` if all 4 slots are full.
+
+### delete_dns_server(address)
+
+Delete a DNS server by exact IPv4 address.
+
+```python
+device.delete_dns_server('8.8.8.8')
+```
+
+Raises `ValueError` if address not found.
+
+---
+
+## PoE — Power over Ethernet
+
+### get_poe()
+
+Read global PoE status, per-module power budgets, and per-port PoE configuration.
+
+```python
+poe = device.get_poe()
+# {
+#     'enabled': True,
+#     'power_w': 30,
+#     'delivered_current_ma': 250,
+#     'modules': {
+#         '1/1': {
+#             'budget_w': 370,
+#             'max_w': 370,
+#             'reserved_w': 30,
+#             'delivered_w': 5,
+#             'source': 'internal',
+#             'threshold_pct': 90,
+#             'notifications': True,
+#         }
+#     },
+#     'ports': {
+#         '1/1': {
+#             'enabled': True,
+#             'status': 'delivering',
+#             'priority': 'high',
+#             'classification': 'class4',
+#             'consumption_mw': 5300,
+#             'power_limit_mw': 15400,
+#             'name': 'AP',
+#             'fast_startup': True,
+#         }
+#     }
+# }
+```
+
+`status` values: `'disabled'`, `'searching'`, `'delivering'`, `'fault'`, `'test'`, `'other-fault'`. `priority` values: `'critical'`, `'high'`, `'low'`. `classification` values: `'class0'`–`'class8'` (or `None` when port is not delivering or class is invalid). `source` values: `'internal'`, `'external'`. All power values in milliwatts except module-level fields which are in watts.
+
+### set_poe(interface=None, enabled=None, priority=None, power_limit_mw=None, name=None, fast_startup=None)
+
+Configure global PoE admin state or per-port settings. All parameters optional.
+
+Without `interface`, sets global admin state only:
+
+```python
+device.set_poe(enabled=True)
+device.set_poe(enabled=False)
+```
+
+With `interface`, sets per-port configuration (single port or list):
+
+```python
+device.set_poe(interface='1/1', enabled=False)
+device.set_poe(interface='1/1', priority='critical', power_limit_mw=15400)
+device.set_poe(interface=['1/1', '1/2'], priority='high', fast_startup=True)
+device.set_poe(interface='1/1', name='AP-Office')
+```
+
+`priority` values: `'critical'`, `'high'`, `'low'`. `power_limit_mw`: 0–30000 (0 = unlimited). Raises `ValueError` for invalid priority or unknown interface.
+
+---
+
+## Remote Authentication
+
+### get_remote_auth()
+
+Check whether remote authentication services (RADIUS, TACACS+, LDAP) are configured. Detection only — no setter.
+
+```python
+auth = device.get_remote_auth()
+# {
+#     'radius': {'enabled': False},
+#     'tacacs': {'enabled': False},
+#     'ldap': {'enabled': False},
+# }
+```
+
+RADIUS and TACACS+ are considered enabled if at least one server has active RowStatus. LDAP is considered enabled if the global admin state is on. On hardware/firmware that doesn't support a protocol (e.g. TACACS+ before 10.3, LDAP on L2S), that protocol returns `{'enabled': False}` gracefully.
+
+Used by JUSTIN `sec-remote-auth` (IEC 62443 CR 1.1 SL2) to verify centralized authentication is configured.
+
+---
+
+## User Management
+
+### get_users()
+
+Get all local user accounts with role, status, SNMP security, and default password detection.
+
+```python
+users = device.get_users()
+# [
+#     {
+#         'name': 'admin',
+#         'role': 'administrator',
+#         'locked': False,
+#         'policy_check': False,
+#         'snmp_auth': 'md5',
+#         'snmp_enc': 'des',
+#         'active': True,
+#         'default_password': True,
+#     },
+# ]
+```
+
+**Return fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | str | Username |
+| `role` | str | `'administrator'`, `'operator'`, `'guest'`, `'auditor'`, `'unauthorized'`, `'custom1'`, `'custom2'`, `'custom3'` |
+| `locked` | bool | Account is locked out |
+| `policy_check` | bool | Per-user password policy enforcement enabled |
+| `snmp_auth` | str | SNMPv3 auth type: `'md5'` or `'sha'` |
+| `snmp_enc` | str | SNMPv3 encryption: `'none'`, `'des'`, `'aes128'`, `'aes256'` |
+| `active` | bool | Account is active (RowStatus = 1) |
+| `default_password` | bool | Password unchanged from factory default (MOPS only — always `False` on SNMP/SSH) |
+
+The `default_password` field queries `hm2PwdMgmtDefaultPwdStatusTable`, which is only available via MOPS. SNMP returns `NoSuchObject` for this table. SSH has no equivalent. Non-MOPS protocols always return `False`.
+
+Used by JUSTIN `sys-default-passwords`, `sec-user-review`, and `sec-user-roles` (IEC 62443 CR 1.1/1.3).
+
+### set_user()
+
+Create or update a local user account.
+
+```python
+# Create a new user (password required for new users)
+device.set_user('operator1', password='SecurePass123!', role='operator')
+
+# Update password on existing user
+device.set_user('admin', password='NewSecurePass!')
+
+# Change role
+device.set_user('operator1', role='auditor')
+
+# Configure SNMPv3 security
+device.set_user('operator1', snmp_auth_type='sha', snmp_enc_type='aes128',
+                snmp_auth_password='AuthPass123!', snmp_enc_password='EncPass123!')
+
+# Unlock a locked-out user
+device.set_user('operator1', locked=False)
+
+# Enable per-user password policy check
+device.set_user('operator1', policy_check=True)
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `name` | str | Yes | Username (1–32 chars) |
+| `password` | str | New users | Login password (required when creating, optional when updating) |
+| `role` | str | No | One of the role values from `get_users()` |
+| `snmp_auth_type` | str | No | `'md5'` or `'sha'` |
+| `snmp_enc_type` | str | No | `'none'`, `'des'`, `'aes128'`, `'aes256'` |
+| `snmp_auth_password` | str | No | SNMPv3 authentication password |
+| `snmp_enc_password` | str | No | SNMPv3 encryption password |
+| `policy_check` | bool | No | Per-user password policy enforcement |
+| `locked` | bool | No | Account lockout (set `False` to unlock) |
+
+New users are created via a three-step RowStatus sequence: `createAndWait(5)` → set password (separate operation) → activate + set attributes. This is required because HiOS demands the password be set in a separate PDU from row creation before the row can transition to `active(1)`.
+
+Raises `ValueError` for invalid role, auth type, or encryption type. Raises `ValueError` if password is omitted for a new user.
+
+### delete_user()
+
+Delete a local user account.
+
+```python
+device.delete_user('operator1')
+```
+
+Sets RowStatus to `destroy(6)`. The user is removed immediately.
+
+---
+
+## SNMP Config (extended)
+
+`get_snmp_config()` and `set_snmp_config()` were extended in v1.17.0 with three new fields:
+
+- **`trap_service`** — global SNMP trap service enable (read/write)
+- **`v3_users`** — per-user SNMPv3 auth/encryption types (read-only, from HM2-USERMGMT-MIB)
+- **`trap_destinations`** — SNMP trap receiver table (read-only, from SNMP-TARGET-MIB)
+
+```python
+snmp = device.get_snmp_config()
+# Existing fields unchanged:
+#   snmp['versions']     → {'v1': False, 'v2': False, 'v3': True}
+#   snmp['port']         → 161
+#   snmp['communities']  → [{'name': 'public', 'access': 'ro'}]
+#
+# New fields:
+#   snmp['trap_service']       → True
+#   snmp['v3_users']           → [{'name': 'admin', 'auth_type': 'md5', 'enc_type': 'des'}]
+#   snmp['trap_destinations']  → [{'name': 'nms1', 'address': '192.168.1.100:162',
+#                                   'security_model': 'v3', 'security_name': 'admin',
+#                                   'security_level': 'authpriv'}]
+
+# Toggle trap service
+device.set_snmp_config(trap_service=True)
+device.set_snmp_config(trap_service=False)
+```
+
+Auth type values: `''` (none), `'md5'`, `'sha'`. Encryption type values: `'none'`, `'des'`, `'aes128'`, `'aes256'`.
+
+### add_snmp_trap_dest()
+
+Add an SNMP trap destination. Creates entries in both `snmpTargetAddrTable` and
+`snmpTargetParamsTable` (RFC 3413 SNMP-TARGET-MIB). Supports v1, v2c, and v3 traps.
+
+```python
+# v3 trap destination (encrypted + authenticated)
+device.add_snmp_trap_dest('nms1', '192.168.1.100',
+                          security_model='v3',
+                          security_name='admin',
+                          security_level='authpriv')
+
+# v1 trap destination (community-based cleartext)
+device.add_snmp_trap_dest('legacy', '10.0.0.1',
+                          security_model='v1',
+                          security_name='trap_user')
+```
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `name` | str | required | Destination name (1-32 chars) |
+| `address` | str | required | Destination IP address |
+| `port` | int | `162` | UDP port |
+| `security_model` | str | `'v3'` | `'v1'`, `'v2c'`, or `'v3'` |
+| `security_name` | str | `'admin'` | Community (v1/v2c) or username (v3) |
+| `security_level` | str | `'authpriv'` | `'noauth'`, `'auth'`, or `'authpriv'` |
+
+v1/v2c traps are community-based cleartext — `security_level` is forced to `noauth`
+regardless of the value passed. Use v3 with `authpriv` for secure trap delivery.
+
+JUSTIN cross-reference: `sec-snmpv3-traps` checks that at least one v3 authPriv
+destination exists.
+
+### delete_snmp_trap_dest()
+
+Delete an SNMP trap destination by name. Removes both the address and params
+entries from the SNMP-TARGET-MIB tables.
+
+```python
+device.delete_snmp_trap_dest('nms1')
+```
+
+---
+
+## Port Security
+
+### get_port_security(interface=None)
+
+Return port security configuration — global state, operation mode, and per-port settings including MAC/IP limits, violation traps, and static entries.
+
+```python
+# All ports
+ps = device.get_port_security()
+print(ps['enabled'])  # True/False — global admin mode
+print(ps['mode'])     # 'mac-based' or 'ip-based'
+for port, cfg in ps['ports'].items():
+    print(f"{port}: enabled={cfg['enabled']}, "
+          f"dynamic_limit={cfg['dynamic_limit']}, "
+          f"static_count={cfg['static_count']}")
+
+# Single port (uses detailed CLI view on SSH)
+ps = device.get_port_security(interface='1/1')
+
+# Multiple ports (filters from full table)
+ps = device.get_port_security(interface=['1/1', '1/2'])
+```
+
+**Return schema:**
+
+```python
+{
+    'enabled': bool,          # global port security admin mode
+    'mode': str,              # 'mac-based' or 'ip-based'
+    'ports': {
+        '1/1': {
+            'enabled': bool,               # per-port admin mode
+            'dynamic_limit': int,          # max dynamic MACs (0-600)
+            'static_limit': int,           # max static MACs (0-64)
+            'auto_disable': bool,          # auto-disable on violation
+            'violation_trap_mode': bool,   # send trap on violation
+            'violation_trap_frequency': int,  # trap rate limit (0-3600 sec)
+            'dynamic_count': int,          # current dynamic MAC count
+            'static_count': int,           # current static MAC count
+            'static_ip_count': int,        # current static IP count
+            'last_discarded_mac': str,     # last violation MAC
+            'static_macs': [{'vlan': 1, 'mac': 'aa:bb:cc:dd:ee:ff'}],
+            'static_ips': [{'vlan': 1, 'ip': '192.168.1.1'}],
+        },
+    },
+}
+```
+
+MOPS uses `decode_strings=False` with manual hex decode on DisplayString fields (static MACs/IPs, last discarded MAC). SSH table view returns two lines per port; single-port detail view uses key-value format. SNMP walks `hm2AgentPortSecurityEntry` (HM2-PLATFORM-PORTSECURITY-MIB, base OID `1.3.6.1.4.1.248.12.20.1`).
+
+### set_port_security(interface=None, ...)
+
+Configure port security at global or per-port level.
+
+```python
+# Global: enable port security, set mode
+device.set_port_security(enabled=True, mode='mac-based')
+
+# Per-port: set dynamic limit
+device.set_port_security('1/1', dynamic_limit=10)
+
+# Per-port: full config
+device.set_port_security('1/1',
+    enabled=True,
+    dynamic_limit=10,
+    static_limit=5,
+    auto_disable=True,
+    violation_trap_mode=True,
+    violation_trap_frequency=30)
+
+# Multiple ports at once
+device.set_port_security(['1/1', '1/2', '1/3'], enabled=True, dynamic_limit=10)
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `interface` | str/list/None | Port name(s), or None for global |
+| `enabled` | bool | Enable/disable (global or per-port) |
+| `mode` | str | `'mac-based'` or `'ip-based'` (global only) |
+| `dynamic_limit` | int | Max dynamic MACs (0-600, per-port) |
+| `static_limit` | int | Max static MACs (0-64, per-port) |
+| `auto_disable` | bool | Auto-disable port on violation |
+| `violation_trap_mode` | bool | Send trap on violation |
+| `violation_trap_frequency` | int | Trap rate limit in seconds (0-3600) |
+| `move_macs` | bool | Trigger MAC address move (per-port) |
+
+Raises `ValueError` for invalid `mode` values.
+
+### add_port_security(interface, vlan, mac=None, ip=None, entries=None)
+
+Add static MAC or IP entries to port security.
+
+```python
+# Single MAC
+device.add_port_security('1/1', vlan=1, mac='aa:bb:cc:dd:ee:ff')
+
+# Single IP
+device.add_port_security('1/1', vlan=2, ip='192.168.1.100')
+
+# Bulk (list of entries)
+device.add_port_security('1/1', vlan=1, entries=[
+    {'vlan': 1, 'mac': 'aa:bb:cc:dd:ee:ff'},
+    {'vlan': 2, 'mac': '11:22:33:44:55:66'},
+])
+```
+
+MOPS encodes DisplayString values as hex (e.g., `"1 aa:bb:cc:dd:ee:ff"` → hex octets) for the action OIDs `hm2AgentPortSecurityMACAddressAdd` / `IPAddressAdd`. SNMP uses `OctetString`. SSH uses CLI commands `port-security mac-address add` / `ip-address add`.
+
+### delete_port_security(interface, vlan, mac=None, ip=None, entries=None)
+
+Remove static MAC or IP entries from port security. Same signature as `add_port_security`.
+
+```python
+device.delete_port_security('1/1', vlan=1, mac='aa:bb:cc:dd:ee:ff')
+```
+
+JUSTIN cross-reference: `ns-port-security` checks that port security is enabled on access ports (skips LLDP uplinks and MRP ring ports). Harden deferred — per-site MAC limit policy required.
+
+---
+
+## DHCP Snooping
+
+### get_dhcp_snooping(interface=None)
+
+Return DHCP snooping configuration — global state, MAC verification, per-VLAN enable, and per-port trust/rate-limit settings.
+
+```python
+# Global + all ports
+ds = device.get_dhcp_snooping()
+print(ds['enabled'])      # True/False — global admin mode
+print(ds['verify_mac'])   # True/False — source MAC verification
+for vid, cfg in ds['vlans'].items():
+    print(f"VLAN {vid}: enabled={cfg['enabled']}")
+for port, cfg in ds['ports'].items():
+    print(f"{port}: trusted={cfg['trusted']}, "
+          f"rate_limit={cfg['rate_limit']}, "
+          f"auto_disable={cfg['auto_disable']}")
+
+# Single port (filters from full table)
+ds = device.get_dhcp_snooping(interface='1/1')
+
+# Multiple ports (filters from full table)
+ds = device.get_dhcp_snooping(interface=['1/1', '1/2'])
+```
+
+**Return schema:**
+
+```python
+{
+    'enabled': bool,          # global DHCP snooping admin mode
+    'verify_mac': bool,       # source MAC verification
+    'vlans': {
+        1: {
+            'enabled': bool,  # DHCP snooping enabled on this VLAN
+        },
+    },
+    'ports': {
+        '1/1': {
+            'trusted': bool,         # trusted port (server-facing)
+            'log': bool,             # log invalid messages
+            'rate_limit': int,       # max DHCP packets/sec (-1=unlimited)
+            'burst_interval': int,   # rate limit burst window (seconds)
+            'auto_disable': bool,    # auto-disable on violation
+        },
+    },
+}
+```
+
+MOPS uses `decode_strings=False` with manual hex decode on DisplayString fields. SSH parses CLI output. SNMP walks DHCP snooping tables. All 4 backends supported (MOPS, SNMP, SSH, Offline).
+
+### set_dhcp_snooping(interface=None, ...)
+
+Configure DHCP snooping at global, per-VLAN, or per-port level.
+
+```python
+# Global: enable DHCP snooping + MAC verification
+device.set_dhcp_snooping(enabled=True, verify_mac=True)
+
+# Per-VLAN: enable snooping on VLAN 10
+device.set_dhcp_snooping(vlan=10, vlan_enabled=True)
+
+# Per-port: set as trusted (server-facing)
+device.set_dhcp_snooping('1/1', trusted=True)
+
+# Per-port: full config
+device.set_dhcp_snooping('1/1',
+    trusted=False,
+    log=True,
+    rate_limit=15,
+    burst_interval=1,
+    auto_disable=True)
+
+# Multiple ports at once
+device.set_dhcp_snooping(['1/1', '1/2', '1/3'], trusted=True)
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `interface` | str/list/None | Port name(s), or None for global/VLAN |
+| `enabled` | bool | Global DHCP snooping enable/disable |
+| `verify_mac` | bool | Global source MAC verification |
+| `vlan` | int | VLAN ID for per-VLAN config |
+| `vlan_enabled` | bool | Enable/disable snooping on specified VLAN |
+| `trusted` | bool | Mark port as trusted (per-port) |
+| `log` | bool | Log invalid DHCP messages (per-port) |
+| `rate_limit` | int | Max DHCP packets/sec, -1=unlimited (per-port) |
+| `burst_interval` | int | Rate limit burst window in seconds (per-port) |
+| `auto_disable` | bool | Auto-disable port on violation (per-port) |
+
+JUSTIN cross-reference: `ns-dhcp-snooping` checks that DHCP snooping is enabled and configured on access VLANs.
+
+---
+
+## Dynamic ARP Inspection (DAI)
+
+### get_arp_inspection(interface=None)
+
+Return Dynamic ARP Inspection configuration — validation flags, per-VLAN enable/ACL, and per-port trust/rate-limit settings.
+
+```python
+# Global + all ports
+dai = device.get_arp_inspection()
+print(dai['validate_src_mac'])   # True/False — validate source MAC
+print(dai['validate_dst_mac'])   # True/False — validate destination MAC
+print(dai['validate_ip'])        # True/False — validate IP address
+for vid, cfg in dai['vlans'].items():
+    print(f"VLAN {vid}: enabled={cfg['enabled']}, "
+          f"binding_check={cfg['binding_check']}")
+for port, cfg in dai['ports'].items():
+    print(f"{port}: trusted={cfg['trusted']}, "
+          f"rate_limit={cfg['rate_limit']}, "
+          f"auto_disable={cfg['auto_disable']}")
+
+# Single port (filters from full table)
+dai = device.get_arp_inspection(interface='1/1')
+
+# Multiple ports (filters from full table)
+dai = device.get_arp_inspection(interface=['1/1', '1/2'])
+```
+
+**Return schema:**
+
+```python
+{
+    'validate_src_mac': bool,    # validate source MAC against sender MAC
+    'validate_dst_mac': bool,    # validate destination MAC against target MAC
+    'validate_ip': bool,         # validate IP addresses in ARP payload
+    'vlans': {
+        1: {
+            'enabled': bool,       # DAI enabled on this VLAN
+            'log': bool,           # log invalid ARP packets
+            'acl_name': str,       # ARP access list name ('' if none)
+            'acl_static': bool,    # use static ACL entries
+            'binding_check': bool, # check against DHCP snooping binding table
+        },
+    },
+    'ports': {
+        '1/1': {
+            'trusted': bool,         # trusted port (bypass inspection)
+            'rate_limit': int,       # max ARP packets/sec (-1=unlimited)
+            'burst_interval': int,   # rate limit burst window (seconds)
+            'auto_disable': bool,    # auto-disable on violation
+        },
+    },
+}
+```
+
+DAI has no single global enable — it is enabled per-VLAN. The `binding_check` flag links to the DHCP snooping binding table for source IP/MAC validation.
+
+MOPS uses `decode_strings=False` with manual hex decode on DisplayString fields. SSH parses CLI output. SNMP walks DAI tables. All 4 backends supported (MOPS, SNMP, SSH, Offline).
+
+### set_arp_inspection(interface=None, ...)
+
+Configure Dynamic ARP Inspection at global, per-VLAN, or per-port level.
+
+```python
+# Global: enable validation flags
+device.set_arp_inspection(validate_src_mac=True, validate_dst_mac=True, validate_ip=True)
+
+# Per-VLAN: enable DAI on VLAN 10 with binding check
+device.set_arp_inspection(vlan=10, vlan_enabled=True, vlan_binding_check=True)
+
+# Per-VLAN: assign ARP ACL
+device.set_arp_inspection(vlan=10, vlan_acl_name='arp-filter', vlan_acl_static=True)
+
+# Per-port: set as trusted (server-facing, bypass inspection)
+device.set_arp_inspection('1/1', trusted=True)
+
+# Per-port: full config
+device.set_arp_inspection('1/1',
+    trusted=False,
+    rate_limit=15,
+    burst_interval=1,
+    auto_disable=True)
+
+# Multiple ports at once
+device.set_arp_inspection(['1/1', '1/2', '1/3'], trusted=True)
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `interface` | str/list/None | Port name(s), or None for global/VLAN |
+| `validate_src_mac` | bool | Validate source MAC against ARP sender MAC |
+| `validate_dst_mac` | bool | Validate destination MAC against ARP target MAC |
+| `validate_ip` | bool | Validate IP addresses in ARP payload |
+| `vlan` | int | VLAN ID for per-VLAN config |
+| `vlan_enabled` | bool | Enable/disable DAI on specified VLAN |
+| `vlan_log` | bool | Log invalid ARP packets on specified VLAN |
+| `vlan_acl_name` | str | ARP access list name for specified VLAN |
+| `vlan_acl_static` | bool | Use static ACL entries on specified VLAN |
+| `vlan_binding_check` | bool | Check DHCP snooping binding table on specified VLAN |
+| `trusted` | bool | Mark port as trusted (per-port) |
+| `rate_limit` | int | Max ARP packets/sec, -1=unlimited (per-port) |
+| `burst_interval` | int | Rate limit burst window in seconds (per-port) |
+| `auto_disable` | bool | Auto-disable port on violation (per-port) |
+
+JUSTIN cross-reference: `ns-dai` checks that Dynamic ARP Inspection is enabled on access VLANs with binding check linked to DHCP snooping.
+
+---
+
+## IP Source Guard (IPSG)
+
+### get_ip_source_guard(interface=None)
+
+Return IP Source Guard configuration — per-port verify-source and port-security flags, plus static and dynamic binding tables.
+
+```python
+# All ports + all bindings
+ipsg = device.get_ip_source_guard()
+for port, cfg in ipsg['ports'].items():
+    print(f"{port}: verify_source={cfg['verify_source']}, "
+          f"port_security={cfg['port_security']}")
+for b in ipsg['static_bindings']:
+    print(f"Static: {b['interface']} VLAN {b['vlan_id']} "
+          f"{b['mac_address']} {b['ip_address']} active={b['active']}")
+for b in ipsg['dynamic_bindings']:
+    print(f"Dynamic: {b['interface']} VLAN {b['vlan_id']} "
+          f"{b['mac_address']} {b['ip_address']} hw={b['hw_status']}")
+
+# Single port (filters ports + bindings)
+ipsg = device.get_ip_source_guard(interface='1/1')
+
+# Multiple ports (filters from full table)
+ipsg = device.get_ip_source_guard(interface=['1/1', '1/2'])
+```
+
+**Return schema:**
+
+```python
+{
+    'ports': {
+        '1/1': {
+            'verify_source': bool,   # IP filtering enabled
+            'port_security': bool,   # MAC filtering enabled (requires verify_source)
+        },
+    },
+    'static_bindings': [
+        {
+            'interface': str,        # port name ('1/1')
+            'vlan_id': int,          # VLAN ID
+            'mac_address': str,      # MAC address ('AA:BB:CC:DD:EE:FF')
+            'ip_address': str,       # IP address ('10.0.0.1')
+            'active': bool,          # binding active
+            'hw_status': bool,       # installed in hardware
+        },
+    ],
+    'dynamic_bindings': [
+        {
+            'interface': str,        # port name ('1/1')
+            'vlan_id': int,          # VLAN ID
+            'mac_address': str,      # MAC address ('AA:BB:CC:DD:EE:FF')
+            'ip_address': str,       # IP address ('10.0.0.1')
+            'hw_status': bool,       # installed in hardware
+        },
+    ],
+}
+```
+
+`port_security` requires `verify_source` to be enabled first — enabling MAC+IP filtering without IP filtering is not valid. Static bindings have an `active` flag (admin-controlled); dynamic bindings are learned from DHCP snooping.
+
+MOPS uses `decode_strings=False` with manual hex decode on DisplayString fields. SSH parses CLI output. SNMP walks IPSG tables. All 4 backends supported (MOPS, SNMP, SSH, Offline).
+
+### set_ip_source_guard(interface, verify_source=None, port_security=None)
+
+Configure IP Source Guard per-port. No global settings.
+
+```python
+# Enable IP filtering on a port
+device.set_ip_source_guard('1/1', verify_source=True)
+
+# Enable both IP and MAC filtering
+device.set_ip_source_guard('1/1', verify_source=True, port_security=True)
+
+# Disable IP Source Guard on a port
+device.set_ip_source_guard('1/1', verify_source=False, port_security=False)
+
+# Multiple ports at once
+device.set_ip_source_guard(['1/1', '1/2', '1/3'], verify_source=True)
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `interface` | str/list | Port name(s) — required |
+| `verify_source` | bool | Enable/disable IP filtering (per-port) |
+| `port_security` | bool | Enable/disable MAC filtering (per-port, requires verify_source) |
+
+JUSTIN cross-reference: `ns-ipsg` checks that IP Source Guard is enabled on access ports with verify_source active.
 
 ---
 

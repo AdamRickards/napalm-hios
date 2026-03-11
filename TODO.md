@@ -19,57 +19,20 @@
 15. Test PyPI-deployed version against local test environment
 16. Done
 
-## JUSTIN driver methods — IEC 62443-4-2 SL2+
+## JUSTIN — shipped
 
-Each getter/setter pair unlocks audit (gather) + remediation (harden) for the corresponding JUSTIN checks. Grouped by security level so they can ship incrementally. See [JUSTIN TODO](tools/justin/TODO.md) for check→fix mapping.
+SL1 shipped in v1.16.0–v1.16.2. SL2 + vendor shipped in v1.17.0. 47/47 checks wired, 34/47 hardens wired (6 detect-only, 3 advisory, 4 cert = cannot harden by design). See CHANGELOG.md for full details and [JUSTIN TODO](tools/justin/TODO.md) for future work.
 
-SL1 shipped in v1.16.0–v1.16.2: `get/set_services` (extended v1.16.2), `get/set_syslog`, `get/set_ntp`, `get/set_login_policy`, `get/set_snmp_config`, `set_access_port`, multi-protocol watchdog. Full SL1 JUSTIN coverage (16/16 checks, 14 auto-remediate).
+**Deducible at higher SLs (partial coverage via inference):**
 
-### SL2 — advanced hardening (v1.17.0)
-
-Builds on SL1. Deeper controls, per-port security features.
-
-- [ ] `get_banner()` / `set_banner()` — pre-login banner text. **Unlocks**: sec-login-banner
-- [ ] `get_password_policy()` / `set_password_policy()` — complexity requirements (upper, lower, digit, special, length). **Unlocks**: sec-password-policy
-- [ ] `get_session_config()` / `set_session_config()` — CLI/web/SNMP session timeouts, max sessions. **Unlocks**: sec-session-timeouts
-- [ ] `get_snmp_config()` extensions — v3 auth (MD5→SHA), v3 encrypt (DES→AES-128), v3 trap destinations. **Unlocks**: sec-snmpv3-auth, sec-snmpv3-encrypt, sec-snmpv3-traps
-- [ ] `get_port_security()` / `set_port_security()` — MAC limit per-port, violation action. **Unlocks**: ns-port-security
-- [ ] `get_dhcp_snooping()` / `set_dhcp_snooping()` — global enable, per-VLAN, trust per-port. **Unlocks**: ns-dhcp-snooping
-- [ ] `get_arp_inspection()` / `set_arp_inspection()` — DAI global + per-VLAN + trust per-port. **Unlocks**: ns-dai
-- [ ] `get_ip_source_guard()` / `set_ip_source_guard()` — IPSG per-port. **Unlocks**: ns-ipsg
-
-### Fleet credential management (v1.18.0)
-
-- [ ] `get_users()` / `set_user()` / `delete_user()` — local user account CRUD. Create/modify/delete user accounts with role (admin/operator/guest). **Unlocks**: JUSTIN fleet-wide credential management, sys-default-passwords remediation
+- CR 2.1 SL3 "dual control for critical functions" → `get_users()`: ≥2 admin accounts = partial pass
+- CR 1.7 SL3 "password min/max lifetime" → `get_login_policy()`: check expiry config exists = partial pass
+- CR 1.1 SL2 "multifactor auth" → `get_remote_auth()`: RADIUS/TACACS+ configured = partial
+- CR 3.14 "boot integrity" → `get_devsec_status()`: secure boot status
 
 ## `get_services()` / `set_services()` extension
 
-Extend to cover all SL1+SL2 service state. Selective query: pass field names to get/set only those, omit to get/set all. All fields are global (not per-port) booleans unless noted.
-
-**API:**
-```python
-# Get everything (slow on SSH, atomic on SNMP/MOPS)
-device.get_services()
-
-# Get specific fields only
-device.get_services('unsigned_sw', 'aca_auto_update')
-
-# Set — unchanged, kwargs only
-device.set_services(unsigned_sw=False, aca_auto_update=False)
-```
-
-**New fields needed** (verify each one live before implementing):
-
-- [x] `unsigned_sw` — allow unsigned firmware upload. **Unlocks**: sec-unsigned-sw *(v1.16.2)*
-- [x] `aca_auto_update` — ACA auto software load from ext NVM. **Unlocks**: sec-aca-auto-update *(v1.16.2)*
-- [x] `aca_config_write` — ACA config save to ext NVM. **Unlocks**: sec-aca-config-write *(v1.16.2)*
-- [x] `aca_config_load` — ACA config load from ext NVM (priority: first/second/third/disabled). **Unlocks**: sec-aca-config-load *(v1.16.2)*
-- [x] `gvrp` — hardcoded False (legacy, no global toggle in HiOS MIBs). **Unlocks**: ns-gvrp-mvrp *(v1.16.2)*
-- [x] `mvrp` — MVRP global enable. **Unlocks**: ns-gvrp-mvrp *(v1.16.2)*
-- [x] `gmrp` — hardcoded False (legacy, no global toggle in HiOS MIBs). **Unlocks**: ns-gmrp-mmrp *(v1.16.2)*
-- [x] `mmrp` — MMRP global enable. **Unlocks**: ns-gmrp-mmrp *(v1.16.2)*
-- [x] `devsec_monitors` — bool, True when all 19 DevSec sense monitors enabled. **Unlocks**: sec-devsec-monitors *(v1.16.2)*
-- [ ] `dos_protection` — dict of DoS mitigation filters (TCP/ICMP/L2/IP checks). **Unlocks**: ns-dos-protection (SL2)
+- [ ] `dos_protection` — dict of DoS mitigation filters (TCP/ICMP/L2/IP checks). **Unlocks**: ns-dos-protection
 
 ## Vendor-specific methods (driver) — future
 
@@ -141,6 +104,12 @@ See also: [`tools/clamps/TODO.md`](tools/clamps/TODO.md)
 
 ### MRP setter staging
 `set_mrp()`, `delete_mrp()`, `set_mrp_sub_ring()`, `delete_mrp_sub_ring()` use multi-step RowStatus sequences (createAndWait → notInService → set values → active) with try/except. Each transition depends on the previous one completing, so they can't be batched into one `set_multi()`. Would need a different staging approach (e.g. ordered sub-batches). Low value — MRP config is infrequent and CLAMPS already parallelizes across devices.
+
+### RowStatus table CRUD verb homogenization
+Three different verbs for the same operation: `create_vlan()`, `add_dns_server()`, `set_user()` — all RowStatus table row CRUD. Pick one pattern (`add`/`delete`) and alias the old names for backwards compat. Breaking change — needs a major version or deprecation cycle. Affects: `create_vlan`→`add_vlan`, `update_vlan`→`set_vlan`, `set_user`→`add_user` (or keep `set_user` since it also updates). Audit all table CRUD methods and unify.
+
+### ACL / Firewall rules (2.0.0)
+`get_acl()` / `set_acl()` — L2/L3/L4 traffic ACLs (QoS ACL MIB: `HM2-PLATFORM-QOS-ACL-MIB`) + packet filter firewall rules (`HM2-FW-MIB`). Rule tables with match criteria, actions (permit/deny/redirect/mirror), per-port binding, ordering. More powerful than port-security for network integrity but complex driver surface. Maps to IEC 62443 CR 5.1/5.2 (network segmentation / zone boundary protection) at SL2+. In 2.0.0 YAML engine refactor, support both HiOS and HiSecOS (EAGLE40 firewall) with auto command selection where they differ.
 
 ### get_config via SNMP
 Investigated extensively — walked the entire Hirschmann enterprise OID tree (17,132 OIDs) and found no config XML or text blob available via SNMP. The running-config as a single retrievable object does not exist in any standard or private MIB. For now, `get_config()` remains SSH-only. See HTTPS config transfer below — that's the path forward.

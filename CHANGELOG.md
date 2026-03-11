@@ -1,5 +1,182 @@
 # Changelog
 
+## 1.17.0
+
+### Signal Contact — `get_signal_contact()` / `set_signal_contact()`
+
+Read and configure signal contact relay mode, sense flags, per-PSU monitoring, per-port link alarm, and status events. Supports contacts 1–2 (platform-dependent). HM2-DIAGNOSTIC-MIB `hm2SigConCommonEntry` + 5 sub-tables.
+
+- **mode** — manual / monitor / deviceState / deviceSecurity / deviceStateAndSecurity
+- **monitoring** — temperature, link_failure, envm_removal, envm_not_in_sync, ring_redundancy (+ platform-dependent: fan, module_removal, ethernet_loops, humidity, stp_port_block)
+- **power_supply** — per-PSU enable/disable
+- **link_alarm** — per-port connection error monitoring
+- **status** — oper_state (open/close), last_change, cause (trap cause enum 1–32), events log
+
+### Device Monitor — `get_device_monitor()` / `set_device_monitor()`
+
+Read and configure the device monitor engine — same sense flags and sub-tables as signal contact, but singleton (no contact ID). Independent from signal contact: signal contact mode=deviceState delegates to this engine's oper_state.
+
+### Device Security Status — `get_devsec_status()` / `set_devsec_status()`
+
+Read and configure 19 device security monitors (HiOS's built-in IEC 62443 compliance engine). Per-port no-link monitoring, status events with non-sequential trap cause enum (1, 10–26, 29, 31–32).
+
+Monitors: password_change, password_min_length, password_policy_not_configured, password_policy_bypass, telnet_enabled, http_enabled, snmp_unsecure, sysmon_enabled, envm_update_enabled, no_link_enabled, hidiscovery_enabled, envm_config_load_unsecure, iec61850_mms_enabled, https_cert_warning, modbus_tcp_enabled, ethernet_ip_enabled, profinet_enabled, pml_disabled, secure_boot_disabled, dev_mode_enabled.
+
+### Banner — `get_banner()` / `set_banner()`
+
+Read and configure pre-login and CLI login banners (HM2-MGMTACCESS-MIB). Each banner has enabled state + text (pre-login max 512 chars, CLI max 1024 chars).
+
+### Multi-protocol support
+
+All 4 getter/setter pairs implemented on MOPS, SNMP, SSH, and Offline backends. Cross-protocol parity verified on BRS50 .85 — all 3 online protocols return identical data.
+
+### SNMP bugfix — `_get_scalar` suffix heuristic
+
+Fixed `_get_device_monitor_async` and `_get_devsec_status_async` returning default/empty values via SNMP. Root cause: `_get_scalar()` heuristic skips `.0` suffix for OIDs with 14+ parts, but device monitor table entries need `.1` and devsec scalars need `.0`. Changed both to use `_walk_columns` pattern. Also affects existing `get_services()` devsec_monitors field via SNMP (always returned `False`).
+
+### JUSTIN — 3 new checks + 3 harden functions
+
+- **sec-password-policy** (SL2, IEC CR 1.7) — wired to existing `get_login_policy()`. Checks min_uppercase/lowercase/numeric/special >= 1. Harden sets all to 1.
+- **sec-login-banner** (vendor, CR 1.12) — wired to new `get_banner()`. Checks pre-login banner enabled + text present. Harden enables with configurable text.
+- **sec-signal-contact** (vendor, CR 6.2) — wired to new `get_signal_contact()`. Checks signal contact 1 mode is deviceState/deviceSecurity/deviceStateAndSecurity. Harden sets deviceStateAndSecurity.
+
+22 check functions, 18 harden functions total.
+
+### Session Config — `get_session_config()` / `set_session_config()`
+
+Read and configure session timeouts and limits for 6 protocol groups: SSH, SSH outbound, Telnet, Web, Serial, NETCONF. HM2-MGMTACCESS-MIB — 5 MOPS groups, 14 SNMP OIDs.
+
+- **timeout** — minutes, 0 = disabled. NETCONF stored as seconds on device, normalised to minutes in API
+- **max_sessions** — SSH/SSH outbound/Telnet/NETCONF only
+- **active_sessions** — read-only runtime counter (offline returns 0)
+
+### IP Restrict — `get_ip_restrict()` / `set_ip_restrict()` + `add_ip_restrict_rule()` / `delete_ip_restrict_rule()`
+
+Read and configure management IP access control list (HM2-MGMTACCESS-MIB `hm2RestrictedMgmtAccessGroup` + `hm2RmaEntry` table, max 16 rules). CRUD pattern with RowStatus createAndGo/destroy, same as VLAN API.
+
+- **enabled** / **logging** — global RMA enable + logging toggle
+- **rules** — per-rule: IP/prefix, 9 service toggles (HTTP, HTTPS, SNMP, Telnet, SSH, IEC61850, Modbus, EtherNet/IP, PROFINET), interface binding, per-rule logging
+- SNMP SET uses `Unsigned32` (Gauge32 tag 0x42) for `InetAddressPrefixLength` — same encoding fix as MARCO
+
+### SNMP Config extensions — `get_snmp_config()` / `set_snmp_config()`
+
+Extended existing `get_snmp_config()` with 3 new sections. Existing fields unchanged.
+
+- **trap_service** — global SNMP trap service enable/disable (HM2-MGMTACCESS-MIB). Settable via `set_snmp_config(trap_service=True)`
+- **v3_users** — per-user auth type (md5/sha) and encryption type (none/des/aes128/aes256) from HM2-USERMGMT-MIB. Read-only (write deferred to `set_user()` in v1.18.0)
+- **trap_destinations** — target address, security model/name/level from SNMP-TARGET-MIB (RFC 3413). Two-table join via implied SnmpAdminString index, TAddress byte decoding. Read-only (CRUD deferred)
+
+### Multi-protocol support (Batch 2)
+
+All 3 getter/setter groups + IP restrict CRUD implemented on MOPS, SNMP, SSH, and Offline backends. Cross-protocol parity verified on 4 BRS50 devices (.80, .81, .82, .85) — all 3 online protocols return identical data. Setter round-trips verified on .85.
+
+### JUSTIN — 5 new checks + 2 harden functions
+
+- **sec-session-timeouts** (SL2, IEC CR 2.6) — checks all timeouts > 0. Harden sets SSH/Telnet/Web/Serial/SSH-outbound to 5 min
+- **sec-ip-restrict** (vendor, §2.11.17) — checks enabled + ≥1 rule. Harden reads `mgmt_subnet` from config, adds rule + enables
+- **sec-snmpv3-auth** (SL2, IEC CR 4.3) — checks all v3 users use SHA (not MD5). No harden (needs `set_user()`)
+- **sec-snmpv3-encrypt** (SL2, IEC CR 4.3) — checks all v3 users use AES (not DES/none). No harden (needs `set_user()`)
+- **sec-snmpv3-traps** (vendor, CR 6.2) — checks trap_service enabled + ≥1 v3 authpriv destination. No harden (needs trap CRUD)
+
+27 check functions, 20 harden functions total.
+
+### JUSTIN — 8 free-win checks + 1 harden (SL2 complete coverage)
+
+Wired 8 checks using existing driver data — no new driver methods needed:
+
+- **sec-concurrent-sessions** (SL2, IEC CR 2.7) — checks max_sessions ≤ 5 per interface via `get_session_config()`. Harden sets SSH/Telnet max_sessions to 5
+- **sec-https-cert** (vendor, CR 1.2) — reads DevSec trap cause #23 (https-certificate-warning) from `get_devsec_status()`. Also covers CR 1.2 SL2 (unique device identity)
+- **sec-dev-mode** (vendor, CR 7.7) — reads DevSec trap cause #32 (dev-mode-enabled) from `get_devsec_status()`
+- **sec-secure-boot** (vendor, CR 3.14) — reads DevSec trap cause #31 (secure-boot-disabled) from `get_devsec_status()`
+- **cert-hw-authenticator** (SL2, IEC CR 1.5) — certified hardware capability auto-pass (TÜV SL-C 2)
+- **cert-hw-pubkey** (SL2, IEC CR 1.9) — certified hardware capability auto-pass
+- **cert-hw-symkey** (SL2, IEC CR 1.14) — certified hardware capability auto-pass
+- **cert-memory-purge** (SL2, IEC CR 4.2) — certified hardware capability auto-pass
+
+SL2 IEC CR coverage via `also_covers`: sec-logging → CR 6.1/2.9, sec-devsec-monitors → CR 3.4, sec-ip-restrict → CR 1.13, sec-https-cert → CR 1.2.
+
+`checks.json` expanded: 37 → 43 checks. New `source: "cert"` + `type: "cert_inherent"` for hardware-certified CRs. `also_covers` field maps existing SL1 checks to SL2 CRs they satisfy.
+
+35 check functions, 21 harden functions total. 8 stubs remaining (all vendor SL1 + sec-remote-auth SL2).
+
+### Port Security — `get_port_security()` / `set_port_security()` / `add_port_security()` / `delete_port_security()`
+
+Full port security CRUD on all 3 backends (MOPS, SNMP, SSH). Offline inherits from MOPS.
+
+- **get_port_security(interface=None)** — global mode (mac-based/ip-based), per-port: enabled, dynamic/static limits, auto-disable, violation traps, dynamic/static counts, static MAC/IP entries
+- **set_port_security(interface, ...)** — global enable/mode or per-port: enable, limits, auto-disable, trap mode/frequency, MAC move. Accepts single port, list, or None (global)
+- **add_port_security(interface, vlan, mac/ip/entries)** — add static MAC or IP entries. MOPS encodes DisplayString as hex for action OIDs. SNMP uses OctetString. SSH uses CLI commands
+- **delete_port_security(interface, vlan, mac/ip/entries)** — remove static entries
+
+MIB: HM2-PLATFORM-PORTSECURITY-MIB (`1.3.6.1.4.1.248.12.20`). OID base corrected from `248.14.2.4` to `248.12.20` during development (hm2PlatformMibs = 248.12, not 248.14).
+
+### JUSTIN — ns-port-security check
+
+- **ns-port-security** (vendor, CR 7.1) — checks port security enabled on access ports. Smart exclusion: skips LLDP uplinks + MRP ring ports. Gracefully degrades without LLDP/MRP data. Harden deferred — requires per-site MAC limit policy + AARON port classification
+- 36 check functions, 21 harden functions total. 5 stubs remaining
+
+### DHCP Snooping — `get_dhcp_snooping()` / `set_dhcp_snooping()`
+
+Full DHCP snooping get/set on all 4 backends (MOPS, SNMP, SSH, Offline).
+
+- **get_dhcp_snooping(interface=None)** — global state (enabled, verify_mac), per-VLAN enable, per-port: trusted, log, rate_limit (-1=unlimited), burst_interval, auto_disable
+- **set_dhcp_snooping(interface, ...)** — global enable/verify_mac, per-VLAN enable, or per-port: trusted, log, rate_limit, burst_interval, auto_disable. Accepts single port, list, or None (global/VLAN)
+
+### JUSTIN — ns-dhcp-snooping check
+
+- **ns-dhcp-snooping** (vendor) — checks DHCP snooping enabled and configured on access VLANs
+
+### Dynamic ARP Inspection — `get_arp_inspection()` / `set_arp_inspection()`
+
+Full Dynamic ARP Inspection get/set on all 4 backends (MOPS, SNMP, SSH, Offline).
+
+- **get_arp_inspection(interface=None)** — validation flags (validate_src_mac, validate_dst_mac, validate_ip), per-VLAN: enabled, log, acl_name, acl_static, binding_check, per-port: trusted, rate_limit (-1=unlimited), burst_interval, auto_disable
+- **set_arp_inspection(interface, ...)** — global validation flags, per-VLAN enable/log/ACL/binding_check, or per-port: trusted, rate_limit, burst_interval, auto_disable. Accepts single port, list, or None (global/VLAN)
+
+### JUSTIN — ns-dai check
+
+- **ns-dai** (vendor) — checks Dynamic ARP Inspection enabled on access VLANs with binding check linked to DHCP snooping
+
+### IP Source Guard — `get_ip_source_guard()` / `set_ip_source_guard()`
+
+Full IP Source Guard get/set on all 4 backends (MOPS, SNMP, SSH, Offline).
+
+- **get_ip_source_guard(interface=None)** — per-port: verify_source (IP filtering), port_security (MAC filtering). Static bindings with active/hw_status, dynamic bindings (learned from DHCP snooping) with hw_status
+- **set_ip_source_guard(interface, ...)** — per-port: verify_source, port_security. port_security requires verify_source enabled first
+
+### JUSTIN — ns-ipsg check
+
+- **ns-ipsg** (vendor) — checks IP Source Guard enabled on access ports with verify_source active
+
+### JUSTIN bugfix — f-string syntax error
+
+Fixed invalid f-string continuation in watchdog partial-failure logging that prevented module load on Python < 3.13.
+
+### Session Config extensions — `get_session_config()` / `set_session_config()`
+
+Extended `get_session_config()` with physical interface admin/oper status from `hm2MgmtAccessPhysicalIntfGroup`:
+
+- **serial.enabled** — V.24 serial console admin state (True/False)
+- **serial.oper_status** — V.24 serial console operational status (up/down)
+- **envm.enabled** — external NVM CLI interface admin state (True/False)
+- **envm.oper_status** — external NVM CLI interface operational status (up/down)
+
+`set_session_config()` extended with `serial_enabled=` and `envm_enabled=` parameters to enable/disable physical management interfaces. All 3 backends (MOPS, SNMP, SSH) + Offline.
+
+### SNMP bugfix — `_snmp_int()` default for physical interface OIDs
+
+Fixed `_snmp_int()` returning wrong default for physical interface OIDs when device returns `noSuchInstance`. Ensures correct default value propagation for serial/ENVM oper status fields.
+
+### JUSTIN — sec-unused-ports check + harden
+
+- **sec-unused-ports** (vendor, §2.11.3) — admin-enabled ports with no link and no LLDP neighbor flagged as unused. Harden disables flagged ports. Smart exclusion: skips MRP ring ports and ports with active LLDP neighbors
+
+### JUSTIN — sec-console-port check + harden
+
+- **sec-console-port** (vendor, §2.11.4) — checks V.24 serial console timeout set and ENVM CLI disabled. Hardware profile dict maps platform families to physical interface capabilities. Harden sets serial timeout to 5 min + disables ENVM CLI
+
+47/47 JUSTIN checks wired, 0 stubs remaining.
+
 ## 1.16.2
 
 ### `get_services()` / `set_services()` — extended service state for full SL1

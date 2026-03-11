@@ -6,6 +6,9 @@ from unittest.mock import Mock, patch, MagicMock
 from napalm_hios.mops_hios import (
     MOPSHIOS, _safe_int, _parse_sysDescr, _mask_to_prefix,
     _decode_portlist_hex, _decode_lldp_capabilities, _encode_hex_ip,
+    _decode_bits_hex, _encode_bits_hex,
+    _TLS_VERSIONS, _TLS_CIPHER_SUITES, _SSH_HMAC, _SSH_KEX,
+    _SSH_ENCRYPTION, _SSH_HOST_KEY,
 )
 from napalm.base.exceptions import ConnectionException
 
@@ -402,17 +405,29 @@ class TestMOPSHIOSGetters(unittest.TestCase):
     # --- get_users ---
 
     def test_get_users(self):
-        # hm2UserAccessRole value IS the privilege level (15=admin, 1=readOnly)
-        self.backend.client.get.return_value = [
-            {"hm2UserName": "61 64 6d 69 6e", "hm2UserAccessRole": "15", "hm2UserStatus": "1"},
-            {"hm2UserName": "75 73 65 72", "hm2UserAccessRole": "1", "hm2UserStatus": "1"},
+        # hm2UserAccessRole: 15=administrator, 1=guest
+        self.backend.client.get.side_effect = [
+            [
+                {"hm2UserName": "61 64 6d 69 6e", "hm2UserAccessRole": "15",
+                 "hm2UserLockoutStatus": "2", "hm2UserPwdPolicyChk": "2",
+                 "hm2UserSnmpAuthType": "1", "hm2UserSnmpEncType": "1",
+                 "hm2UserStatus": "1"},
+                {"hm2UserName": "75 73 65 72", "hm2UserAccessRole": "1",
+                 "hm2UserLockoutStatus": "2", "hm2UserPwdPolicyChk": "2",
+                 "hm2UserSnmpAuthType": "1", "hm2UserSnmpEncType": "1",
+                 "hm2UserStatus": "1"},
+            ],
+            [],  # default password table
         ]
 
         users = self.backend.get_users()
-        self.assertIn("admin", users)
-        self.assertEqual(users["admin"]["level"], 15)
-        self.assertIn("user", users)
-        self.assertEqual(users["user"]["level"], 1)
+        names = {u['name'] for u in users}
+        self.assertIn("admin", names)
+        self.assertIn("user", names)
+        admin = next(u for u in users if u['name'] == 'admin')
+        self.assertEqual(admin['role'], 'administrator')
+        user = next(u for u in users if u['name'] == 'user')
+        self.assertEqual(user['role'], 'guest')
 
     # --- get_environment ---
 
@@ -3624,18 +3639,23 @@ class TestMOPSSnmpConfig(unittest.TestCase):
 
     def test_get_snmp_config(self):
         """get_snmp_config returns versions + communities."""
+        from napalm_hios.mops_hios import MOPSError
         self.backend.client.get.side_effect = [
             [{
                 "hm2SnmpV1AdminStatus": "2",
                 "hm2SnmpV2AdminStatus": "2",
                 "hm2SnmpV3AdminStatus": "1",
                 "hm2SnmpPortNumber": "161",
+                "hm2SnmpTrapServiceAdminStatus": "2",
             }],
             [{
                 "snmpCommunityIndex": "70 75 62 6c 69 63",
                 "snmpCommunityName": "70 75 62 6c 69 63",
                 "snmpCommunitySecurityName": "72 65 61 64 4f 6e 6c 79",
             }],
+            MOPSError("no user table"),   # v3 users
+            MOPSError("no target addr"),  # trap addr
+            MOPSError("no target params"),  # trap params
         ]
         result = self.backend.get_snmp_config()
         self.assertFalse(result['versions']['v1'])
@@ -3655,8 +3675,12 @@ class TestMOPSSnmpConfig(unittest.TestCase):
                 "hm2SnmpV2AdminStatus": "1",
                 "hm2SnmpV3AdminStatus": "2",
                 "hm2SnmpPortNumber": "161",
+                "hm2SnmpTrapServiceAdminStatus": "2",
             }],
             MOPSError("no community entries"),
+            MOPSError("no user table"),
+            MOPSError("no target addr"),
+            MOPSError("no target params"),
         ]
         result = self.backend.get_snmp_config()
         self.assertTrue(result['versions']['v1'])
@@ -3676,6 +3700,2179 @@ class TestMOPSSnmpConfig(unittest.TestCase):
         """set_snmp_config with no args is a no-op."""
         self.backend.set_snmp_config()
         self.backend.client.set.assert_not_called()
+
+
+class TestMOPSSignalContact(unittest.TestCase):
+    """Test MOPS signal contact getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def _make_ifindex(self):
+        return {str(i): f"1/{i}" for i in range(1, 13)}
+
+    def test_get_signal_contact(self):
+        """get_signal_contact returns correct shape from BRS50 data."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DIAGNOSTIC-MIB": {
+                    "hm2SigConCommonEntry": [{
+                        "hm2SigConID": "1",
+                        "hm2SigConMode": "2",
+                        "hm2SigConOperState": "1",
+                        "hm2SigConTrapEnable": "2",
+                        "hm2SigConTrapCause": "10",
+                        "hm2SigConTrapCauseIndex": "0",
+                        "hm2SigConManualActivate": "2",
+                        "hm2SigConOperTimeStamp": "1773134373",
+                        "hm2SigConSenseLinkFailure": "2",
+                        "hm2SigConSenseTemperature": "1",
+                        "hm2SigConSenseExtNvmRemoval": "2",
+                        "hm2SigConSenseExtNvmNotInSync": "2",
+                        "hm2SigConSenseRingRedundancy": "2",
+                    }],
+                    "hm2SigConPSEntry": [
+                        {"hm2SigConID": "1", "hm2SigConSensePSState": "1"},
+                        {"hm2SigConID": "1", "hm2SigConSensePSState": "1"},
+                    ],
+                    "hm2SigConInterfaceEntry": [
+                        {"hm2SigConID": "1", "hm2SigConSenseIfLinkAlarm": "2"}
+                    ] * 12,
+                    "hm2SigConStatusEntry": [{
+                        "hm2SigConStatusIndex": "6",
+                        "hm2SigConStatusTimeStamp": "1773135114",
+                        "hm2SigConStatusTrapCause": "2",
+                        "hm2SigConStatusTrapCauseIndex": "2",
+                    }],
+                },
+                "IF-MIB": {
+                    "ifXEntry": [{"ifIndex": str(i), "ifName":
+                        ' '.join(f'{b:02x}' for b in f"1/{i}".encode())}
+                        for i in range(1, 13)]
+                    + [{"ifIndex": "25", "ifName": "63 70 75 2f 31"}],
+                },
+            }
+        }
+        result = self.backend.get_signal_contact()
+        self.assertIn(1, result)
+        sc1 = result[1]
+        self.assertEqual(sc1['mode'], 'monitor')
+        self.assertFalse(sc1['trap_enabled'])
+        self.assertEqual(sc1['manual_state'], 'close')
+        self.assertTrue(sc1['monitoring']['temperature'])
+        self.assertFalse(sc1['monitoring']['link_failure'])
+        self.assertTrue(sc1['power_supply'][1])
+        self.assertEqual(sc1['status']['oper_state'], 'open')
+        self.assertEqual(sc1['status']['cause'], 'power-fail-imminent')
+        self.assertEqual(len(sc1['status']['events']), 1)
+        self.assertEqual(sc1['status']['events'][0]['cause'], 'power-supply')
+
+    def test_set_signal_contact_mode(self):
+        """set_signal_contact mode change calls set_multi."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_signal_contact(contact_id=1, mode='deviceSecurity')
+        self.backend.client.set_multi.assert_called()
+
+    def test_set_signal_contact_noop(self):
+        """set_signal_contact with no args is a no-op."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_signal_contact()
+        self.backend.client.set_multi.assert_not_called()
+
+
+class TestMOPSDeviceMonitor(unittest.TestCase):
+    """Test MOPS device monitor getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_device_monitor(self):
+        """get_device_monitor returns correct shape from BRS50 data."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DIAGNOSTIC-MIB": {
+                    "hm2DevMonCommonEntry": [{
+                        "hm2DevMonID": "1",
+                        "hm2DevMonTrapEnable": "1",
+                        "hm2DevMonTrapCause": "2",
+                        "hm2DevMonTrapCauseIndex": "2",
+                        "hm2DevMonOperState": "2",
+                        "hm2DevMonOperTimeStamp": "1773132810",
+                        "hm2DevMonSenseLinkFailure": "2",
+                        "hm2DevMonSenseTemperature": "1",
+                        "hm2DevMonSenseExtNvmRemoval": "2",
+                        "hm2DevMonSenseExtNvmNotInSync": "2",
+                        "hm2DevMonSenseRingRedundancy": "2",
+                    }],
+                    "hm2DevMonPSEntry": [
+                        {"hm2DevMonID": "1", "hm2DevMonSensePSState": "1"},
+                        {"hm2DevMonID": "1", "hm2DevMonSensePSState": "1"},
+                    ],
+                    "hm2DevMonInterfaceEntry": [
+                        {"hm2DevMonID": "1", "hm2DevMonSenseIfLinkAlarm": "2"}
+                    ] * 12,
+                    "hm2DevMonStatusEntry": [{
+                        "hm2DevMonStatusIndex": "1",
+                        "hm2DevMonStatusTimeStamp": "1773132810",
+                        "hm2DevMonStatusTrapCause": "2",
+                        "hm2DevMonStatusTrapCauseIndex": "2",
+                    }],
+                },
+                "IF-MIB": {
+                    "ifXEntry": [{"ifIndex": str(i), "ifName":
+                        ' '.join(f'{b:02x}' for b in f"1/{i}".encode())}
+                        for i in range(1, 13)]
+                    + [{"ifIndex": "25", "ifName": "63 70 75 2f 31"}],
+                },
+            }
+        }
+        result = self.backend.get_device_monitor()
+        self.assertTrue(result['trap_enabled'])
+        self.assertTrue(result['monitoring']['temperature'])
+        self.assertFalse(result['monitoring']['link_failure'])
+        self.assertTrue(result['power_supply'][1])
+        self.assertEqual(result['status']['oper_state'], 'error')
+        self.assertEqual(result['status']['cause'], 'power-supply')
+        self.assertEqual(result['status']['cause_index'], 2)
+        self.assertEqual(len(result['status']['events']), 1)
+
+    def test_set_device_monitor_trap(self):
+        """set_device_monitor trap toggle calls set_multi."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_device_monitor(trap_enabled=False)
+        self.backend.client.set_multi.assert_called()
+
+
+class TestMOPSDevSecStatus(unittest.TestCase):
+    """Test MOPS device security status getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_devsec_status(self):
+        """get_devsec_status returns 19 monitors + events from BRS50 data."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DIAGNOSTIC-MIB": {
+                    "hm2DevSecConfigGroup": [{
+                        "hm2DevSecTrapEnable": "2",
+                        "hm2DevSecTrapCause": "17",
+                        "hm2DevSecTrapCauseIndex": "0",
+                        "hm2DevSecOperState": "2",
+                        "hm2DevSecOperTimeStamp": "1773135123",
+                        "hm2DevSecSensePasswordChange": "1",
+                        "hm2DevSecSensePasswordMinLength": "1",
+                        "hm2DevSecSensePasswordStrengthNotConfigured": "1",
+                        "hm2DevSecSenseBypassPasswordStrength": "1",
+                        "hm2DevSecSenseTelnetEnabled": "1",
+                        "hm2DevSecSenseHttpEnabled": "1",
+                        "hm2DevSecSenseSnmpUnsecure": "1",
+                        "hm2DevSecSenseSysmonEnabled": "1",
+                        "hm2DevSecSenseExtNvmUpdateEnabled": "1",
+                        "hm2DevSecSenseNoLinkEnabled": "1",
+                        "hm2DevSecSenseHiDiscoveryEnabled": "1",
+                        "hm2DevSecSenseExtNvmConfigLoadUnsecure": "1",
+                        "hm2DevSecSenseIec61850MmsEnabled": "1",
+                        "hm2DevSecSenseHttpsCertificateWarning": "1",
+                        "hm2DevSecSenseModbusTcpEnabled": "1",
+                        "hm2DevSecSenseEtherNetIpEnabled": "1",
+                        "hm2DevSecSenseProfinetIOEnabled": "1",
+                        "hm2DevSecSenseSecureBootDisabled": "1",
+                        "hm2DevSecSenseDevModeEnabled": "1",
+                    }],
+                    "hm2DevSecInterfaceEntry": [
+                        {"hm2DevSecSenseIfNoLink": "2"}
+                    ] * 12,
+                    "hm2DevSecStatusEntry": [
+                        {"hm2DevSecStatusIndex": "1",
+                         "hm2DevSecStatusTimeStamp": "1773056467",
+                         "hm2DevSecStatusTrapCause": "13",
+                         "hm2DevSecStatusTrapCauseIndex": "0"},
+                        {"hm2DevSecStatusIndex": "4",
+                         "hm2DevSecStatusTimeStamp": "1773056470",
+                         "hm2DevSecStatusTrapCause": "10",
+                         "hm2DevSecStatusTrapCauseIndex": "0"},
+                    ],
+                },
+                "IF-MIB": {
+                    "ifXEntry": [{"ifIndex": str(i), "ifName":
+                        ' '.join(f'{b:02x}' for b in f"1/{i}".encode())}
+                        for i in range(1, 13)]
+                    + [{"ifIndex": "25", "ifName": "63 70 75 2f 31"}],
+                },
+            }
+        }
+        result = self.backend.get_devsec_status()
+        self.assertFalse(result['trap_enabled'])
+        self.assertEqual(len(result['monitoring']), 19)
+        self.assertTrue(result['monitoring']['password_change'])
+        self.assertTrue(result['monitoring']['sysmon_enabled'])
+        self.assertTrue(result['monitoring']['secure_boot_disabled'])
+        self.assertEqual(result['status']['oper_state'], 'error')
+        self.assertEqual(result['status']['cause'], 'sysmon-enabled')
+        self.assertEqual(len(result['status']['events']), 2)
+        self.assertFalse(result['no_link']['1/1'])
+
+    def test_set_devsec_status_monitoring(self):
+        """set_devsec_status toggles a monitor flag."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_devsec_status(monitoring={'sysmon_enabled': False})
+        self.backend.client.set_multi.assert_called()
+
+
+class TestMOPSBanner(unittest.TestCase):
+    """Test MOPS banner getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_banner_defaults(self):
+        """get_banner factory defaults — both disabled, empty text."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-MGMTACCESS-MIB": {
+                    "hm2MgmtAccessPreLoginBannerGroup": [{
+                        "hm2PreLoginBannerAdminStatus": "2",
+                        "hm2PreLoginBannerText": "",
+                    }],
+                    "hm2MgmtAccessCliGroup": [{
+                        "hm2CliLoginBannerAdminStatus": "2",
+                        "hm2CliLoginBannerText": "",
+                    }],
+                },
+            }
+        }
+        result = self.backend.get_banner()
+        self.assertFalse(result['pre_login']['enabled'])
+        self.assertEqual(result['pre_login']['text'], '')
+        self.assertFalse(result['cli_login']['enabled'])
+        self.assertEqual(result['cli_login']['text'], '')
+
+    def test_get_banner_enabled_with_text(self):
+        """get_banner with pre-login enabled and hex-encoded text."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-MGMTACCESS-MIB": {
+                    "hm2MgmtAccessPreLoginBannerGroup": [{
+                        "hm2PreLoginBannerAdminStatus": "1",
+                        "hm2PreLoginBannerText":
+                            "41 75 74 68 6f 72 69 7a 65 64",
+                    }],
+                    "hm2MgmtAccessCliGroup": [{
+                        "hm2CliLoginBannerAdminStatus": "2",
+                        "hm2CliLoginBannerText": "",
+                    }],
+                },
+            }
+        }
+        result = self.backend.get_banner()
+        self.assertTrue(result['pre_login']['enabled'])
+        self.assertEqual(result['pre_login']['text'], 'Authorized')
+
+    def test_set_banner_pre_login(self):
+        """set_banner enables pre-login with text."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_banner(pre_login_enabled=True,
+                                pre_login_text='Test')
+        self.backend.client.set_multi.assert_called()
+
+    def test_set_banner_noop(self):
+        """set_banner with no args is a no-op."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_banner()
+        self.backend.client.set_multi.assert_not_called()
+
+
+class TestMOPSSessionConfig(unittest.TestCase):
+    """Test MOPS session config getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_session_config_factory(self):
+        """get_session_config with factory default values from .85."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-MGMTACCESS-MIB": {
+                    "hm2MgmtAccessSshGroup": [{
+                        "hm2SshMaxSessionsCount": "5",
+                        "hm2SshSessionTimeout": "5",
+                        "hm2SshSessionsCount": "0",
+                        "hm2SshOutboundMaxSessionsCount": "0",
+                        "hm2SshOutboundSessionTimeout": "0",
+                        "hm2SshOutboundSessionsCount": "0",
+                    }],
+                    "hm2MgmtAccessTelnetGroup": [{
+                        "hm2TelnetServerMaxSessions": "5",
+                        "hm2TelnetServerSessionsTimeOut": "5",
+                        "hm2TelnetServerSessionsCount": "0",
+                    }],
+                    "hm2MgmtAccessWebGroup": [{
+                        "hm2WebIntfTimeOut": "5",
+                    }],
+                    "hm2MgmtAccessCliGroup": [{
+                        "hm2CliLoginTimeoutSerial": "5",
+                    }],
+                    "hm2MgmtAccessNetconfGroup": [{
+                        "hm2NetconfMaxSessions": "0",
+                        "hm2NetconfSessionTimeout": "0",
+                        "hm2NetconfSessionsCount": "0",
+                    }],
+                },
+            }
+        }
+        result = self.backend.get_session_config()
+        self.assertEqual(result['ssh']['timeout'], 5)
+        self.assertEqual(result['ssh']['max_sessions'], 5)
+        self.assertEqual(result['ssh']['active_sessions'], 0)
+        self.assertEqual(result['ssh_outbound']['timeout'], 0)
+        self.assertEqual(result['telnet']['timeout'], 5)
+        self.assertEqual(result['web']['timeout'], 5)
+        self.assertEqual(result['serial']['timeout'], 5)
+        self.assertEqual(result['netconf']['timeout'], 0)
+
+    def test_get_session_config_netconf_seconds_to_minutes(self):
+        """NETCONF timeout normalised from seconds to minutes."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-MGMTACCESS-MIB": {
+                    "hm2MgmtAccessSshGroup": [{}],
+                    "hm2MgmtAccessTelnetGroup": [{}],
+                    "hm2MgmtAccessWebGroup": [{}],
+                    "hm2MgmtAccessCliGroup": [{}],
+                    "hm2MgmtAccessNetconfGroup": [{
+                        "hm2NetconfMaxSessions": "5",
+                        "hm2NetconfSessionTimeout": "3600",
+                        "hm2NetconfSessionsCount": "0",
+                    }],
+                },
+            }
+        }
+        result = self.backend.get_session_config()
+        self.assertEqual(result['netconf']['timeout'], 60)
+        self.assertEqual(result['netconf']['max_sessions'], 5)
+
+    def test_set_session_config_ssh_timeout(self):
+        """set_session_config sets SSH timeout."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_session_config(ssh_timeout=10)
+        self.backend.client.set_multi.assert_called()
+
+    def test_set_session_config_netconf_minutes_to_seconds(self):
+        """set_session_config converts NETCONF minutes to seconds."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_session_config(netconf_timeout=1)
+        call_args = self.backend.client.set_multi.call_args[0][0]
+        # Find the NetconfGroup mutation
+        nc_mut = [m for m in call_args
+                  if m[1] == "hm2MgmtAccessNetconfGroup"]
+        self.assertEqual(len(nc_mut), 1)
+        self.assertEqual(
+            nc_mut[0][2]["hm2NetconfSessionTimeout"], "60")
+
+    def test_set_session_config_noop(self):
+        """set_session_config with no args is a no-op."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_session_config()
+        self.backend.client.set_multi.assert_not_called()
+
+
+class TestMOPSIpRestrict(unittest.TestCase):
+    """Test MOPS IP restrict getter/setter/CRUD."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_ip_restrict_factory(self):
+        """get_ip_restrict factory defaults — 1 rule, disabled."""
+        self.backend.client.get.side_effect = [
+            # Scalars
+            [{"hm2RmaOperation": "2", "hm2RmaLoggingGlobal": "2"}],
+            # Rule table — 1 default entry
+            [{
+                "hm2RmaRowStatus": "1",
+                "hm2RmaIpAddr": "00 00 00 00",
+                "hm2RmaPrefixLength": "0",
+                "hm2RmaSrvHttp": "1", "hm2RmaSrvHttps": "1",
+                "hm2RmaSrvSnmp": "1", "hm2RmaSrvTelnet": "1",
+                "hm2RmaSrvSsh": "1", "hm2RmaSrvIEC61850": "1",
+                "hm2RmaSrvModbusTcp": "1", "hm2RmaSrvEthernetIP": "1",
+                "hm2RmaSrvProfinetIO": "1",
+                "hm2RmaInterface": "", "hm2RmaLogging": "2",
+            }],
+        ]
+        result = self.backend.get_ip_restrict()
+        self.assertFalse(result['enabled'])
+        self.assertFalse(result['logging'])
+        self.assertEqual(len(result['rules']), 1)
+        self.assertEqual(result['rules'][0]['ip'], '0.0.0.0')
+        self.assertEqual(result['rules'][0]['prefix_length'], 0)
+        self.assertTrue(result['rules'][0]['services']['ssh'])
+
+    def test_get_ip_restrict_with_subnet(self):
+        """get_ip_restrict with a configured subnet rule."""
+        self.backend.client.get.side_effect = [
+            [{"hm2RmaOperation": "1", "hm2RmaLoggingGlobal": "1"}],
+            [{
+                "hm2RmaRowStatus": "1",
+                "hm2RmaIpAddr": "c0 a8 3c 00",  # 192.168.60.0
+                "hm2RmaPrefixLength": "24",
+                "hm2RmaSrvHttp": "2", "hm2RmaSrvHttps": "1",
+                "hm2RmaSrvSnmp": "2", "hm2RmaSrvTelnet": "2",
+                "hm2RmaSrvSsh": "1", "hm2RmaSrvIEC61850": "2",
+                "hm2RmaSrvModbusTcp": "2", "hm2RmaSrvEthernetIP": "2",
+                "hm2RmaSrvProfinetIO": "2",
+                "hm2RmaInterface": "", "hm2RmaLogging": "2",
+            }],
+        ]
+        result = self.backend.get_ip_restrict()
+        self.assertTrue(result['enabled'])
+        self.assertTrue(result['logging'])
+        r = result['rules'][0]
+        self.assertEqual(r['ip'], '192.168.60.0')
+        self.assertEqual(r['prefix_length'], 24)
+        self.assertFalse(r['services']['http'])
+        self.assertTrue(r['services']['https'])
+        self.assertTrue(r['services']['ssh'])
+        self.assertFalse(r['services']['snmp'])
+
+    def test_set_ip_restrict_enable(self):
+        """set_ip_restrict enables RMA."""
+        self.backend.client.set = Mock()
+        self.backend.set_ip_restrict(enabled=True)
+        self.backend.client.set.assert_called_once_with(
+            "HM2-MGMTACCESS-MIB", "hm2RestrictedMgmtAccessGroup",
+            {"hm2RmaOperation": "1"})
+
+    def test_add_ip_restrict_rule(self):
+        """add_ip_restrict_rule creates rule via set_indexed."""
+        self.backend.client.set_indexed = Mock()
+        self.backend.add_ip_restrict_rule(
+            2, ip='192.168.1.0', prefix_length=24,
+            http=False, ssh=True, https=True)
+        self.backend.client.set_indexed.assert_called_once()
+        call_kwargs = self.backend.client.set_indexed.call_args
+        values = call_kwargs[1]['values'] if 'values' in call_kwargs[1] else call_kwargs[0][3]
+        self.assertEqual(values["hm2RmaRowStatus"], "4")
+        self.assertEqual(values["hm2RmaSrvHttp"], "2")
+        self.assertEqual(values["hm2RmaSrvSsh"], "1")
+
+    def test_delete_ip_restrict_rule(self):
+        """delete_ip_restrict_rule destroys row."""
+        self.backend.client.set_indexed = Mock()
+        self.backend.delete_ip_restrict_rule(2)
+        self.backend.client.set_indexed.assert_called_once()
+        call_args = self.backend.client.set_indexed.call_args
+        values = call_args[1]['values'] if 'values' in call_args[1] else call_args[0][3]
+        self.assertEqual(values["hm2RmaRowStatus"], "6")
+
+    def test_decode_inet_address(self):
+        """_decode_inet_address hex to dotted quad."""
+        self.assertEqual(
+            MOPSHIOS._decode_inet_address("c0 a8 01 01"),
+            "192.168.1.1")
+        self.assertEqual(
+            MOPSHIOS._decode_inet_address("00 00 00 00"),
+            "0.0.0.0")
+        self.assertEqual(
+            MOPSHIOS._decode_inet_address(""),
+            "0.0.0.0")
+
+    def test_encode_inet_address(self):
+        """_encode_inet_address dotted quad to hex."""
+        self.assertEqual(
+            MOPSHIOS._encode_inet_address("192.168.1.1"),
+            "c0 a8 01 01")
+        self.assertEqual(
+            MOPSHIOS._encode_inet_address("0.0.0.0"),
+            "00 00 00 00")
+
+
+class TestMOPSSnmpConfigExtended(unittest.TestCase):
+    """Test MOPS extended SNMP config (trap_service, v3_users, trap_dests)."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    def test_get_snmp_config_trap_service(self):
+        """get_snmp_config returns trap_service field."""
+        from napalm_hios.mops_hios import MOPSError
+        self.backend.client.get.side_effect = [
+            [{"hm2SnmpV1AdminStatus": "2", "hm2SnmpV2AdminStatus": "2",
+              "hm2SnmpV3AdminStatus": "1", "hm2SnmpPortNumber": "161",
+              "hm2SnmpTrapServiceAdminStatus": "1"}],
+            MOPSError("no communities"),
+            # v3 users
+            [{"hm2UserName": "61 64 6d 69 6e",  # admin
+              "hm2UserSnmpAuthType": "1",  # md5
+              "hm2UserSnmpEncType": "1",   # des
+              "hm2UserStatus": "1"}],
+            MOPSError("no target addr"),
+            MOPSError("no target params"),
+        ]
+        result = self.backend.get_snmp_config()
+        self.assertTrue(result['trap_service'])
+        self.assertEqual(len(result['v3_users']), 1)
+        self.assertEqual(result['v3_users'][0]['name'], 'admin')
+        self.assertEqual(result['v3_users'][0]['auth_type'], 'md5')
+        self.assertEqual(result['v3_users'][0]['enc_type'], 'des')
+        self.assertEqual(result['trap_destinations'], [])
+
+    def test_get_snmp_config_with_trap_dest(self):
+        """get_snmp_config with trap destination."""
+        from napalm_hios.mops_hios import MOPSError
+        self.backend.client.get.side_effect = [
+            [{"hm2SnmpV1AdminStatus": "2", "hm2SnmpV2AdminStatus": "2",
+              "hm2SnmpV3AdminStatus": "1", "hm2SnmpPortNumber": "161",
+              "hm2SnmpTrapServiceAdminStatus": "1"}],
+            MOPSError("no communities"),
+            MOPSError("no users"),
+            # Target addr table
+            [{"snmpTargetAddrName": "6e 6d 73 31",  # nms1
+              "snmpTargetAddrTAddress": "c0 a8 01 64 00 a2",  # 192.168.1.100:162
+              "snmpTargetAddrParams": "70 31"}],  # p1
+            # Target params table
+            [{"snmpTargetParamsName": "70 31",  # p1
+              "snmpTargetParamsSecurityModel": "3",
+              "snmpTargetParamsSecurityName": "61 64 6d 69 6e",
+              "snmpTargetParamsSecurityLevel": "3"}],
+        ]
+        result = self.backend.get_snmp_config()
+        self.assertEqual(len(result['trap_destinations']), 1)
+        d = result['trap_destinations'][0]
+        self.assertEqual(d['name'], 'nms1')
+        self.assertEqual(d['address'], '192.168.1.100:162')
+        self.assertEqual(d['security_model'], 'v3')
+        self.assertEqual(d['security_name'], 'admin')
+        self.assertEqual(d['security_level'], 'authpriv')
+
+    def test_set_snmp_config_trap_service(self):
+        """set_snmp_config with trap_service kwarg."""
+        self.backend.client.set = Mock()
+        self.backend.set_snmp_config(trap_service=True)
+        self.backend.client.set.assert_called_once()
+        call_args = self.backend.client.set.call_args[0]
+        self.assertIn("hm2SnmpTrapServiceAdminStatus", call_args[2])
+        self.assertEqual(
+            call_args[2]["hm2SnmpTrapServiceAdminStatus"], "1")
+
+    def test_decode_taddress(self):
+        """_decode_taddress hex bytes to ip:port."""
+        self.assertEqual(
+            MOPSHIOS._decode_taddress("c0 a8 01 64 00 a2"),
+            "192.168.1.100:162")
+        self.assertEqual(MOPSHIOS._decode_taddress(""), "")
+
+
+class TestMOPSDns(unittest.TestCase):
+    """Test MOPS DNS client getter/setter/CRUD."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    # --- get_dns ---
+
+    def test_get_dns_factory_defaults(self):
+        """get_dns factory defaults — disabled, no servers."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DNS-MIB": {
+                    "hm2DnsClientGroup": [{
+                        "hm2DnsClientAdminState": "2",
+                        "hm2DnsClientConfigSource": "2",
+                    }],
+                    "hm2DnsClientGlobalGroup": [{
+                        "hm2DnsClientDefaultDomainName": "",
+                        "hm2DnsClientRequestTimeout": "3",
+                        "hm2DnsClientRequestRetransmits": "2",
+                        "hm2DnsClientCacheAdminState": "1",
+                    }],
+                },
+            },
+            "errors": [],
+        }
+        self.backend.client.get.side_effect = [
+            [],  # cfg table — empty
+            [],  # diag table — empty
+        ]
+        result = self.backend.get_dns()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['config_source'], 'mgmt-dhcp')
+        self.assertEqual(result['domain_name'], '')
+        self.assertEqual(result['timeout'], 3)
+        self.assertEqual(result['retransmits'], 2)
+        self.assertTrue(result['cache_enabled'])
+        self.assertEqual(result['servers'], [])
+        self.assertEqual(result['active_servers'], [])
+
+    def test_get_dns_with_server(self):
+        """get_dns with DNS enabled and a configured server."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DNS-MIB": {
+                    "hm2DnsClientGroup": [{
+                        "hm2DnsClientAdminState": "1",
+                        "hm2DnsClientConfigSource": "1",
+                    }],
+                    "hm2DnsClientGlobalGroup": [{
+                        "hm2DnsClientDefaultDomainName":
+                            "74 65 73 74 2e 6c 6f 63 61 6c",
+                        "hm2DnsClientRequestTimeout": "5",
+                        "hm2DnsClientRequestRetransmits": "3",
+                        "hm2DnsClientCacheAdminState": "2",
+                    }],
+                },
+            },
+            "errors": [],
+        }
+        self.backend.client.get.side_effect = [
+            # cfg table — 1 server
+            [{
+                "hm2DnsClientServerIndex": "1",
+                "hm2DnsClientServerAddressType": "1",
+                "hm2DnsClientServerAddress": "c0 a8 03 01",
+                "hm2DnsClientServerRowStatus": "1",
+            }],
+            # diag table — 1 active
+            [{
+                "hm2DnsClientServerDiagIndex": "1",
+                "hm2DnsClientServerDiagAddressType": "1",
+                "hm2DnsClientServerDiagAddress": "c0 a8 03 01",
+            }],
+        ]
+        result = self.backend.get_dns()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['config_source'], 'user')
+        self.assertEqual(result['domain_name'], 'test.local')
+        self.assertEqual(result['timeout'], 5)
+        self.assertEqual(result['retransmits'], 3)
+        self.assertFalse(result['cache_enabled'])
+        self.assertEqual(result['servers'], ['192.168.3.1'])
+        self.assertEqual(result['active_servers'], ['192.168.3.1'])
+
+    def test_get_dns_skips_destroyed_rows(self):
+        """get_dns ignores servers with RowStatus=6 (destroyed)."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DNS-MIB": {
+                    "hm2DnsClientGroup": [{
+                        "hm2DnsClientAdminState": "1",
+                        "hm2DnsClientConfigSource": "1",
+                    }],
+                    "hm2DnsClientGlobalGroup": [{
+                        "hm2DnsClientDefaultDomainName": "",
+                        "hm2DnsClientRequestTimeout": "3",
+                        "hm2DnsClientRequestRetransmits": "2",
+                        "hm2DnsClientCacheAdminState": "1",
+                    }],
+                },
+            },
+            "errors": [],
+        }
+        self.backend.client.get.side_effect = [
+            [{
+                "hm2DnsClientServerIndex": "1",
+                "hm2DnsClientServerAddressType": "1",
+                "hm2DnsClientServerAddress": "c0 a8 03 01",
+                "hm2DnsClientServerRowStatus": "6",
+            }],
+            [],
+        ]
+        result = self.backend.get_dns()
+        self.assertEqual(result['servers'], [])
+
+    def test_get_dns_multiple_servers(self):
+        """get_dns returns multiple configured servers."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-DNS-MIB": {
+                    "hm2DnsClientGroup": [{
+                        "hm2DnsClientAdminState": "1",
+                        "hm2DnsClientConfigSource": "1",
+                    }],
+                    "hm2DnsClientGlobalGroup": [{
+                        "hm2DnsClientDefaultDomainName": "",
+                        "hm2DnsClientRequestTimeout": "3",
+                        "hm2DnsClientRequestRetransmits": "2",
+                        "hm2DnsClientCacheAdminState": "1",
+                    }],
+                },
+            },
+            "errors": [],
+        }
+        self.backend.client.get.side_effect = [
+            [
+                {
+                    "hm2DnsClientServerIndex": "1",
+                    "hm2DnsClientServerAddressType": "1",
+                    "hm2DnsClientServerAddress": "c0 a8 03 01",
+                    "hm2DnsClientServerRowStatus": "1",
+                },
+                {
+                    "hm2DnsClientServerIndex": "2",
+                    "hm2DnsClientServerAddressType": "1",
+                    "hm2DnsClientServerAddress": "0a 00 00 01",
+                    "hm2DnsClientServerRowStatus": "1",
+                },
+            ],
+            [],
+        ]
+        result = self.backend.get_dns()
+        self.assertEqual(result['servers'], ['192.168.3.1', '10.0.0.1'])
+
+    # --- set_dns ---
+
+    def test_set_dns_enable(self):
+        """set_dns enables DNS client."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_dns(enabled=True)
+        calls = self.backend.client.set_multi.call_args_list
+        self.assertEqual(len(calls), 1)
+        mutations = calls[0][0][0]  # first positional arg = list of tuples
+        vals = mutations[0][2]
+        self.assertEqual(vals["hm2DnsClientAdminState"], "1")
+
+    def test_set_dns_disable(self):
+        """set_dns disables DNS client."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_dns(enabled=False)
+        calls = self.backend.client.set_multi.call_args_list
+        mutations = calls[0][0][0]
+        vals = mutations[0][2]
+        self.assertEqual(vals["hm2DnsClientAdminState"], "2")
+
+    def test_set_dns_multiple_fields(self):
+        """set_dns sets multiple global fields."""
+        self.backend.client.set_multi = Mock()
+        self.backend.set_dns(
+            cache_enabled=False, timeout=10, retransmits=5)
+        calls = self.backend.client.set_multi.call_args_list
+        self.assertEqual(len(calls), 1)
+        mutations = calls[0][0][0]
+        # All global fields go in one mutation tuple
+        vals = mutations[0][2]
+        self.assertEqual(vals["hm2DnsClientCacheAdminState"], "2")
+        self.assertEqual(vals["hm2DnsClientRequestTimeout"], "10")
+        self.assertEqual(vals["hm2DnsClientRequestRetransmits"], "5")
+
+    def test_set_dns_invalid_config_source(self):
+        """set_dns raises ValueError for invalid config_source."""
+        with self.assertRaises(ValueError):
+            self.backend.set_dns(config_source='invalid')
+
+    # --- add_dns_server ---
+
+    def test_add_dns_server_empty_table(self):
+        """add_dns_server picks index 1 when table is empty."""
+        self.backend.client.get.side_effect = [
+            [],  # no existing servers
+        ]
+        self.backend.client.set_indexed = Mock()
+        self.backend.add_dns_server('192.168.3.1')
+        call = self.backend.client.set_indexed.call_args
+        self.assertEqual(
+            call[1]['index']['hm2DnsClientServerIndex'], '1')
+        self.assertEqual(
+            call[1]['values']['hm2DnsClientServerRowStatus'], '4')
+
+    def test_add_dns_server_picks_next_free(self):
+        """add_dns_server skips used indices."""
+        self.backend.client.get.side_effect = [
+            [{
+                "hm2DnsClientServerIndex": "1",
+                "hm2DnsClientServerRowStatus": "1",
+            }],
+        ]
+        self.backend.client.set_indexed = Mock()
+        self.backend.add_dns_server('10.0.0.1')
+        call = self.backend.client.set_indexed.call_args
+        self.assertEqual(
+            call[1]['index']['hm2DnsClientServerIndex'], '2')
+
+    def test_add_dns_server_full_table(self):
+        """add_dns_server raises ValueError when all 4 slots used."""
+        self.backend.client.get.side_effect = [
+            [
+                {"hm2DnsClientServerIndex": "1",
+                 "hm2DnsClientServerRowStatus": "1"},
+                {"hm2DnsClientServerIndex": "2",
+                 "hm2DnsClientServerRowStatus": "1"},
+                {"hm2DnsClientServerIndex": "3",
+                 "hm2DnsClientServerRowStatus": "1"},
+                {"hm2DnsClientServerIndex": "4",
+                 "hm2DnsClientServerRowStatus": "1"},
+            ],
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.add_dns_server('10.0.0.5')
+        self.assertIn('4 DNS server slots', str(ctx.exception))
+
+    # --- delete_dns_server ---
+
+    def test_delete_dns_server(self):
+        """delete_dns_server destroys row by IP match."""
+        self.backend.client.get.side_effect = [
+            [{
+                "hm2DnsClientServerIndex": "2",
+                "hm2DnsClientServerAddress": "c0 a8 03 01",
+                "hm2DnsClientServerRowStatus": "1",
+            }],
+        ]
+        self.backend.client.set_indexed = Mock()
+        self.backend.delete_dns_server('192.168.3.1')
+        call = self.backend.client.set_indexed.call_args
+        self.assertEqual(
+            call[1]['values']['hm2DnsClientServerRowStatus'], '6')
+
+    def test_delete_dns_server_not_found(self):
+        """delete_dns_server raises ValueError when IP not in table."""
+        self.backend.client.get.side_effect = [
+            [{
+                "hm2DnsClientServerIndex": "1",
+                "hm2DnsClientServerAddress": "c0 a8 03 01",
+                "hm2DnsClientServerRowStatus": "1",
+            }],
+        ]
+        with self.assertRaises(ValueError) as ctx:
+            self.backend.delete_dns_server('10.10.10.10')
+        self.assertIn('not found', str(ctx.exception))
+
+
+class TestMOPSPoe(unittest.TestCase):
+    """Test MOPS PoE getter/setter."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+
+    # --- get_poe ---
+
+    def test_get_poe_factory_defaults(self):
+        """get_poe factory defaults — disabled, empty ports/modules."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-POE-MIB": {
+                    "hm2PoeMgmtGlobalGroup": [{
+                        "hm2PoeMgmtAdminStatus": "2",
+                        "hm2PoeMgmtReservedPower": "0",
+                        "hm2PoeMgmtDeliveredCurrent": "0",
+                    }],
+                    "hm2PoeMgmtPortEntry": [],
+                    "hm2PoeMgmtModuleEntry": [],
+                },
+                "IF-MIB": {
+                    "ifXEntry": [
+                        {"ifIndex": "1", "ifName": "31 2f 31"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
+        result = self.backend.get_poe()
+        self.assertFalse(result['enabled'])
+        self.assertEqual(result['power_w'], 0)
+        self.assertEqual(result['delivered_current_ma'], 0)
+        self.assertEqual(result['modules'], {})
+        self.assertEqual(result['ports'], {})
+
+    def test_get_poe_enabled_with_port(self):
+        """get_poe with global enabled and a PoE port delivering power."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-POE-MIB": {
+                    "hm2PoeMgmtGlobalGroup": [{
+                        "hm2PoeMgmtAdminStatus": "1",
+                        "hm2PoeMgmtReservedPower": "30",
+                        "hm2PoeMgmtDeliveredCurrent": "250",
+                    }],
+                    "hm2PoeMgmtPortEntry": [{
+                        "ifIndex": "1",
+                        "hm2PoeMgmtPortAdminEnable": "1",
+                        "hm2PoeMgmtPortDetectionStatus": "3",
+                        "hm2PoeMgmtPortPowerPriority": "2",
+                        "hm2PoeMgmtPortPowerClassification": "5",
+                        "hm2PoeMgmtPortConsumptionPower": "5300",
+                        "hm2PoeMgmtPortPowerLimit": "15400",
+                        "hm2PoeMgmtPortName": "41 50",
+                        "hm2PoeMgmtPortFastStartup": "1",
+                        "hm2PoeMgmtPortClassValid": "1",
+                    }],
+                    "hm2PoeMgmtModuleEntry": [{
+                        "hm2PoeMgmtModuleUnitIndex": "1",
+                        "hm2PoeMgmtModuleSlotIndex": "1",
+                        "hm2PoeMgmtModulePower": "370",
+                        "hm2PoeMgmtModuleMaximumPower": "370",
+                        "hm2PoeMgmtModuleReservedPower": "30",
+                        "hm2PoeMgmtModuleDeliveredPower": "5",
+                        "hm2PoeMgmtModulePowerSource": "0",
+                        "hm2PoeMgmtModuleUsageThreshold": "90",
+                        "hm2PoeMgmtModuleNotificationControlEnable": "1",
+                    }],
+                },
+                "IF-MIB": {
+                    "ifXEntry": [
+                        {"ifIndex": "1", "ifName": "31 2f 31"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
+        result = self.backend.get_poe()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['power_w'], 30)
+        self.assertEqual(result['delivered_current_ma'], 250)
+        # Module
+        self.assertIn('1/1', result['modules'])
+        mod = result['modules']['1/1']
+        self.assertEqual(mod['budget_w'], 370)
+        self.assertEqual(mod['max_w'], 370)
+        self.assertEqual(mod['source'], 'internal')
+        self.assertEqual(mod['threshold_pct'], 90)
+        self.assertTrue(mod['notifications'])
+        # Port
+        self.assertIn('1/1', result['ports'])
+        port = result['ports']['1/1']
+        self.assertTrue(port['enabled'])
+        self.assertEqual(port['status'], 'delivering')
+        self.assertEqual(port['priority'], 'high')
+        self.assertEqual(port['classification'], 'class4')
+        self.assertEqual(port['consumption_mw'], 5300)
+        self.assertEqual(port['power_limit_mw'], 15400)
+        self.assertEqual(port['name'], 'AP')
+        self.assertTrue(port['fast_startup'])
+
+    def test_get_poe_class_invalid_when_not_delivering(self):
+        """get_poe classification is None when class_valid=0."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-POE-MIB": {
+                    "hm2PoeMgmtGlobalGroup": [{
+                        "hm2PoeMgmtAdminStatus": "1",
+                        "hm2PoeMgmtReservedPower": "0",
+                        "hm2PoeMgmtDeliveredCurrent": "0",
+                    }],
+                    "hm2PoeMgmtPortEntry": [{
+                        "ifIndex": "1",
+                        "hm2PoeMgmtPortAdminEnable": "1",
+                        "hm2PoeMgmtPortDetectionStatus": "2",
+                        "hm2PoeMgmtPortPowerPriority": "3",
+                        "hm2PoeMgmtPortPowerClassification": "1",
+                        "hm2PoeMgmtPortConsumptionPower": "0",
+                        "hm2PoeMgmtPortPowerLimit": "0",
+                        "hm2PoeMgmtPortName": "",
+                        "hm2PoeMgmtPortFastStartup": "2",
+                        "hm2PoeMgmtPortClassValid": "0",
+                    }],
+                    "hm2PoeMgmtModuleEntry": [],
+                },
+                "IF-MIB": {
+                    "ifXEntry": [
+                        {"ifIndex": "1", "ifName": "31 2f 31"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
+        result = self.backend.get_poe()
+        port = result['ports']['1/1']
+        self.assertIsNone(port['classification'])
+        self.assertEqual(port['status'], 'searching')
+
+    def test_get_poe_multiple_ports(self):
+        """get_poe returns multiple ports."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-POE-MIB": {
+                    "hm2PoeMgmtGlobalGroup": [{
+                        "hm2PoeMgmtAdminStatus": "1",
+                        "hm2PoeMgmtReservedPower": "15",
+                        "hm2PoeMgmtDeliveredCurrent": "120",
+                    }],
+                    "hm2PoeMgmtPortEntry": [
+                        {
+                            "ifIndex": "1",
+                            "hm2PoeMgmtPortAdminEnable": "1",
+                            "hm2PoeMgmtPortDetectionStatus": "3",
+                            "hm2PoeMgmtPortPowerPriority": "3",
+                            "hm2PoeMgmtPortPowerClassification": "4",
+                            "hm2PoeMgmtPortConsumptionPower": "3200",
+                            "hm2PoeMgmtPortPowerLimit": "0",
+                            "hm2PoeMgmtPortName": "",
+                            "hm2PoeMgmtPortFastStartup": "2",
+                            "hm2PoeMgmtPortClassValid": "1",
+                        },
+                        {
+                            "ifIndex": "2",
+                            "hm2PoeMgmtPortAdminEnable": "2",
+                            "hm2PoeMgmtPortDetectionStatus": "1",
+                            "hm2PoeMgmtPortPowerPriority": "3",
+                            "hm2PoeMgmtPortPowerClassification": "1",
+                            "hm2PoeMgmtPortConsumptionPower": "0",
+                            "hm2PoeMgmtPortPowerLimit": "0",
+                            "hm2PoeMgmtPortName": "",
+                            "hm2PoeMgmtPortFastStartup": "2",
+                            "hm2PoeMgmtPortClassValid": "0",
+                        },
+                    ],
+                    "hm2PoeMgmtModuleEntry": [],
+                },
+                "IF-MIB": {
+                    "ifXEntry": [
+                        {"ifIndex": "1", "ifName": "31 2f 31"},
+                        {"ifIndex": "2", "ifName": "31 2f 32"},
+                    ],
+                },
+            },
+            "errors": [],
+        }
+        result = self.backend.get_poe()
+        self.assertEqual(len(result['ports']), 2)
+        self.assertIn('1/1', result['ports'])
+        self.assertIn('1/2', result['ports'])
+        self.assertTrue(result['ports']['1/1']['enabled'])
+        self.assertFalse(result['ports']['1/2']['enabled'])
+
+    # --- set_poe ---
+
+    def test_set_poe_global_enable(self):
+        """set_poe(enabled=True) sets global admin state."""
+        self.backend.client.set = Mock()
+        self.backend.set_poe(enabled=True)
+        call = self.backend.client.set.call_args
+        self.assertEqual(call[0][0], "HM2-POE-MIB")
+        self.assertEqual(call[0][1], "hm2PoeMgmtGlobalGroup")
+        self.assertEqual(call[0][2]["hm2PoeMgmtAdminStatus"], "1")
+
+    def test_set_poe_global_disable(self):
+        """set_poe(enabled=False) disables global admin state."""
+        self.backend.client.set = Mock()
+        self.backend.set_poe(enabled=False)
+        call = self.backend.client.set.call_args
+        self.assertEqual(call[0][2]["hm2PoeMgmtAdminStatus"], "2")
+
+    def test_set_poe_per_port_disable(self):
+        """set_poe(interface='1/1', enabled=False) disables PoE on port."""
+        self.backend._ifindex_map = {"1": "1/1", "2": "1/2"}
+        self.backend.client.set_multi = Mock()
+        self.backend.set_poe(interface='1/1', enabled=False)
+        calls = self.backend.client.set_multi.call_args_list
+        mutations = calls[0][0][0]
+        self.assertEqual(mutations[0][0], "HM2-POE-MIB")
+        self.assertEqual(mutations[0][1], "hm2PoeMgmtPortEntry")
+        self.assertEqual(
+            mutations[0][2]["hm2PoeMgmtPortAdminEnable"], "2")
+        self.assertEqual(mutations[0][3]["ifIndex"], "1")
+
+    def test_set_poe_per_port_multi(self):
+        """set_poe with list of interfaces sets all."""
+        self.backend._ifindex_map = {"1": "1/1", "2": "1/2"}
+        self.backend.client.set_multi = Mock()
+        self.backend.set_poe(
+            interface=['1/1', '1/2'], enabled=False)
+        calls = self.backend.client.set_multi.call_args_list
+        mutations = calls[0][0][0]
+        self.assertEqual(len(mutations), 2)
+
+    def test_set_poe_per_port_priority(self):
+        """set_poe priority sets correct MOPS value."""
+        self.backend._ifindex_map = {"1": "1/1"}
+        self.backend.client.set_multi = Mock()
+        self.backend.set_poe(
+            interface='1/1', priority='critical')
+        mutations = (self.backend.client.set_multi
+                     .call_args_list[0][0][0])
+        self.assertEqual(
+            mutations[0][2]["hm2PoeMgmtPortPowerPriority"], "1")
+
+    def test_set_poe_invalid_priority(self):
+        """set_poe raises ValueError for invalid priority."""
+        self.backend._ifindex_map = {"1": "1/1"}
+        with self.assertRaises(ValueError):
+            self.backend.set_poe(
+                interface='1/1', priority='invalid')
+
+    def test_set_poe_unknown_interface(self):
+        """set_poe raises ValueError for unknown interface."""
+        self.backend._ifindex_map = {"1": "1/1"}
+        with self.assertRaises(ValueError):
+            self.backend.set_poe(
+                interface='9/9', enabled=False)
+
+
+    # --- get_remote_auth ---
+
+    def test_get_remote_auth_all_disabled(self):
+        """get_remote_auth factory defaults — nothing configured."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-REMOTE-AUTHENTICATION-MIB": {
+                    "hm2LdapConfigGroup": [{
+                        "hm2LdapClientAdminState": "2",
+                    }],
+                },
+            },
+            "errors": [],
+        }
+        self.backend.client.get.side_effect = [
+            [],  # RADIUS — no servers
+            [],  # TACACS+ — no servers
+        ]
+        result = self.backend.get_remote_auth()
+        self.assertFalse(result['radius']['enabled'])
+        self.assertFalse(result['tacacs']['enabled'])
+        self.assertFalse(result['ldap']['enabled'])
+
+    def test_get_remote_auth_radius_active(self):
+        """get_remote_auth with one active RADIUS server."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-REMOTE-AUTHENTICATION-MIB": {
+                    "hm2LdapConfigGroup": [{
+                        "hm2LdapClientAdminState": "2",
+                    }],
+                },
+            },
+            "errors": [],
+        }
+        self.backend.client.get.side_effect = [
+            [{"hm2AgentRadiusServerRowStatus": "1"}],  # RADIUS active
+            [],  # TACACS+ — no servers
+        ]
+        result = self.backend.get_remote_auth()
+        self.assertTrue(result['radius']['enabled'])
+        self.assertFalse(result['tacacs']['enabled'])
+        self.assertFalse(result['ldap']['enabled'])
+
+    def test_get_remote_auth_ldap_enabled(self):
+        """get_remote_auth with LDAP globally enabled."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-REMOTE-AUTHENTICATION-MIB": {
+                    "hm2LdapConfigGroup": [{
+                        "hm2LdapClientAdminState": "1",
+                    }],
+                },
+            },
+            "errors": [],
+        }
+        self.backend.client.get.side_effect = [
+            [],  # RADIUS — no servers
+            [],  # TACACS+ — no servers
+        ]
+        result = self.backend.get_remote_auth()
+        self.assertFalse(result['radius']['enabled'])
+        self.assertFalse(result['tacacs']['enabled'])
+        self.assertTrue(result['ldap']['enabled'])
+
+    def test_get_remote_auth_tacacs_active(self):
+        """get_remote_auth with one active TACACS+ server."""
+        self.backend.client.get_multi.return_value = {
+            "mibs": {
+                "HM2-REMOTE-AUTHENTICATION-MIB": {
+                    "hm2LdapConfigGroup": [{
+                        "hm2LdapClientAdminState": "2",
+                    }],
+                },
+            },
+            "errors": [],
+        }
+        self.backend.client.get.side_effect = [
+            [],  # RADIUS — no servers
+            [{"hm2AgentTacacsServerStatus": "1"}],  # TACACS+ active
+        ]
+        result = self.backend.get_remote_auth()
+        self.assertFalse(result['radius']['enabled'])
+        self.assertTrue(result['tacacs']['enabled'])
+        self.assertFalse(result['ldap']['enabled'])
+
+    def test_get_remote_auth_unsupported_graceful(self):
+        """get_remote_auth handles MOPSError gracefully on unsupported HW."""
+        from napalm_hios.mops_client import MOPSError
+        self.backend.client.get_multi.return_value = {
+            "mibs": {},
+            "errors": [],
+        }
+        self.backend.client.get.side_effect = MOPSError("noSuchName")
+        result = self.backend.get_remote_auth()
+        self.assertFalse(result['radius']['enabled'])
+        self.assertFalse(result['tacacs']['enabled'])
+        self.assertFalse(result['ldap']['enabled'])
+
+
+    # --- get_users ---
+
+    def test_get_users_single_admin(self):
+        """get_users with single admin user (factory default)."""
+        self.backend.client.get.side_effect = [
+            # User table
+            [{
+                "hm2UserName": "61 64 6d 69 6e",
+                "hm2UserAccessRole": "15",
+                "hm2UserLockoutStatus": "2",
+                "hm2UserPwdPolicyChk": "2",
+                "hm2UserSnmpAuthType": "1",
+                "hm2UserSnmpEncType": "1",
+                "hm2UserStatus": "1",
+            }],
+            # Default password table
+            [{"hm2PwdMgmtDefaultPwdStatusUserName": "61 64 6d 69 6e"}],
+        ]
+        result = self.backend.get_users()
+        self.assertEqual(len(result), 1)
+        u = result[0]
+        self.assertEqual(u['name'], 'admin')
+        self.assertEqual(u['role'], 'administrator')
+        self.assertFalse(u['locked'])
+        self.assertFalse(u['policy_check'])
+        self.assertEqual(u['snmp_auth'], 'md5')
+        self.assertEqual(u['snmp_enc'], 'des')
+        self.assertTrue(u['active'])
+        self.assertTrue(u['default_password'])
+
+    def test_get_users_multiple(self):
+        """get_users with multiple users including inactive."""
+        self.backend.client.get.side_effect = [
+            [
+                {
+                    "hm2UserName": "61 64 6d 69 6e",
+                    "hm2UserAccessRole": "15",
+                    "hm2UserLockoutStatus": "2",
+                    "hm2UserPwdPolicyChk": "2",
+                    "hm2UserSnmpAuthType": "2",
+                    "hm2UserSnmpEncType": "2",
+                    "hm2UserStatus": "1",
+                },
+                {
+                    "hm2UserName": "6f 70 65 72 61 74 6f 72",
+                    "hm2UserAccessRole": "13",
+                    "hm2UserLockoutStatus": "2",
+                    "hm2UserPwdPolicyChk": "1",
+                    "hm2UserSnmpAuthType": "1",
+                    "hm2UserSnmpEncType": "0",
+                    "hm2UserStatus": "2",
+                },
+            ],
+            [],  # No default password users
+        ]
+        result = self.backend.get_users()
+        self.assertEqual(len(result), 2)
+        admin = result[0]
+        self.assertEqual(admin['name'], 'admin')
+        self.assertEqual(admin['snmp_auth'], 'sha')
+        self.assertEqual(admin['snmp_enc'], 'aes128')
+        self.assertTrue(admin['active'])
+        oper = result[1]
+        self.assertEqual(oper['name'], 'operator')
+        self.assertEqual(oper['role'], 'operator')
+        self.assertTrue(oper['policy_check'])
+        self.assertEqual(oper['snmp_enc'], 'none')
+        self.assertFalse(oper['active'])
+
+    def test_get_users_default_pwd_table_error(self):
+        """get_users handles MOPSError on default password table."""
+        from napalm_hios.mops_client import MOPSError
+        self.backend.client.get.side_effect = [
+            [{
+                "hm2UserName": "61 64 6d 69 6e",
+                "hm2UserAccessRole": "15",
+                "hm2UserLockoutStatus": "2",
+                "hm2UserPwdPolicyChk": "2",
+                "hm2UserSnmpAuthType": "1",
+                "hm2UserSnmpEncType": "1",
+                "hm2UserStatus": "1",
+            }],
+            MOPSError("noSuchName"),
+        ]
+        # Should not raise — graceful fallback
+        result = self.backend.get_users()
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0]['default_password'])
+
+    # --- set_user ---
+
+    def test_set_user_create_new(self):
+        """set_user creates new user with createAndWait sequence."""
+        self.backend.client.get.return_value = [
+            {"hm2UserName": "61 64 6d 69 6e", "hm2UserStatus": "1"},
+        ]
+        self.backend.client.set_indexed = Mock()
+        self.backend.set_user('newuser', password='Test1234!',
+                              role='operator')
+        calls = self.backend.client.set_indexed.call_args_list
+        # Step 1: createAndWait
+        self.assertEqual(calls[0][1]['values']['hm2UserStatus'], '5')
+        # Step 2: password
+        self.assertIn('hm2UserPassword', calls[1][1]['values'])
+        # Step 3: activate + role
+        self.assertEqual(calls[2][1]['values']['hm2UserStatus'], '1')
+        self.assertEqual(calls[2][1]['values']['hm2UserAccessRole'], '13')
+
+    def test_set_user_update_existing(self):
+        """set_user updates existing user attributes."""
+        self.backend.client.get.return_value = [
+            {"hm2UserName": "61 64 6d 69 6e", "hm2UserStatus": "1"},
+        ]
+        self.backend.client.set_indexed = Mock()
+        self.backend.set_user('admin', snmp_auth_type='sha',
+                              snmp_enc_type='aes128')
+        calls = self.backend.client.set_indexed.call_args_list
+        self.assertEqual(len(calls), 1)
+        vals = calls[0][1]['values']
+        self.assertEqual(vals['hm2UserSnmpAuthType'], '2')
+        self.assertEqual(vals['hm2UserSnmpEncType'], '2')
+
+    def test_set_user_requires_password_for_new(self):
+        """set_user raises ValueError when creating without password."""
+        self.backend.client.get.return_value = []
+        with self.assertRaises(ValueError):
+            self.backend.set_user('newuser', role='guest')
+
+    def test_set_user_invalid_role(self):
+        """set_user raises ValueError for invalid role."""
+        self.backend.client.get.return_value = [
+            {"hm2UserName": "61 64 6d 69 6e", "hm2UserStatus": "1"},
+        ]
+        with self.assertRaises(ValueError):
+            self.backend.set_user('admin', role='superadmin')
+
+    # --- delete_user ---
+
+    def test_delete_user(self):
+        """delete_user sends destroy(6) RowStatus."""
+        self.backend.client.set_indexed = Mock()
+        self.backend.delete_user('testuser')
+        call = self.backend.client.set_indexed.call_args
+        self.assertEqual(call[1]['values']['hm2UserStatus'], '6')
+
+
+class TestBitsCodec(unittest.TestCase):
+    """Test BITS hex encode/decode for cipher algorithm fields."""
+
+    def test_decode_bits_hex_single(self):
+        """Decode single bit set."""
+        # Bit 2 = 0x20 (MSB-first: 0b00100000)
+        result = _decode_bits_hex("20", _TLS_VERSIONS)
+        self.assertEqual(result, ['tlsv1.2'])
+
+    def test_decode_bits_hex_multiple(self):
+        """Decode multiple bits set."""
+        # Bits 6,7 = 0x03 (0b00000011)
+        result = _decode_bits_hex("03", _TLS_CIPHER_SUITES)
+        self.assertEqual(result, [
+            'tls-ecdhe-rsa-with-aes-128-gcm-sha256',
+            'tls-ecdhe-rsa-with-aes-256-gcm-sha384',
+        ])
+
+    def test_decode_bits_hex_empty(self):
+        self.assertEqual(_decode_bits_hex("", _TLS_VERSIONS), [])
+        self.assertEqual(_decode_bits_hex(None, _TLS_VERSIONS), [])
+
+    def test_decode_bits_hex_ssh_hmac(self):
+        """Bits 0,1,3,4 = 0xD8 (11011000)."""
+        result = _decode_bits_hex("d8", _SSH_HMAC)
+        self.assertEqual(result, [
+            'hmac-sha1', 'hmac-sha2-256',
+            'hmac-sha1-etm@openssh.com',
+            'hmac-sha2-256-etm@openssh.com',
+        ])
+
+    def test_encode_bits_hex_roundtrip(self):
+        """Encode then decode gives original list."""
+        names = ['tlsv1.0', 'tlsv1.2']
+        encoded = _encode_bits_hex(names, _TLS_VERSIONS)
+        decoded = _decode_bits_hex(encoded, _TLS_VERSIONS)
+        self.assertEqual(decoded, names)
+
+    def test_encode_bits_hex_single(self):
+        """Encode single algorithm."""
+        result = _encode_bits_hex(['tlsv1.2'], _TLS_VERSIONS)
+        self.assertEqual(result, '20')
+
+    def test_encode_bits_hex_multi_byte(self):
+        """SSH host key algorithms span multiple bytes."""
+        names = ['ssh-ed25519']  # bit 11
+        result = _encode_bits_hex(names, _SSH_HOST_KEY)
+        decoded = _decode_bits_hex(result, _SSH_HOST_KEY)
+        self.assertEqual(decoded, ['ssh-ed25519'])
+
+    def test_encode_bits_hex_ignores_unknown(self):
+        """Unknown algorithm names are silently skipped."""
+        result = _encode_bits_hex(
+            ['tlsv1.2', 'tlsv99.9'], _TLS_VERSIONS)
+        decoded = _decode_bits_hex(result, _TLS_VERSIONS)
+        self.assertEqual(decoded, ['tlsv1.2'])
+
+
+class TestMOPSTrapDestCRUD(unittest.TestCase):
+    """Test MOPS add/delete SNMP trap destination."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS("198.51.100.1", "admin", "private", timeout=10)
+        self.backend.client = Mock()
+        self.backend._connected = True
+        self.backend._staging = False
+
+    def test_add_snmp_trap_dest_v3(self):
+        """add_snmp_trap_dest creates params then addr entries."""
+        self.backend.client.set_indexed = Mock()
+        self.backend.add_snmp_trap_dest(
+            'nms1', '192.168.1.100', port=162,
+            security_model='v3', security_name='admin',
+            security_level='authpriv')
+        calls = self.backend.client.set_indexed.call_args_list
+        # 6 calls: params create/set/activate + addr create/set/activate
+        self.assertEqual(len(calls), 6)
+        # Params createAndWait
+        self.assertEqual(
+            calls[0][1]['values']['snmpTargetParamsRowStatus'], '5')
+        # Params attributes
+        self.assertEqual(
+            calls[1][1]['values']['snmpTargetParamsSecurityModel'], '3')
+        self.assertEqual(
+            calls[1][1]['values']['snmpTargetParamsSecurityLevel'], '3')
+        # Params activate
+        self.assertEqual(
+            calls[2][1]['values']['snmpTargetParamsRowStatus'], '1')
+        # Addr createAndWait
+        self.assertEqual(
+            calls[3][1]['values']['snmpTargetAddrRowStatus'], '5')
+        # Addr activate
+        self.assertEqual(
+            calls[5][1]['values']['snmpTargetAddrRowStatus'], '1')
+
+    def test_add_snmp_trap_dest_v1_forces_noauth(self):
+        """add_snmp_trap_dest with v1 forces security_level to noauth."""
+        self.backend.client.set_indexed = Mock()
+        self.backend.add_snmp_trap_dest(
+            'trap1', '10.0.0.1', security_model='v1',
+            security_name='public', security_level='authpriv')
+        calls = self.backend.client.set_indexed.call_args_list
+        # Params step 2 should have noauth (1), not authpriv (3)
+        self.assertEqual(
+            calls[1][1]['values']['snmpTargetParamsSecurityLevel'], '1')
+
+    def test_add_snmp_trap_dest_invalid_model(self):
+        """add_snmp_trap_dest raises ValueError for invalid model."""
+        with self.assertRaises(ValueError):
+            self.backend.add_snmp_trap_dest(
+                'bad', '10.0.0.1', security_model='v4')
+
+    def test_add_snmp_trap_dest_invalid_level(self):
+        """add_snmp_trap_dest raises ValueError for invalid level."""
+        with self.assertRaises(ValueError):
+            self.backend.add_snmp_trap_dest(
+                'bad', '10.0.0.1', security_model='v3',
+                security_level='invalid')
+
+    def test_delete_snmp_trap_dest(self):
+        """delete_snmp_trap_dest destroys addr then params entries."""
+        self.backend.client.set_indexed = Mock()
+        self.backend.delete_snmp_trap_dest('nms1')
+        calls = self.backend.client.set_indexed.call_args_list
+        self.assertEqual(len(calls), 2)
+        # Both should set RowStatus to destroy(6)
+        self.assertEqual(
+            calls[0][1]['values']['snmpTargetAddrRowStatus'], '6')
+        self.assertEqual(
+            calls[1][1]['values']['snmpTargetParamsRowStatus'], '6')
+
+    def test_encode_taddress(self):
+        """_encode_taddress produces correct hex string."""
+        result = MOPSHIOS._encode_taddress('192.168.1.100', 162)
+        self.assertEqual(result, 'c0 a8 01 64 00 a2')
+
+    def test_get_trap_dest_v1_normalises_level(self):
+        """get_snmp_config normalises security_level to noauth for v1."""
+        from napalm_hios.mops_hios import MOPSError
+        self.backend.client.get.side_effect = [
+            [{"hm2SnmpV1AdminStatus": "1", "hm2SnmpV2AdminStatus": "2",
+              "hm2SnmpV3AdminStatus": "2", "hm2SnmpPortNumber": "161",
+              "hm2SnmpTrapServiceAdminStatus": "1"}],
+            MOPSError("no comm"),
+            MOPSError("no users"),
+            # Addr table
+            [{"snmpTargetAddrName": "74 31",  # t1
+              "snmpTargetAddrTAddress": "0a 00 00 01 00 a2",
+              "snmpTargetAddrParams": "74 31"}],  # t1
+            # Params table — v1 with authpriv stored
+            [{"snmpTargetParamsName": "74 31",
+              "snmpTargetParamsSecurityModel": "1",
+              "snmpTargetParamsSecurityName": "70 75 62",  # pub
+              "snmpTargetParamsSecurityLevel": "3"}],  # authpriv
+        ]
+        result = self.backend.get_snmp_config()
+        td = result['trap_destinations'][0]
+        self.assertEqual(td['security_model'], 'v1')
+        self.assertEqual(td['security_level'], 'noauth')
+
+
+class TestMOPSPortSecurity(unittest.TestCase):
+    """Tests for get_port_security / set_port_security / add/delete."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS.__new__(MOPSHIOS)
+        self.backend.client = Mock()
+        self.backend._staging = False
+        self.backend._mutations = []
+
+    def test_parse_portsec_macs(self):
+        result = self.backend._parse_portsec_macs(
+            '1 aa:bb:cc:dd:ee:ff,2 11:22:33:44:55:66')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {'vlan': 1, 'mac': 'aa:bb:cc:dd:ee:ff'})
+        self.assertEqual(result[1], {'vlan': 2, 'mac': '11:22:33:44:55:66'})
+
+    def test_parse_portsec_macs_empty(self):
+        self.assertEqual(self.backend._parse_portsec_macs(''), [])
+        self.assertEqual(self.backend._parse_portsec_macs(None), [])
+
+    def test_parse_portsec_ips(self):
+        result = self.backend._parse_portsec_ips(
+            '1 192.168.1.1,2 10.0.0.1')
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {'vlan': 1, 'ip': '192.168.1.1'})
+
+    def test_get_port_security_all(self):
+        """get_port_security() returns global + per-port data."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-PORTSECURITY-MIB": {
+                "hm2AgentPortSecurityGroup": [{
+                    "hm2AgentGlobalPortSecurityMode": "1",
+                    "hm2AgentPortSecurityOperationMode": "1",
+                }],
+                "hm2AgentPortSecurityEntry": [{
+                    "ifIndex": "1",
+                    "hm2AgentPortSecurityMode": "1",
+                    "hm2AgentPortSecurityDynamicLimit": "10",
+                    "hm2AgentPortSecurityStaticLimit": "5",
+                    "hm2AgentPortSecurityAutoDisable": "1",
+                    "hm2AgentPortSecurityViolationTrapMode": "2",
+                    "hm2AgentPortSecurityViolationTrapFrequency": "30",
+                    "hm2AgentPortSecurityDynamicCount": "3",
+                    "hm2AgentPortSecurityStaticCount": "1",
+                    "hm2AgentPortSecurityStaticIpCount": "0",
+                    "hm2AgentPortSecurityLastDiscardedMAC":
+                        "31 20 30 30 3a 31 31 3a 32 32 3a 33 33 3a 34 34"
+                        " 3a 35 35",
+                    "hm2AgentPortSecurityStaticMACs":
+                        "31 20 61 61 3a 62 62 3a 63 63 3a 64 64 3a 65 65"
+                        " 3a 66 66",
+                    "hm2AgentPortSecurityStaticIPs": "",
+                }],
+            }},
+            {"1": "1/1"},
+        ))
+        result = self.backend.get_port_security()
+        self.assertTrue(result['enabled'])
+        self.assertEqual(result['mode'], 'mac-based')
+        self.assertIn('1/1', result['ports'])
+        port = result['ports']['1/1']
+        self.assertTrue(port['enabled'])
+        self.assertEqual(port['dynamic_limit'], 10)
+        self.assertEqual(port['static_limit'], 5)
+        self.assertEqual(port['dynamic_count'], 3)
+        self.assertEqual(port['static_count'], 1)
+        self.assertTrue(port['auto_disable'])
+        self.assertEqual(port['violation_trap_frequency'], 30)
+
+    def test_get_port_security_filter(self):
+        """get_port_security(interface='1/2') filters to that port."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-PORTSECURITY-MIB": {
+                "hm2AgentPortSecurityGroup": [{
+                    "hm2AgentGlobalPortSecurityMode": "2",
+                    "hm2AgentPortSecurityOperationMode": "1",
+                }],
+                "hm2AgentPortSecurityEntry": [
+                    {"ifIndex": "1",
+                     "hm2AgentPortSecurityMode": "2",
+                     "hm2AgentPortSecurityDynamicLimit": "600",
+                     "hm2AgentPortSecurityStaticLimit": "64",
+                     "hm2AgentPortSecurityAutoDisable": "1",
+                     "hm2AgentPortSecurityViolationTrapMode": "2",
+                     "hm2AgentPortSecurityViolationTrapFrequency": "0",
+                     "hm2AgentPortSecurityDynamicCount": "0",
+                     "hm2AgentPortSecurityStaticCount": "0",
+                     "hm2AgentPortSecurityStaticIpCount": "0",
+                     "hm2AgentPortSecurityLastDiscardedMAC": "",
+                     "hm2AgentPortSecurityStaticMACs": "",
+                     "hm2AgentPortSecurityStaticIPs": ""},
+                    {"ifIndex": "2",
+                     "hm2AgentPortSecurityMode": "2",
+                     "hm2AgentPortSecurityDynamicLimit": "600",
+                     "hm2AgentPortSecurityStaticLimit": "64",
+                     "hm2AgentPortSecurityAutoDisable": "1",
+                     "hm2AgentPortSecurityViolationTrapMode": "2",
+                     "hm2AgentPortSecurityViolationTrapFrequency": "0",
+                     "hm2AgentPortSecurityDynamicCount": "0",
+                     "hm2AgentPortSecurityStaticCount": "0",
+                     "hm2AgentPortSecurityStaticIpCount": "0",
+                     "hm2AgentPortSecurityLastDiscardedMAC": "",
+                     "hm2AgentPortSecurityStaticMACs": "",
+                     "hm2AgentPortSecurityStaticIPs": ""},
+                ],
+            }},
+            {"1": "1/1", "2": "1/2"},
+        ))
+        result = self.backend.get_port_security(interface='1/2')
+        self.assertEqual(list(result['ports'].keys()), ['1/2'])
+
+    def test_set_port_security_global(self):
+        """set_port_security(enabled=True) sets global mode."""
+        self.backend.client.set = Mock()
+        self.backend.set_port_security(enabled=True, mode='ip-based')
+        self.backend.client.set.assert_called_once()
+        args = self.backend.client.set.call_args
+        self.assertIn("hm2AgentGlobalPortSecurityMode",
+                       args[0][2])
+        self.assertEqual(args[0][2]["hm2AgentGlobalPortSecurityMode"], "1")
+
+    def test_set_port_security_per_port(self):
+        """set_port_security('1/1', dynamic_limit=10) sets per-port."""
+        self.backend._build_ifindex_map = Mock(return_value={"1": "1/1"})
+        self.backend.client.set_multi = Mock()
+        self.backend.set_port_security('1/1', dynamic_limit=10)
+        self.backend.client.set_multi.assert_called_once()
+
+    def test_set_port_security_invalid_mode(self):
+        with self.assertRaises(ValueError):
+            self.backend.set_port_security(mode='invalid')
+
+    def test_add_port_security_mac(self):
+        """add_port_security encodes DisplayString for MOPS."""
+        self.backend._build_ifindex_map = Mock(return_value={"1": "1/1"})
+        self.backend.client.set_indexed = Mock()
+        self.backend.add_port_security('1/1', vlan=1,
+                                        mac='aa:bb:cc:dd:ee:ff')
+        self.backend.client.set_indexed.assert_called_once()
+        vals = self.backend.client.set_indexed.call_args[1]['values']
+        self.assertIn("hm2AgentPortSecurityMACAddressAdd", vals)
+        # Should be hex-encoded "1 aa:bb:cc:dd:ee:ff"
+        hex_val = vals["hm2AgentPortSecurityMACAddressAdd"]
+        self.assertIn('31', hex_val)  # '1' = 0x31
+
+    def test_delete_port_security_mac(self):
+        self.backend._build_ifindex_map = Mock(return_value={"1": "1/1"})
+        self.backend.client.set_indexed = Mock()
+        self.backend.delete_port_security('1/1', vlan=1,
+                                           mac='aa:bb:cc:dd:ee:ff')
+        vals = self.backend.client.set_indexed.call_args[1]['values']
+        self.assertIn("hm2AgentPortSecurityMACAddressRemove", vals)
+
+    def test_add_port_security_no_mac_or_ip(self):
+        """add_port_security with no mac/ip/entries raises ValueError."""
+        self.backend._build_ifindex_map = Mock(return_value={"1": "1/1"})
+        with self.assertRaises(ValueError):
+            self.backend.add_port_security('1/1', vlan=1)
+
+    def test_add_port_security_bulk(self):
+        """Bulk add sends one call per entry."""
+        self.backend._build_ifindex_map = Mock(return_value={"1": "1/1"})
+        self.backend.client.set_indexed = Mock()
+        self.backend.add_port_security('1/1', 1, entries=[
+            {'vlan': 1, 'mac': 'aa:bb:cc:dd:ee:ff'},
+            {'vlan': 2, 'mac': '11:22:33:44:55:66'},
+        ])
+        self.assertEqual(self.backend.client.set_indexed.call_count, 2)
+
+
+class TestMOPSDhcpSnooping(unittest.TestCase):
+    """Tests for get_dhcp_snooping / set_dhcp_snooping."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS.__new__(MOPSHIOS)
+        self.backend.client = Mock()
+        self.backend._staging = False
+        self.backend._mutations = []
+
+    def test_get_dhcp_snooping_all(self):
+        """get_dhcp_snooping() returns global + vlans + ports."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentDhcpSnoopingConfigGroup": [{
+                    "hm2AgentDhcpSnoopingAdminMode": "1",
+                    "hm2AgentDhcpSnoopingVerifyMac": "2",
+                }],
+                "hm2AgentDhcpSnoopingIfConfigEntry": [{
+                    "ifIndex": "1",
+                    "hm2AgentDhcpSnoopingIfTrustEnable": "1",
+                    "hm2AgentDhcpSnoopingIfLogEnable": "2",
+                    "hm2AgentDhcpSnoopingIfRateLimit": "15",
+                    "hm2AgentDhcpSnoopingIfBurstInterval": "1",
+                    "hm2AgentDhcpSnoopingIfAutoDisable": "1",
+                }, {
+                    "ifIndex": "2",
+                    "hm2AgentDhcpSnoopingIfTrustEnable": "2",
+                    "hm2AgentDhcpSnoopingIfLogEnable": "1",
+                    "hm2AgentDhcpSnoopingIfRateLimit": "-1",
+                    "hm2AgentDhcpSnoopingIfBurstInterval": "5",
+                    "hm2AgentDhcpSnoopingIfAutoDisable": "2",
+                }],
+            }},
+            {"1": "1/1", "2": "1/2"},
+        ))
+        self.backend.client.get = Mock(return_value=[
+            {"hm2AgentDhcpSnoopingVlanIndex": "1",
+             "hm2AgentDhcpSnoopingVlanEnable": "1"},
+            {"hm2AgentDhcpSnoopingVlanIndex": "100",
+             "hm2AgentDhcpSnoopingVlanEnable": "2"},
+        ])
+
+        result = self.backend.get_dhcp_snooping()
+        self.assertTrue(result['enabled'])
+        self.assertFalse(result['verify_mac'])
+        self.assertEqual(len(result['vlans']), 2)
+        self.assertTrue(result['vlans'][1]['enabled'])
+        self.assertFalse(result['vlans'][100]['enabled'])
+        self.assertEqual(len(result['ports']), 2)
+        p1 = result['ports']['1/1']
+        self.assertTrue(p1['trusted'])
+        self.assertFalse(p1['log'])
+        self.assertEqual(p1['rate_limit'], 15)
+        self.assertEqual(p1['burst_interval'], 1)
+        self.assertTrue(p1['auto_disable'])
+        p2 = result['ports']['1/2']
+        self.assertFalse(p2['trusted'])
+        self.assertTrue(p2['log'])
+        self.assertEqual(p2['rate_limit'], -1)
+        self.assertFalse(p2['auto_disable'])
+
+    def test_get_dhcp_snooping_single_interface(self):
+        """get_dhcp_snooping('1/1') filters to one port."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentDhcpSnoopingConfigGroup": [{
+                    "hm2AgentDhcpSnoopingAdminMode": "2",
+                    "hm2AgentDhcpSnoopingVerifyMac": "2",
+                }],
+                "hm2AgentDhcpSnoopingIfConfigEntry": [{
+                    "ifIndex": "1",
+                    "hm2AgentDhcpSnoopingIfTrustEnable": "1",
+                    "hm2AgentDhcpSnoopingIfLogEnable": "2",
+                    "hm2AgentDhcpSnoopingIfRateLimit": "-1",
+                    "hm2AgentDhcpSnoopingIfBurstInterval": "1",
+                    "hm2AgentDhcpSnoopingIfAutoDisable": "1",
+                }, {
+                    "ifIndex": "2",
+                    "hm2AgentDhcpSnoopingIfTrustEnable": "2",
+                }],
+            }},
+            {"1": "1/1", "2": "1/2"},
+        ))
+        self.backend.client.get = Mock(return_value=[])
+
+        result = self.backend.get_dhcp_snooping('1/1')
+        self.assertEqual(len(result['ports']), 1)
+        self.assertIn('1/1', result['ports'])
+
+    def test_get_dhcp_snooping_skips_cpu_vlan(self):
+        """CPU and VLAN interfaces are excluded."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentDhcpSnoopingConfigGroup": [{
+                    "hm2AgentDhcpSnoopingAdminMode": "2",
+                }],
+                "hm2AgentDhcpSnoopingIfConfigEntry": [{
+                    "ifIndex": "100",
+                    "hm2AgentDhcpSnoopingIfTrustEnable": "2",
+                }, {
+                    "ifIndex": "200",
+                    "hm2AgentDhcpSnoopingIfTrustEnable": "2",
+                }],
+            }},
+            {"100": "cpu0", "200": "vlan1"},
+        ))
+        self.backend.client.get = Mock(return_value=[])
+
+        result = self.backend.get_dhcp_snooping()
+        self.assertEqual(len(result['ports']), 0)
+
+    def test_get_dhcp_snooping_empty_vlans(self):
+        """No VLAN entries returns empty dict."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentDhcpSnoopingConfigGroup": [{}],
+                "hm2AgentDhcpSnoopingIfConfigEntry": [],
+            }},
+            {},
+        ))
+        self.backend.client.get = Mock(return_value=None)
+
+        result = self.backend.get_dhcp_snooping()
+        self.assertFalse(result['enabled'])
+        self.assertFalse(result['verify_mac'])
+        self.assertEqual(result['vlans'], {})
+        self.assertEqual(result['ports'], {})
+
+    def test_set_dhcp_snooping_global(self):
+        """set_dhcp_snooping(enabled=True) sets global admin mode."""
+        self.backend._apply_set = Mock()
+        self.backend.set_dhcp_snooping(enabled=True)
+        self.backend._apply_set.assert_called_once()
+        args = self.backend._apply_set.call_args
+        self.assertEqual(args[0][0], "HM2-PLATFORM-SWITCHING-MIB")
+        attrs = args[0][2]
+        self.assertEqual(attrs["hm2AgentDhcpSnoopingAdminMode"], "1")
+
+    def test_set_dhcp_snooping_verify_mac(self):
+        """set_dhcp_snooping(verify_mac=False) disables MAC verify."""
+        self.backend._apply_set = Mock()
+        self.backend.set_dhcp_snooping(verify_mac=False)
+        attrs = self.backend._apply_set.call_args[0][2]
+        self.assertEqual(attrs["hm2AgentDhcpSnoopingVerifyMac"], "2")
+
+    def test_set_dhcp_snooping_vlan(self):
+        """set_dhcp_snooping(vlan=1, vlan_enabled=True) enables on VLAN."""
+        self.backend._apply_set_indexed = Mock()
+        self.backend.set_dhcp_snooping(vlan=1, vlan_enabled=True)
+        self.backend._apply_set_indexed.assert_called_once()
+        args = self.backend._apply_set_indexed.call_args
+        self.assertEqual(
+            args[1]['index']['hm2AgentDhcpSnoopingVlanIndex'], '1')
+        self.assertEqual(
+            args[1]['values']['hm2AgentDhcpSnoopingVlanEnable'], '1')
+
+    def test_set_dhcp_snooping_port(self):
+        """set_dhcp_snooping('1/1', trusted=True) sets trust on port."""
+        self.backend._build_ifindex_map = Mock(return_value={"1": "1/1"})
+        self.backend._apply_set_indexed = Mock()
+        self.backend.set_dhcp_snooping('1/1', trusted=True, log=False,
+                                       rate_limit=15, burst_interval=1,
+                                       auto_disable=True)
+        self.backend._apply_set_indexed.assert_called_once()
+        args = self.backend._apply_set_indexed.call_args
+        vals = args[1]['values']
+        self.assertEqual(vals["hm2AgentDhcpSnoopingIfTrustEnable"], "1")
+        self.assertEqual(vals["hm2AgentDhcpSnoopingIfLogEnable"], "2")
+        self.assertEqual(vals["hm2AgentDhcpSnoopingIfRateLimit"], "15")
+        self.assertEqual(vals["hm2AgentDhcpSnoopingIfBurstInterval"], "1")
+        self.assertEqual(vals["hm2AgentDhcpSnoopingIfAutoDisable"], "1")
+
+    def test_set_dhcp_snooping_multi_port(self):
+        """set_dhcp_snooping(['1/1', '1/2'], trusted=True) sets both."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1", "2": "1/2"})
+        self.backend._apply_set_indexed = Mock()
+        self.backend.set_dhcp_snooping(['1/1', '1/2'], trusted=True)
+        self.assertEqual(self.backend._apply_set_indexed.call_count, 2)
+
+    def test_set_dhcp_snooping_multi_vlan(self):
+        """set_dhcp_snooping(vlan=[1, 100], vlan_enabled=True)."""
+        self.backend._apply_set_indexed = Mock()
+        self.backend.set_dhcp_snooping(vlan=[1, 100], vlan_enabled=True)
+        self.assertEqual(self.backend._apply_set_indexed.call_count, 2)
+
+    def test_set_dhcp_snooping_unknown_interface(self):
+        """set_dhcp_snooping('9/9', ...) raises ValueError."""
+        self.backend._build_ifindex_map = Mock(return_value={"1": "1/1"})
+        with self.assertRaises(ValueError):
+            self.backend.set_dhcp_snooping('9/9', trusted=True)
+
+
+class TestMOPSArpInspection(unittest.TestCase):
+    """Tests for get_arp_inspection / set_arp_inspection."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS.__new__(MOPSHIOS)
+        self.backend.client = Mock()
+        self.backend._staging = False
+        self.backend._mutations = []
+
+    def test_get_arp_inspection_all(self):
+        """get_arp_inspection() returns globals + vlans + ports."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentDaiConfigGroup": [{
+                    "hm2AgentDaiSrcMacValidate": "1",
+                    "hm2AgentDaiDstMacValidate": "2",
+                    "hm2AgentDaiIPValidate": "1",
+                }],
+                "hm2AgentDaiIfConfigEntry": [{
+                    "ifIndex": "1",
+                    "hm2AgentDaiIfTrustEnable": "1",
+                    "hm2AgentDaiIfRateLimit": "15",
+                    "hm2AgentDaiIfBurstInterval": "1",
+                    "hm2AgentDaiIfAutoDisable": "1",
+                }, {
+                    "ifIndex": "2",
+                    "hm2AgentDaiIfTrustEnable": "2",
+                    "hm2AgentDaiIfRateLimit": "-1",
+                    "hm2AgentDaiIfBurstInterval": "5",
+                    "hm2AgentDaiIfAutoDisable": "2",
+                }],
+            }},
+            {"1": "1/1", "2": "1/2"},
+        ))
+        self.backend.client.get = Mock(return_value=[
+            {"hm2AgentDaiVlanIndex": "1",
+             "hm2AgentDaiVlanDynArpInspEnable": "1",
+             "hm2AgentDaiVlanLoggingEnable": "2",
+             "hm2AgentDaiVlanArpAclName": "",
+             "hm2AgentDaiVlanArpAclStaticFlag": "2",
+             "hm2AgentDaiVlanBindingCheckEnable": "1"},
+            {"hm2AgentDaiVlanIndex": "100",
+             "hm2AgentDaiVlanDynArpInspEnable": "2",
+             "hm2AgentDaiVlanLoggingEnable": "1",
+             "hm2AgentDaiVlanArpAclName": "",
+             "hm2AgentDaiVlanArpAclStaticFlag": "2",
+             "hm2AgentDaiVlanBindingCheckEnable": "2"},
+        ])
+
+        result = self.backend.get_arp_inspection()
+        self.assertTrue(result['validate_src_mac'])
+        self.assertFalse(result['validate_dst_mac'])
+        self.assertTrue(result['validate_ip'])
+        self.assertEqual(len(result['vlans']), 2)
+        self.assertTrue(result['vlans'][1]['enabled'])
+        self.assertTrue(result['vlans'][1]['binding_check'])
+        self.assertFalse(result['vlans'][100]['enabled'])
+        self.assertTrue(result['vlans'][100]['log'])
+        self.assertEqual(len(result['ports']), 2)
+        p1 = result['ports']['1/1']
+        self.assertTrue(p1['trusted'])
+        self.assertEqual(p1['rate_limit'], 15)
+        self.assertTrue(p1['auto_disable'])
+        p2 = result['ports']['1/2']
+        self.assertFalse(p2['trusted'])
+        self.assertEqual(p2['rate_limit'], -1)
+        self.assertFalse(p2['auto_disable'])
+
+    def test_get_arp_inspection_single_interface(self):
+        """get_arp_inspection('1/1') filters to one port."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentDaiConfigGroup": [{}],
+                "hm2AgentDaiIfConfigEntry": [{
+                    "ifIndex": "1",
+                    "hm2AgentDaiIfTrustEnable": "1",
+                }, {
+                    "ifIndex": "2",
+                    "hm2AgentDaiIfTrustEnable": "2",
+                }],
+            }},
+            {"1": "1/1", "2": "1/2"},
+        ))
+        self.backend.client.get = Mock(return_value=[])
+
+        result = self.backend.get_arp_inspection('1/1')
+        self.assertEqual(len(result['ports']), 1)
+        self.assertIn('1/1', result['ports'])
+
+    def test_get_arp_inspection_skips_cpu(self):
+        """CPU/VLAN interfaces excluded."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentDaiConfigGroup": [{}],
+                "hm2AgentDaiIfConfigEntry": [{
+                    "ifIndex": "100",
+                    "hm2AgentDaiIfTrustEnable": "2",
+                }],
+            }},
+            {"100": "cpu0"},
+        ))
+        self.backend.client.get = Mock(return_value=[])
+
+        result = self.backend.get_arp_inspection()
+        self.assertEqual(len(result['ports']), 0)
+
+    def test_set_arp_inspection_global(self):
+        """set_arp_inspection(validate_src_mac=True) sets global flag."""
+        self.backend._apply_set = Mock()
+        self.backend.set_arp_inspection(validate_src_mac=True,
+                                        validate_ip=False)
+        self.backend._apply_set.assert_called_once()
+        attrs = self.backend._apply_set.call_args[0][2]
+        self.assertEqual(attrs["hm2AgentDaiSrcMacValidate"], "1")
+        self.assertEqual(attrs["hm2AgentDaiIPValidate"], "2")
+
+    def test_set_arp_inspection_vlan(self):
+        """set_arp_inspection(vlan=1, vlan_enabled=True)."""
+        self.backend._apply_set_indexed = Mock()
+        self.backend.set_arp_inspection(vlan=1, vlan_enabled=True,
+                                        vlan_log=True)
+        self.backend._apply_set_indexed.assert_called_once()
+        args = self.backend._apply_set_indexed.call_args
+        vals = args[1]['values']
+        self.assertEqual(vals["hm2AgentDaiVlanDynArpInspEnable"], "1")
+        self.assertEqual(vals["hm2AgentDaiVlanLoggingEnable"], "1")
+
+    def test_set_arp_inspection_port(self):
+        """set_arp_inspection('1/1', trusted=True)."""
+        self.backend._build_ifindex_map = Mock(return_value={"1": "1/1"})
+        self.backend._apply_set_indexed = Mock()
+        self.backend.set_arp_inspection('1/1', trusted=True,
+                                        rate_limit=15,
+                                        auto_disable=True)
+        self.backend._apply_set_indexed.assert_called_once()
+        vals = self.backend._apply_set_indexed.call_args[1]['values']
+        self.assertEqual(vals["hm2AgentDaiIfTrustEnable"], "1")
+        self.assertEqual(vals["hm2AgentDaiIfRateLimit"], "15")
+        self.assertEqual(vals["hm2AgentDaiIfAutoDisable"], "1")
+
+    def test_set_arp_inspection_multi_port(self):
+        """set_arp_inspection(['1/1', '1/2'], trusted=True)."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1", "2": "1/2"})
+        self.backend._apply_set_indexed = Mock()
+        self.backend.set_arp_inspection(['1/1', '1/2'], trusted=True)
+        self.assertEqual(self.backend._apply_set_indexed.call_count, 2)
+
+    def test_set_arp_inspection_unknown_interface(self):
+        """set_arp_inspection('9/9', ...) raises ValueError."""
+        self.backend._build_ifindex_map = Mock(return_value={"1": "1/1"})
+        with self.assertRaises(ValueError):
+            self.backend.set_arp_inspection('9/9', trusted=True)
+
+
+class TestMOPSIpSourceGuard(unittest.TestCase):
+    """Tests for get_ip_source_guard / set_ip_source_guard."""
+
+    def setUp(self):
+        self.backend = MOPSHIOS.__new__(MOPSHIOS)
+        self.backend.client = Mock()
+        self.backend._staging = False
+        self.backend._mutations = []
+
+    def test_get_ip_source_guard_all(self):
+        """get_ip_source_guard() returns ports + bindings."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentIpsgIfConfigEntry": [{
+                    "ifIndex": "1",
+                    "hm2AgentIpsgIfVerifySource": "1",
+                    "hm2AgentIpsgIfPortSecurity": "1",
+                }, {
+                    "ifIndex": "2",
+                    "hm2AgentIpsgIfVerifySource": "2",
+                    "hm2AgentIpsgIfPortSecurity": "2",
+                }],
+            }},
+            {"1": "1/1", "2": "1/2"},
+        ))
+        self.backend.client.get = Mock(side_effect=[[], []])
+
+        result = self.backend.get_ip_source_guard()
+        self.assertEqual(len(result['ports']), 2)
+        self.assertTrue(result['ports']['1/1']['verify_source'])
+        self.assertTrue(result['ports']['1/1']['port_security'])
+        self.assertFalse(result['ports']['1/2']['verify_source'])
+        self.assertFalse(result['ports']['1/2']['port_security'])
+        self.assertEqual(result['static_bindings'], [])
+        self.assertEqual(result['dynamic_bindings'], [])
+
+    def test_get_ip_source_guard_single_interface(self):
+        """get_ip_source_guard('1/1') filters to one port."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentIpsgIfConfigEntry": [{
+                    "ifIndex": "1",
+                    "hm2AgentIpsgIfVerifySource": "1",
+                    "hm2AgentIpsgIfPortSecurity": "2",
+                }, {
+                    "ifIndex": "2",
+                    "hm2AgentIpsgIfVerifySource": "2",
+                    "hm2AgentIpsgIfPortSecurity": "2",
+                }],
+            }},
+            {"1": "1/1", "2": "1/2"},
+        ))
+        self.backend.client.get = Mock(side_effect=[[], []])
+
+        result = self.backend.get_ip_source_guard('1/1')
+        self.assertEqual(len(result['ports']), 1)
+        self.assertIn('1/1', result['ports'])
+
+    def test_get_ip_source_guard_defaults(self):
+        """Missing attributes default to False."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentIpsgIfConfigEntry": [{
+                    "ifIndex": "1",
+                }],
+            }},
+            {"1": "1/1"},
+        ))
+        self.backend.client.get = Mock(side_effect=[[], []])
+
+        result = self.backend.get_ip_source_guard()
+        self.assertFalse(result['ports']['1/1']['verify_source'])
+        self.assertFalse(result['ports']['1/1']['port_security'])
+
+    def test_get_ip_source_guard_skips_cpu(self):
+        """CPU interfaces are excluded."""
+        self.backend._get_with_ifindex = Mock(return_value=(
+            {"HM2-PLATFORM-SWITCHING-MIB": {
+                "hm2AgentIpsgIfConfigEntry": [{
+                    "ifIndex": "100",
+                    "hm2AgentIpsgIfVerifySource": "2",
+                }],
+            }},
+            {"100": "cpu0"},
+        ))
+        self.backend.client.get = Mock(side_effect=[[], []])
+
+        result = self.backend.get_ip_source_guard()
+        self.assertEqual(len(result['ports']), 0)
+
+    def test_set_ip_source_guard_enable(self):
+        """set_ip_source_guard('1/1', verify_source=True)."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1"})
+        self.backend._apply_set_indexed = Mock()
+        self.backend.set_ip_source_guard('1/1', verify_source=True)
+        self.backend._apply_set_indexed.assert_called_once()
+        call_vals = self.backend._apply_set_indexed.call_args[1]['values']
+        self.assertEqual(call_vals['hm2AgentIpsgIfVerifySource'], '1')
+
+    def test_set_ip_source_guard_both(self):
+        """set_ip_source_guard('1/1', verify_source=True, port_security=True)."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1"})
+        self.backend._apply_set_indexed = Mock()
+        self.backend.set_ip_source_guard('1/1', verify_source=True,
+                                         port_security=True)
+        call_vals = self.backend._apply_set_indexed.call_args[1]['values']
+        self.assertEqual(call_vals['hm2AgentIpsgIfVerifySource'], '1')
+        self.assertEqual(call_vals['hm2AgentIpsgIfPortSecurity'], '1')
+
+    def test_set_ip_source_guard_multi(self):
+        """set_ip_source_guard(['1/1', '1/2'], verify_source=True)."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1", "2": "1/2"})
+        self.backend._apply_set_indexed = Mock()
+        self.backend.set_ip_source_guard(['1/1', '1/2'],
+                                         verify_source=True)
+        self.assertEqual(self.backend._apply_set_indexed.call_count, 2)
+
+    def test_set_ip_source_guard_unknown_interface(self):
+        """set_ip_source_guard('9/9', ...) raises ValueError."""
+        self.backend._build_ifindex_map = Mock(
+            return_value={"1": "1/1"})
+        with self.assertRaises(ValueError):
+            self.backend.set_ip_source_guard('9/9', verify_source=True)
+
+    def test_set_ip_source_guard_no_interface(self):
+        """set_ip_source_guard(interface=None) is a no-op."""
+        self.backend._build_ifindex_map = Mock()
+        self.backend.set_ip_source_guard()
+        self.backend._build_ifindex_map.assert_not_called()
 
 
 if __name__ == '__main__':
