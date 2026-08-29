@@ -1,0 +1,5 @@
+# Adapter silo. This package is a NAPALM shim over crude-engine.
+# Nested tools/ from the 1.x tree are not on this branch.
+
+/napalm_hios/ @AdamRickards
+/tests/ @AdamRickards

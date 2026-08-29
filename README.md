@@ -1,122 +1,113 @@
-# NAPALM HiOS Driver
+# napalm-hios
 
-NAPALM driver for Hirschmann HiOS industrial switches by Belden. Four protocols — MOPS, SNMP, SSH, and Offline — with full getter parity and vendor-specific methods for MRP, RSTP, factory lifecycle, and config profiles.
-
-## Features
-
-- **MOPS (MIB Operations over HTTPS)** — default protocol, same mechanism as the HiOS web UI. Atomic multi-table writes in a single POST, HTTP Basic auth, zero pysnmp/net-snmp dependency
-- **SNMPv3 authPriv** (MD5/DES) — works with HiOS factory defaults including short passwords (< 8 chars)
-- **SSH** — CLI parsing via Netmiko, lazy auto-connect when MOPS/SNMP is primary
-- **19 standard getters** on all 3 protocols, plus 2 SSH-only methods (`ping`, `cli`)
-- **HTTPS config download/upload** — `get_config()` on MOPS downloads config XML via HTTPS (no SSH needed), `load_config()` uploads config XML to a profile. MOPS session key auth for HiOS 10.x, Basic auth fallback for 9.x
-- **Remote config management** — `get_config_remote()` / `set_config_remote()` for TFTP push/pull and auto-backup config across MOPS, SNMP, and SSH
-- **Atomic config staging** — `load_merge_candidate` → `compare_config` → `commit_config` (MOPS: single POST; SSH: CLI commands)
-- **RSTP/STP** — full global and per-port get/set: mode, priority, timers, guards, edge ports, path cost
-- **MRP ring redundancy** — configure manager/client roles, ring ports, recovery delay, domain management
-- **Factory lifecycle** — detect and onboard factory-fresh HiOS 10.3+ devices, clear to defaults or full factory reset
-- **Config profiles** — list, activate, delete NVM/ENVM config profiles with fingerprint tracking
-- **HiDiscovery** — read/set discovery protocol mode (on/off/read-only) with blinking control
-- **VLAN Ingress/Egress** — per-port ingress settings (PVID, frame types, filtering), per-VLAN egress membership (T/U/F), VLAN CRUD
-- **Auto-Disable** — per-port timer/status monitoring, reason control, port reset
-- **Loop Protection** — heartbeat-based loop detection with per-port and global config
-- **sFlow** — receiver configuration + per-port flow sampling and counter polling (RFC 3176)
-- **Storm Control** — per-port broadcast/multicast/unicast ingress rate limiting with pps/percent thresholds
-- **QoS** — per-port trust mode, queue scheduling (strict/weighted), shaping, global dot1p/DSCP→TC mapping, management priority
-- **Offline protocol** — read/write HiOS config export XML files through the same driver API. A config XML file IS a device: `driver(hostname='config.xml', optional_args={'protocol_preference': ['offline']})`. All config getters/setters work, `save_config()` writes back to disk
-- **Multi-interface setters** — pass a list of ports to `set_interface`, `set_rstp_port`, `set_auto_disable`, `reset_auto_disable`, `set_loop_protection`, `set_vlan_ingress`, `set_vlan_egress` for batched operations
-- **MOPS atomic staging** — `start_staging()` → multiple setter calls → `commit_staging()` batches all mutations into one atomic POST (e.g. change PVID + egress together so a port never loses comms)
-- **Extended LLDP** — 802.1/802.3 org-specific TLVs, multiple management addresses, autoneg, VLAN membership
-- 714 unit tests and live device validation on BRS50 and GRS1042
+**This is the `v2` branch.** Thin NAPALM shim over [crude-engine](https://github.com/AdamRickards/crude-engine). It is not a GitHub Release and is not on PyPI. `main` stays at 1.17 (`v1.17.0`).
 
 ## Installation
 
-```
-pip install napalm-hios
+Do not `pip install napalm-hios` from PyPI while working from this branch. That is 1.17 and will shadow the shim.
+
+```bash
+pip install -e /path/to/crude-engine
+pip install napalm
+pip install -e . --no-deps
 ```
 
-## Quick Start
+`--no-deps` is required because `setup.py` asks for `crude-engine>=2.9.0`, which is not on PyPI yet. Install the engine from source first.
+
+## Usage
 
 ```python
 from napalm import get_network_driver
 
-driver = get_network_driver('hios')
-
-# Default: MOPS (HTTPS, atomic writes, no SNMP dependency)
-device = driver('192.168.1.4', 'admin', 'private')
-
-# Or force a specific protocol:
-# device = driver('192.168.1.4', 'admin', 'private',
-#                 optional_args={'protocol_preference': ['snmp']})
-
+driver = get_network_driver("hios")
+device = driver("192.168.1.4", "admin", "private")
 device.open()
-print(device.get_facts())
-print(device.get_interfaces())
+
+# NAPALM standard — reshaped to NAPALM spec
+facts = device.get_facts()
+interfaces = device.get_interfaces()      # keys: is_up, is_enabled, etc.
+
+# Vendor-specific — canonical engine output, no reshaping
+dns = device.get_dns()
+device.set_dns(enabled=True, domain_name="example.com")
+mrp = device.get_mrp()
+
+# Bypass NAPALM reshaping — get canonical output directly
+interfaces = device.get_interfaces(napalm_compat=False)  # keys: oper_status, admin_status, etc.
+
 device.close()
 ```
 
-## Documentation
+## How It Works
 
-| Document | Contents |
-|----------|----------|
-| [docs/usage.md](docs/usage.md) | Standard NAPALM methods — arguments, return values, examples |
-| [docs/vendor_specific.md](docs/vendor_specific.md) | Vendor methods — MRP, RSTP, HiDiscovery, factory reset, onboarding, profiles, extended LLDP |
-| [docs/protocols.md](docs/protocols.md) | Protocol details — MOPS/SNMP/SSH config, known cross-protocol differences, method availability matrix |
+```
+User calls device.get_interfaces()
+  → hios.py routes to crude-engine
+    → engine returns canonical output:
+        {"1/1": {"oper_status": "up", "admin_status": "enabled", "alias": "", ...}}
+  → hios.py reshapes for NAPALM (napalm_compat=True):
+        {"1/1": {"is_up": True, "is_enabled": True, "description": "", "last_flapped": -1.0, ...}}
+  → returns to caller
+```
 
-## Supported Methods
+For the 60 vendor-specific methods, no reshaping occurs — canonical output IS the output. The `napalm_compat` flag only affects the 18 NAPALM standard getters, and only those that need reshaping (most are already canonical).
 
-### Standard NAPALM getters (MOPS + SNMP + SSH)
+## Method Coverage
 
-`get_facts` | `get_interfaces` | `get_interfaces_ip` | `get_interfaces_counters` | `get_lldp_neighbors` | `get_lldp_neighbors_detail` | `get_mac_address_table` | `get_arp_table` | `get_ntp_servers` | `get_ntp_stats` | `get_users` | `get_optics` | `get_environment` | `get_snmp_information` | `get_vlans`
+### NAPALM Standard (18 getters)
 
-### Config download/upload (MOPS + SSH)
+All 18 NAPALM standard getters are supported. Methods that need reshaping are marked:
 
-`get_config` | `load_config`
+| Method | Reshaping | Notes |
+|--------|-----------|-------|
+| `get_facts()` | None | Canonical keys match NAPALM |
+| `get_interfaces()` | Key rename + type | `oper_status`→`is_up`, `admin_status`→`is_enabled`, etc. |
+| `get_interfaces_ip()` | Structure | Flat → nested `{iface: {ipv4: {ip: {prefix_length}}}}` |
+| `get_interfaces_counters()` | None | Canonical keys match NAPALM |
+| `get_lldp_neighbors()` | Key rename | `sys_name`→`hostname`, `port_id`→`port` |
+| `get_lldp_neighbors_detail()` | Key rename | `sys_name`→`remote_hostname`, etc. |
+| `get_mac_address_table()` | Decompose | `status` → `active`/`static` bools + placeholders |
+| `get_arp_table()` | None | Canonical keys match NAPALM |
+| `get_ntp_servers()` | None | Canonical keys match NAPALM |
+| `get_ntp_stats()` | None | Canonical keys match NAPALM |
+| `get_users()` | None | Canonical keys match NAPALM |
+| `get_snmp_information()` | None | Canonical keys match NAPALM |
+| `get_optics()` | Structure | Flat → nested `physical_channels` structure |
+| `get_config()` | None | Canonical keys match NAPALM |
+| `get_environment()` | None | Canonical keys match NAPALM |
+| `get_vlans()` | None | Canonical `ports` U/T/F dict matches NAPALM |
+| `get_route_to()` | None | Canonical keys match NAPALM |
+| `get_ipv6_neighbors_table()` | None | Canonical keys match NAPALM |
 
-### SSH-only (auto-connects SSH when primary is MOPS/SNMP)
+### Inapplicable NAPALM Methods (return `{}`)
 
-`ping` | `cli`
+These NAPALM methods are confirmed inapplicable to HiOS — industrial L2/L3 switches don't run BGP, firewalls, etc.:
 
-### Configuration workflow
+`get_bgp_config`, `get_bgp_neighbors`, `get_bgp_neighbors_detail`, `get_firewall_policies`, `get_network_instances`, `get_ntp_peers`, `get_probes_config`, `get_probes_results`
 
-`load_merge_candidate` → `compare_config` → `commit_config` | `discard_config`
+### Vendor-Specific Methods (166)
 
-### Vendor-specific
+60 read, 64 update, 16 create, 16 delete, 10 execute — all available via dynamic dispatch. No explicit Python definition needed.
 
-**Read:**
-`get_mrp` | `get_mrp_sub_ring` | `get_hidiscovery` | `get_rstp` | `get_rstp_port` | `get_auto_disable` | `get_loop_protection` | `get_sflow` | `get_sflow_port` | `get_storm_control` | `get_qos` | `get_qos_mapping` | `get_management_priority` | `get_management` | `get_vlan_ingress` | `get_vlan_egress` | `get_lldp_neighbors_detail_extended` | `get_config_status` | `get_profiles` | `get_config_fingerprint` | `get_config_remote` | `get_watchdog_status` | `get_login_policy` | `get_syslog` | `get_ntp` | `get_services` | `get_snmp_config` | `get_signal_contact` | `get_device_monitor` | `get_devsec_status` | `get_banner` | `get_session_config` | `get_ip_restrict` | `get_dns` | `get_poe` | `get_remote_auth` | `get_users` | `get_port_security` | `get_dhcp_snooping` | `get_arp_inspection` | `get_ip_source_guard` | `is_factory_default`
+```python
+device.get_capabilities()    # discover all available methods
+```
 
-**Write:**
-`set_interface` | `set_mrp` | `delete_mrp` | `set_mrp_sub_ring` | `delete_mrp_sub_ring` | `set_hidiscovery` | `set_rstp` | `set_rstp_port` | `set_auto_disable` | `reset_auto_disable` | `set_auto_disable_reason` | `set_loop_protection` | `set_sflow` | `set_sflow_port` | `set_storm_control` | `set_qos` | `set_qos_mapping` | `set_management_priority` | `set_management` | `set_vlan_ingress` | `set_vlan_egress` | `create_vlan` | `update_vlan` | `delete_vlan` | `set_snmp_information` | `set_config_remote` | `start_watchdog` | `stop_watchdog` | `set_login_policy` | `set_syslog` | `set_ntp` | `set_services` | `set_snmp_config` | `set_signal_contact` | `set_device_monitor` | `set_devsec_status` | `set_banner` | `set_session_config` | `set_ip_restrict` | `add_ip_restrict_rule` | `delete_ip_restrict_rule` | `set_dns` | `add_dns_server` | `delete_dns_server` | `set_poe` | `set_user` | `delete_user` | `add_snmp_trap_dest` | `delete_snmp_trap_dest` | `set_port_security` | `add_port_security` | `delete_port_security` | `set_dhcp_snooping` | `set_arp_inspection` | `set_ip_source_guard` | `save_config` | `clear_config` | `clear_factory` | `activate_profile` | `delete_profile` | `onboard` | `start_staging` | `commit_staging` | `discard_staging` | `get_staged_mutations`
-
-See [docs/vendor_specific.md](docs/vendor_specific.md) for arguments, return values, and protocol behaviour.
+For the full method list see crude-engine's [METHOD_REFERENCE.md](https://github.com/AdamRickards/crude-engine/blob/main/docs/METHOD_REFERENCE.md). For per-attribute wire sources see [API_REFERENCE.md](https://github.com/AdamRickards/crude-engine/blob/main/docs/API_REFERENCE.md).
 
 ## Protocol Support
 
-Default order: MOPS → SNMP → SSH. Override with `protocol_preference` in `optional_args`.
+Inherited from crude-engine. Default order: MOPS > SNMP > SSH.
 
-| Protocol | Transport | Auth | Atomic Write | Dependencies |
-|----------|-----------|------|--------------|-------------|
-| **MOPS** | HTTPS 443 | HTTP Basic | Yes (single POST) | `requests` |
-| **SNMP** | UDP 161 | SNMPv3 authPriv (MD5/DES) | No | `pysnmp` |
-| **SSH** | TCP 22 | Password | No | `netmiko` |
-| **Offline** | XML file | None | N/A (file) | None |
+```python
+# Force a specific protocol
+device = driver("192.168.1.4", "admin", "private",
+                optional_args={"protocol": "snmp"})
 
-MOPS is the default and preferred protocol. SSH lazy-connects on demand for SSH-only methods. Offline reads/writes HiOS config export XML files — all config getters/setters work, online-only methods return empty. See [docs/protocols.md](docs/protocols.md) for configuration, known cross-protocol differences, and the full method availability matrix.
-
-## Testing
-
-```bash
-# Unit tests (714)
-pytest tests/unit/ -v
-
-# Live device test
-python examples/test_all_commands.py <hostname> <user> <password>
+# Offline mode (config XML file as device)
+device = driver("config.xml", "", "")
 ```
-
-## Contributing
-
-Issues and PRs welcome at [GitHub](https://github.com/AdamRickards/napalm-hios). Driver tested against BRS50 and GRS1042 hardware. If you have a HiOS device and find a bug, include firmware version and the getter output.
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache License 2.0

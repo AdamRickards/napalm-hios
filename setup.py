@@ -1,25 +1,16 @@
 from setuptools import setup, find_packages
-from pathlib import Path
-
-# Read the contents of README.md
-this_directory = Path(__file__).parent
-long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="napalm-hios",
-    version="1.17.0",
+    version="2.0.0",
     packages=find_packages(),
     description="NAPALM driver for HiOS network switches by Belden",
-    long_description=long_description,
-    long_description_content_type="text/markdown",
     author="Adam Rickards",
     author_email="adam_rickards@hotmail.com",
     url="https://github.com/AdamRickards/napalm-hios",
     install_requires=[
+        "crude-engine>=2.9.0",
         "napalm>=3.0.0",
-        "ncclient>=0.6.9",
-        "netmiko>=3.3.0",
-        "pysnmp>=4.4.12"
     ],
     entry_points={
         'napalm_drivers': [

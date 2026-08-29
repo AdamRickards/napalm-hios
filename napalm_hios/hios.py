@@ -1,1289 +1,728 @@
-from napalm.base.base import NetworkDriver
-from napalm.base.exceptions import ConnectionException, MergeConfigException, CommitError
+"""
+hios.py — NAPALM adapter for Hirschmann HiOS.
 
-from napalm_hios.netconf_hios import NetconfHIOS
-from napalm_hios.ssh_hios import SSHHIOS
-from napalm_hios.snmp_hios import SNMPHIOS
-from napalm_hios.mops_hios import MOPSHIOS
-from napalm_hios.offline_hios import OfflineHIOS
-from napalm_hios.mock_hios_device import MockHIOSDevice
-from napalm_hios.utils import log_error
+Layer: Adapter. Thin shim between NAPALM interface and the engine.
+Owns: method names, output shaping, connection management, execute dispatch.
+Cannot: know about OIDs, MIB names, wire encoding, or protocol details.
+Replace NAPALM? Replace this file. Everything else stays.
+"""
 
+import re
 import logging
-import time
+import asyncio
+from typing import Dict, List, Any, Optional
+
+from napalm.base.base import NetworkDriver
+from napalm.base.exceptions import ConnectionException
+
+from crude_engine.engine.interpreter import FeatureEngine
+from crude_engine.engine.crude import resolve as transform_resolve
+from crude_engine.transport_registry import (
+    get_transport_class as _get_transport_class,
+    get_engine_protocol as _get_engine_protocol,
+    get_connect_port as _get_connect_port,
+    PROTOCOLS as _PROTOCOLS,
+    DEFAULT_PREFERENCE as _DEFAULT_PREFERENCE,
+)
+import ipaddress
 
 logger = logging.getLogger(__name__)
 
+
 class HIOSDriver(NetworkDriver):
-    """
-    NAPALM driver implementation for HIOS devices.
-    Supports multiple protocols: NETCONF, SSH, and SNMPv3.
-    
-    This driver implements the NAPALM base interface and provides
-    connectivity to HIOS devices using various protocols based on availability
-    and user preference.
-    """
+    """NAPALM driver for Hirschmann HiOS (v2.0 YAML-driven)."""
 
     def __init__(self, hostname, username, password, timeout=60, optional_args=None):
-        """
-        Initialize the HIOS driver.
-        
-        Args:
-            hostname (str): Device hostname or IP address
-            username (str): Authentication username
-            password (str): Authentication password
-            timeout (int): Connection timeout in seconds (default: 60)
-            optional_args (dict): Additional arguments for configuration
-                                Can include protocol_preference, ports, etc.
-        """
         self.hostname = hostname
         self.username = username
         self.password = password
         self.timeout = timeout
         self.optional_args = optional_args or {}
-        
-        # Initialize connection handlers for different protocols
-        self.netconf = None
-        self.ssh = None
-        self.snmp = None
-        self.mops = None
-        self.offline = None
-        self.mock_device = None
+
+        self.engine = FeatureEngine()
+
+        # Transport instances — keyed by protocol name, populated by _try_connect
+        self._transports = {}
         self._is_alive = False
         self.active_protocol = None
-
-        # Candidate config state (in-memory staging)
         self._merge_candidate = ''
-        self._loaded = False
-        self._changed = False
+
+        # Protocol selection: explicit > auto-detect > default
+        protocol = self.optional_args.get('protocol')
+        if protocol:
+            if protocol not in _PROTOCOLS:
+                raise ValueError(
+                    f"Unknown protocol '{protocol}'. "
+                    f"Valid: {list(_PROTOCOLS.keys())}")
+            self.protocol_preference = [protocol]
+        elif hostname.endswith('.xml'):
+            self.protocol_preference = ['offline']
+        else:
+            self.protocol_preference = self.optional_args.get(
+                'protocol_preference', list(_DEFAULT_PREFERENCE)
+            )
+
+    # ------------------------------------------------------------------
+    # Connection management
+    # ------------------------------------------------------------------
 
     def open(self):
-        """
-        Open a connection to the device using the preferred protocol.
-        
-        If hostname is 'localhost', uses a mock device for testing.
-        Otherwise attempts to connect using protocols in the order specified
-        in protocol_preference (defaults to ['snmp', 'ssh', 'netconf']).
-        
-        Raises:
-            ConnectionException: If unable to connect using any protocol
-        """
-        try:
-            if self.hostname == 'localhost':
-                self.mock_device = MockHIOSDevice(self.optional_args)
-                self.mock_device.open()
+        if self.active_protocol:
+            return
+        for protocol in self.protocol_preference:
+            if self._try_connect(protocol):
+                self.active_protocol = protocol
                 self._is_alive = True
-                self.active_protocol = 'ssh'  # Assume SSH for mock device
-                logger.info("Using mock HiOS device")
+                self.engine.build_context(
+                    self._engine_protocol(), self._transport(),
+                    fetch_device_info=self._fetch_device_info)
+                logger.info("Connected to %s via %s", self.hostname, protocol)
                 return
-
-            # Get protocol preference from optional args or use default
-            protocol_preference = self.optional_args.get('protocol_preference', ['mops', 'snmp', 'ssh'])
-            
-            # Try each protocol in order of preference
-            for protocol in protocol_preference:
-                if self._try_connect(protocol):
-                    self.active_protocol = protocol
-                    self._is_alive = True
-                    logger.info(f"Connected to {self.hostname} using {protocol.upper()}")
-                    return
-
-            raise ConnectionException(f"Failed to connect to {self.hostname} using any available protocol")
-
-        except Exception as e:
-            log_error(logger, f"Error opening connection: {str(e)}")
-            raise ConnectionException(f"Cannot connect to {self.hostname}")
+        raise ConnectionException(
+            f"Failed to connect to {self.hostname} via {self.protocol_preference}"
+        )
 
     def _try_connect(self, protocol):
-        """
-        Attempt to connect using a specific protocol.
-        
-        Args:
-            protocol (str): Protocol to try ('netconf', 'ssh', or 'snmp')
-            
-        Returns:
-            bool: True if connection successful, False otherwise
-        """
         try:
-            if protocol == 'netconf':
-                # Try NETCONF connection
-                netconf_port = self.optional_args.get('netconf_port', 830)
-                self.netconf = NetconfHIOS(self.hostname, self.username, self.password, self.timeout, port=netconf_port)
-                self.netconf.open()
-                return True
-            elif protocol == 'ssh':
-                # Try SSH connection
-                ssh_port = self.optional_args.get('ssh_port', 22)
-                self.ssh = SSHHIOS(self.hostname, self.username, self.password, self.timeout, port=ssh_port)
-                self.ssh.open()
-                return True
-            elif protocol == 'snmp':
-                # Try SNMPv3 connection
-                snmp_port = self.optional_args.get('snmp_port', 161)
-                self.snmp = SNMPHIOS(self.hostname, self.username, self.password, self.timeout, port=snmp_port)
-                self.snmp.open()
-                return True
-            elif protocol == 'mops':
-                # Try MOPS (HTTPS/XML) connection
-                mops_port = self.optional_args.get('mops_port', 443)
-                self.mops = MOPSHIOS(self.hostname, self.username, self.password, self.timeout, port=mops_port)
-                self.mops.open()
-                return True
-            elif protocol == 'offline':
-                # Offline mode — hostname is a file path
-                self.offline = OfflineHIOS(self.hostname, self.username, self.password, self.timeout)
-                self.offline.open()
-                return True
+            cls = _get_transport_class(protocol)
+            port = _get_connect_port(protocol, self.optional_args)
+            kwargs = {}
+            if port is not None:
+                kwargs['port'] = port
+            transport = cls(self.hostname, self.username, self.password,
+                           self.timeout, **kwargs)
+            transport.open()
+            self._transports[protocol] = transport
+            return True
         except Exception as e:
-            log_error(logger, f"Failed to connect using {protocol}: {str(e)}")
+            logger.debug("Connect via %s failed: %s", protocol, e)
         return False
 
     def close(self):
-        """
-        Close all active connections to the device.
-        Attempts to gracefully close each protocol connection that was established.
-        """
-        if self.mock_device:
-            self.mock_device = None
-        else:
-            # Try to close all active connections
-            for conn in [self.netconf, self.ssh, self.snmp, self.mops, self.offline]:
-                if conn:
-                    try:
-                        conn.close()
-                    except Exception as e:
-                        log_error(logger, f"Error closing connection: {str(e)}")
+        for conn in self._transports.values():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._transports.clear()
         self._is_alive = False
         self.active_protocol = None
 
     def is_alive(self):
-        """
-        Check if the connection to the device is still alive.
-        
-        Returns:
-            dict: Contains 'is_alive' key with boolean value
-        """
         return {"is_alive": self._is_alive}
 
-    def _get_active_connection(self):
-        if self.mock_device:
-            return self.mock_device
-        elif self.active_protocol == 'netconf':
-            return self.netconf
-        elif self.active_protocol == 'ssh':
-            return self.ssh
-        elif self.active_protocol == 'snmp':
-            return self.snmp
-        elif self.active_protocol == 'mops':
-            return self.mops
-        elif self.active_protocol == 'offline':
-            return self.offline
-        else:
+    def _fetch_device_info(self):
+        """Lazy device_info: called on first guard evaluation.
+
+        Uses get_facts() through the engine (protocol-agnostic).
+        Extracts guard-relevant fields:
+          swlevel:   L2S, L2A, L3S, L3A (from os_version)
+          swversion: 10.3.04 (from os_version)
+          hwtype:    model name (from model)
+          os:        hios, hisecos (from os_version prefix)
+        Caches facts for reuse.
+        """
+        import re
+        info = {}
+        try:
+            facts = self.get_facts()
+            self._cached_facts = facts
+            descr = facts.get('os_version', '')
+            # Parse "HiOS-2A-10.3.04" or "HiSecOS-3S-07.2.00"
+            m = re.search(r'(HiOS|HiSecOS)-(\d[A-Z])-(\S+)', descr)
+            if m:
+                info['os'] = m.group(1).lower()
+                info['swlevel'] = f'L{m.group(2)}'
+                info['swversion'] = m.group(3)
+            info['hwtype'] = facts.get('model', '')
+        except Exception:
+            pass
+        return info
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _transport(self):
+        t = self._transports.get(self.active_protocol)
+        if t is None:
             raise ConnectionException("No active connection")
+        return t
 
-    def _ensure_ssh(self):
-        """Lazy-connect SSH when active protocol is SNMP but SSH is needed.
+    def _engine_protocol(self):
+        """Map active protocol to engine protocol via registry."""
+        return _get_engine_protocol(self.active_protocol)
 
-        Returns True if SSH is available, False otherwise.
+    def _call(self, method, **kwargs):
+        """Single entry point for all schema method calls."""
+        debug = kwargs.pop('debug', False)
+        if debug:
+            kwargs['trace'] = True
+            logging.getLogger('napalm_hios').setLevel(logging.DEBUG)
+        is_setter = not method.startswith('get_')
+        resolved = self.engine.resolve_intent(method, is_setter=is_setter, **kwargs)
+        return self.engine.execute_resolved(
+            resolved, self._engine_protocol(), self._transport())
+
+    @property
+    def last_trace(self):
+        """Last pipeline trace from the engine (None if tracing was off)."""
+        return self.engine.last_trace
+
+    def __getattr__(self, method_name):
+        """Dynamic method dispatch — schema methods are automatically available.
+
+        Any get_*, set_*, create_*, delete_* method that has a schema or
+        feature YAML becomes callable without explicit Python definition.
         """
-        if self.ssh:
-            return True
-        if self._try_connect('ssh'):
-            logger.info(f"Lazy-connected SSH to {self.hostname} for SSH-only method")
-            return True
-        return False
-
-    def get_facts(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            facts = self._get_active_connection().get_facts()
-            # Ensure all required keys are present
-            required_keys = ['uptime', 'vendor', 'model', 'hostname', 'fqdn', 'os_version', 'serial_number', 'interface_list']
-            for key in required_keys:
-                if key not in facts:
-                    facts[key] = ''
-            return facts
-        raise NotImplementedError("get_facts is not implemented for this protocol")
-    
-    def get_interfaces_counters(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            counters = self._get_active_connection().get_interfaces_counters()
-            required_keys = ['tx_errors', 'rx_errors', 'tx_discards', 'rx_discards', 'tx_octets', 'rx_octets', 'tx_unicast_packets', 'rx_unicast_packets', 'tx_multicast_packets', 'rx_multicast_packets', 'tx_broadcast_packets', 'rx_broadcast_packets']
-            for interface in counters.values():
-                for key in required_keys:
-                    if key not in interface:
-                        interface[key] = 0
-            return counters
-        raise NotImplementedError("get_interfaces_counters is not implemented for this protocol")
-    
-    def get_interfaces_ip(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            interfaces_ip = self._get_active_connection().get_interfaces_ip()
-            for interface in interfaces_ip.values():
-                if 'ipv4' not in interface:
-                    interface['ipv4'] = {}
-                if 'ipv6' not in interface:
-                    interface['ipv6'] = {}
-            return interfaces_ip
-        raise NotImplementedError("get_interfaces_ip is not implemented for this protocol")
-    
-    def get_lldp_neighbors(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            neighbors = self._get_active_connection().get_lldp_neighbors()
-            # Ensure correct format: {local_port: [{'hostname': x, 'port': y}, ...]}
-            for local_port, neighbor_list in neighbors.items():
-                for neighbor in neighbor_list:
-                    if 'hostname' not in neighbor:
-                        neighbor['hostname'] = ''
-                    if 'port' not in neighbor:
-                        neighbor['port'] = ''
-            return neighbors
-        raise NotImplementedError("get_lldp_neighbors is not implemented for this protocol")
-    
-    def get_lldp_neighbors_detail(self, interface=""):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            neighbors_detail = self._get_active_connection().get_lldp_neighbors_detail(interface)
-            required_keys = ['parent_interface', 'remote_port', 'remote_port_description', 'remote_chassis_id', 'remote_system_name', 'remote_system_description', 'remote_system_capab', 'remote_system_enable_capab']
-            for interface_neighbors in neighbors_detail.values():
-                for neighbor in interface_neighbors:
-                    for key in required_keys:
-                        if key not in neighbor:
-                            neighbor[key] = '' if key != 'remote_system_capab' and key != 'remote_system_enable_capab' else []
-            return neighbors_detail
-        raise NotImplementedError("get_lldp_neighbors_detail is not implemented for this protocol")
-    
-    def get_lldp_neighbors_detail_extended(self, interface=""):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            extended_lldp_details = self._get_active_connection().get_lldp_neighbors_detail_extended(interface)
-            required_keys = [
-                'parent_interface', 'remote_port', 'remote_port_description', 'remote_chassis_id',
-                'remote_system_name', 'remote_system_description', 'remote_system_capab',
-                'remote_system_enable_capab', 'remote_management_ipv4', 'remote_management_ipv6',
-                'autoneg_support', 'autoneg_enabled', 'port_oper_mau_type', 'port_vlan_id',
-                'vlan_membership', 'link_agg_status', 'link_agg_port_id'
-            ]
-            
-            for interface_neighbors in extended_lldp_details.values():
-                for neighbor in interface_neighbors:
-                    for key in required_keys:
-                        if key not in neighbor:
-                            if key in ['remote_system_capab', 'remote_system_enable_capab', 'vlan_membership']:
-                                neighbor[key] = []
-                            elif key in ['port_vlan_id', 'link_agg_port_id']:
-                                neighbor[key] = '0'  # Default to '0' for numeric ID fields
-                            else:
-                                neighbor[key] = ''
-            
-            return extended_lldp_details
-        raise NotImplementedError("get_lldp_neighbors_detail_extended is not implemented for this protocol")
-
-    def get_mac_address_table(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            mac_table = self._get_active_connection().get_mac_address_table()
-            required_keys = ['mac', 'interface', 'vlan', 'static', 'active', 'moves', 'last_move']
-            for entry in mac_table:
-                for key in required_keys:
-                    if key not in entry:
-                        entry[key] = '' if key in ['mac', 'interface'] else 0
-            return mac_table
-        raise NotImplementedError("get_mac_address_table is not implemented for this protocol")
-    
-    def get_ntp_servers(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            ntp_servers = self._get_active_connection().get_ntp_servers()
-            if self.active_protocol == 'ssh':
-                return {server: {} for server in ntp_servers}
-            return ntp_servers
-        raise NotImplementedError("get_ntp_servers is not implemented for this protocol")
-    
-    def get_ntp_stats(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            ntp_stats = self._get_active_connection().get_ntp_stats()
-            required_keys = ['remote', 'referenceid', 'synchronized', 'stratum', 'type', 'when', 'hostpoll', 'reachability', 'delay', 'offset', 'jitter']
-            for stat in ntp_stats:
-                for key in required_keys:
-                    if key not in stat:
-                        stat[key] = '' if key in ['remote', 'referenceid', 'type'] else 0
-            return ntp_stats
-        raise NotImplementedError("get_ntp_stats is not implemented for this protocol")
-
-    def get_optics(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            optics = self._get_active_connection().get_optics()
-            required_keys = ['physical_channels']
-            for interface in optics.values():
-                for key in required_keys:
-                    if key not in interface:
-                        interface[key] = {'channel': []}
-            return optics
-        raise NotImplementedError("get_optics is not implemented for this protocol")
-    
-    def get_users(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            users = self._get_active_connection().get_users()
-            required_keys = ['level', 'password', 'sshkeys']
-            for user in users.values():
-                for key in required_keys:
-                    if key not in user:
-                        user[key] = [] if key == 'sshkeys' else ''
-            return users
-        raise NotImplementedError("get_users is not implemented for this protocol")
-    
-    def get_vlans(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            vlans = self._get_active_connection().get_vlans()
-            required_keys = ['name', 'interfaces']
-            for vlan in vlans.values():
-                for key in required_keys:
-                    if key not in vlan:
-                        vlan[key] = [] if key == 'interfaces' else ''
-            return vlans
-        raise NotImplementedError("get_vlans is not implemented for this protocol")
-
-    def get_vlan_ingress(self, *ports):
-        if self.active_protocol in ('ssh', 'mops', 'snmp', 'offline'):
-            return self._get_active_connection().get_vlan_ingress(*ports)
-        raise NotImplementedError("get_vlan_ingress requires SSH, MOPS or SNMP")
-
-    def get_vlan_egress(self, *ports):
-        if self.active_protocol in ('ssh', 'mops', 'snmp', 'offline'):
-            return self._get_active_connection().get_vlan_egress(*ports)
-        raise NotImplementedError("get_vlan_egress requires SSH, MOPS or SNMP")
-
-    def set_vlan_ingress(self, port, pvid=None, frame_types=None,
-                         ingress_filtering=None):
-        if self.active_protocol in ('ssh', 'mops', 'snmp', 'offline'):
-            return self._get_active_connection().set_vlan_ingress(
-                port, pvid=pvid, frame_types=frame_types,
-                ingress_filtering=ingress_filtering)
-        raise NotImplementedError("set_vlan_ingress requires SSH, MOPS or SNMP")
-
-    def set_vlan_egress(self, vlan_id, port, mode):
-        if self.active_protocol in ('ssh', 'mops', 'snmp', 'offline'):
-            return self._get_active_connection().set_vlan_egress(
-                vlan_id, port, mode)
-        raise NotImplementedError("set_vlan_egress requires SSH, MOPS or SNMP")
-
-    def set_access_port(self, port, vlan_id):
-        if self.active_protocol in ('mops', 'snmp', 'offline'):
-            return self._get_active_connection().set_access_port(port, vlan_id)
-        raise NotImplementedError(
-            "set_access_port requires MOPS, SNMP, or Offline (no SSH — not atomic)")
-
-    def create_vlan(self, vlan_id, name=''):
-        if self.active_protocol in ('ssh', 'mops', 'snmp', 'offline'):
-            return self._get_active_connection().create_vlan(vlan_id, name=name)
-        raise NotImplementedError("create_vlan requires SSH, MOPS or SNMP")
-
-    def update_vlan(self, vlan_id, name):
-        if self.active_protocol in ('ssh', 'mops', 'snmp', 'offline'):
-            return self._get_active_connection().update_vlan(vlan_id, name)
-        raise NotImplementedError("update_vlan requires SSH, MOPS or SNMP")
-
-    def delete_vlan(self, vlan_id):
-        if self.active_protocol in ('ssh', 'mops', 'snmp', 'offline'):
-            return self._get_active_connection().delete_vlan(vlan_id)
-        raise NotImplementedError("delete_vlan requires SSH, MOPS or SNMP")
-
-    def ping(self, destination, source='', ttl=255, timeout=2, size=100, count=5, vrf='', source_interface=''):
-        if self.active_protocol == 'ssh' or self._ensure_ssh():
-            result = self.ssh.ping(destination, source, ttl, timeout, size, count, vrf, source_interface)
-            if 'success' in result:
-                required_keys = ['probes_sent', 'packet_loss', 'rtt_min', 'rtt_max', 'rtt_avg', 'rtt_stddev', 'results']
-                for key in required_keys:
-                    if key not in result['success']:
-                        result['success'][key] = [] if key == 'results' else 0
-            return result
-        raise NotImplementedError("ping requires SSH but SSH connection unavailable")
-
-    
-        
-    def cli(self, commands: list[str], encoding: str = 'text') -> dict[str, str]:
-        """Execute a list of commands and return the output in a dictionary format."""
-        if self.active_protocol == 'ssh' or self._ensure_ssh():
-            return self.ssh.cli(commands, encoding)
-        raise NotImplementedError("cli requires SSH but SSH connection unavailable")
-        
-    def get_environment(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            env = self._get_active_connection().get_environment()
-            # Ensure all required sections are present
-            required_sections = ['fans', 'temperature', 'power', 'cpu', 'memory']
-            for section in required_sections:
-                if section not in env:
-                    env[section] = {}
-            return env
-        raise NotImplementedError("get_environment is not implemented for this protocol")
-
-    def get_arp_table(self, vrf=""):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            arp_table = self._get_active_connection().get_arp_table(vrf)
-            required_keys = ['interface', 'mac', 'ip', 'age']
-            for entry in arp_table:
-                for key in required_keys:
-                    if key not in entry:
-                        entry[key] = '' if key in ['interface', 'mac', 'ip'] else 0.0
-            return arp_table
-        raise NotImplementedError("get_arp_table is not implemented for this protocol")
-    
-    def get_config(self, retrieve='all', full=False, sanitized=False, format='text',
-                   **kwargs):
-        if self.active_protocol in ('mops', 'offline'):
-            config = self._get_active_connection().get_config(
-                retrieve, full, sanitized, format, **kwargs)
-        elif self.active_protocol == 'ssh' or self._ensure_ssh():
-            config = self.ssh.get_config(retrieve, full, sanitized, format)
-        else:
-            raise NotImplementedError("get_config requires SSH or MOPS")
-        for config_type in ['running', 'startup', 'candidate']:
-            if config_type not in config:
-                config[config_type] = ''
-        return config
-
-    def load_config(self, xml_data, profile=None, destination='nvm'):
-        if self.active_protocol in ('mops', 'offline'):
-            return self._get_active_connection().load_config(
-                xml_data, profile=profile, destination=destination,
-            )
-        raise NotImplementedError("load_config requires MOPS")
-
-    def get_interfaces(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            interfaces = self._get_active_connection().get_interfaces()
-            # Ensure all required keys are present for each interface
-            required_keys = ['is_up', 'is_enabled', 'description', 'last_flapped', 'speed', 'mtu', 'mac_address']
-            for interface in interfaces.values():
-                for key in required_keys:
-                    if key not in interface:
-                        interface[key] = '' if key in ['description', 'mac_address'] else 0
-            return interfaces
-        raise NotImplementedError("get_interfaces is not implemented for this protocol")
-        
-    def load_merge_candidate(self, filename=None, config=None):
-        """Stage CLI commands for later commit.
-
-        HiOS has no native candidate config — commands apply immediately.
-        We stage them in Python and execute via SSH on commit.
-
-        Args:
-            filename: path to file containing CLI commands (one per line)
-            config: string of CLI commands (newline-separated)
-        """
-        if filename:
-            with open(filename, 'r') as f:
-                self._merge_candidate = f.read()
-        elif config:
-            self._merge_candidate = config
-        else:
-            raise MergeConfigException("filename or config must be provided")
-        self._loaded = True
-
-    def load_replace_candidate(self, filename=None, config=None):
-        raise NotImplementedError(
-            "HiOS does not support config replacement. Use load_merge_candidate() instead."
+        if method_name.startswith(('get_', 'set_', 'create_', 'delete_', 'activate_')):
+            if self.engine.has_method(method_name):
+                def dispatch(*args, **kwargs):
+                    if args:
+                        kwargs['index'] = args[0]
+                    return self._call(method_name, **kwargs)
+                return dispatch
+        raise AttributeError(
+            f"'{type(self).__name__}' has no method '{method_name}'"
         )
 
-    def compare_config(self):
-        """Return the staged candidate commands.
+    # ==================================================================
+    # NAPALM config management — CLI text staging
+    # ==================================================================
 
-        No real diff is possible — HiOS applies commands immediately.
-        Returns the commands that will be sent on commit.
-        """
-        return self._merge_candidate
+    def load_merge_candidate(self, filename=None, config=None):
+        """Stage CLI commands for commit. HiOS applies immediately —
+        we buffer in Python and send via SSH on commit."""
+        if filename:
+            with open(filename) as f:
+                config = f.read()
+        if config:
+            self._merge_candidate += config + '\n'
+
+    def compare_config(self):
+        """Return staged CLI commands."""
+        return self._merge_candidate.strip()
 
     def commit_config(self, message='', revert_in=None):
-        """Execute staged commands via SSH, then save to NVM.
-
-        Safety workflow:
-        1. Verify nothing loaded raises error
-        2. Check NVM is in sync (no one else has unsaved changes)
-        3. Optionally start config watchdog for auto-revert
-        4. Execute commands in enable mode
-        5. Save to NVM
-        6. Stop watchdog on successful save
-
-        Args:
-            message: commit message (logged, not stored on device)
-            revert_in: seconds for auto-revert timer (30-600, requires SNMP)
-        """
-        if not self._loaded:
-            raise CommitError("No config loaded. Call load_merge_candidate() first.")
-
-        # Ensure SSH is available
-        if self.active_protocol != 'ssh' and not self._ensure_ssh():
-            raise CommitError("commit_config requires SSH but SSH connection unavailable")
-
-        # Check NVM sync — refuse if someone else has unsaved changes
-        # Poll through transient "busy" state (NVM write from a recent save)
-        try:
-            for _attempt in range(5):
-                status = self.get_config_status()
-                if status['nvm'] != 'busy':
-                    break
-                time.sleep(1)
-            if not status['saved']:
-                raise CommitError(
-                    f"Running config not saved to NVM (nvm: {status['nvm']}). "
-                    "Another user may have unsaved changes. Save or discard first."
-                )
-        except NotImplementedError:
-            pass  # No config status available, proceed anyway
-
-        # Start watchdog if requested (use any available protocol)
-        watchdog_started = False
-        if revert_in:
-            try:
-                conn = self._get_active_connection()
-                conn.start_watchdog(revert_in)
-                watchdog_started = True
-                logger.info(f"Config watchdog started: {revert_in}s auto-revert")
-            except NotImplementedError:
-                logger.warning("Config watchdog not available on this protocol")
-            except Exception as e:
-                logger.warning(f"Failed to start config watchdog: {e}")
-
-        # Execute commands via SSH in configure mode
-        try:
-            self.ssh._config_mode()
-            lines = [l.strip() for l in self._merge_candidate.splitlines() if l.strip()]
-            errors = []
-            for line in lines:
-                result = self.ssh.cli(line)
-                output = list(result.values())[0]
-                if output.startswith('Error:'):
-                    errors.append(f"{line}: {output}")
-            self.ssh._exit_config_mode()
-            if errors:
-                raise CommitError(
-                    f"Command errors during commit:\n" + "\n".join(errors)
-                )
-        except CommitError:
-            raise
-        except Exception as e:
-            if watchdog_started:
-                logger.info("Commit failed — watchdog will auto-revert on timer expiry")
-            raise CommitError(f"Failed to execute commands: {e}")
-
-        # Save to NVM
-        try:
-            self.ssh.save_config()
-        except Exception as e:
-            if watchdog_started:
-                logger.info("Save failed — watchdog will auto-revert on timer expiry")
-            raise CommitError(f"Commands executed but save failed: {e}")
-
-        # Stop watchdog on successful save
-        if watchdog_started:
-            try:
-                conn = self._get_active_connection()
-                conn.stop_watchdog()
-                logger.info("Config watchdog stopped (save succeeded)")
-            except Exception as e:
-                logger.warning(f"Failed to stop config watchdog: {e}")
-
-        # Clear state
-        self._changed = True
+        """Send staged CLI commands via SSH, then save to NVM."""
+        if not self._merge_candidate.strip():
+            return
+        # Ensure a CLI-capable transport is available
+        proto, transport = self._ensure_execute_transport('cli')
+        for line in self._merge_candidate.strip().splitlines():
+            line = line.strip()
+            if line and not line.startswith('#'):
+                transport.cli(line)
+        self.save_config()
         self._merge_candidate = ''
-        self._loaded = False
-
-        if message:
-            logger.info(f"Config committed: {message}")
 
     def discard_config(self):
-        """Clear staged candidate commands."""
+        """Clear staged CLI commands."""
         self._merge_candidate = ''
-        self._loaded = False
 
     def rollback(self):
         raise NotImplementedError(
             "HiOS has no non-disruptive rollback. "
-            "Use activate_profile() for atomic profile switching (causes warm restart)."
-        )
+            "Use activate_profile() for atomic profile switching (causes warm restart).")
 
-    def get_mrp(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().get_mrp()
-        raise NotImplementedError("get_mrp is not implemented for this protocol")
+    # ==================================================================
+    # EXECUTE — transport-direct operations
+    # ==================================================================
 
-    def get_hidiscovery(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().get_hidiscovery()
-        raise NotImplementedError("get_hidiscovery is not implemented for this protocol")
+    def _execute_transport(self, method, **kwargs):
+        """Call a method on the active transport. YAML declares, Python implements.
 
-    def get_config_status(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().get_config_status()
-        raise NotImplementedError("get_config_status is not implemented for this protocol")
+        The protocol YAML execute_methods list is the contract — if the method
+        isn't declared there, it's not supported regardless of what the Python
+        transport class has. Both must agree.
+        """
+        allowed = self.engine.get_execute_methods(self._engine_protocol())
+        if method not in allowed:
+            raise NotImplementedError(
+                f"{method} not declared in {self._engine_protocol().upper()}.yaml execute_methods")
+        transport = self._transport()
+        fn = getattr(transport, method, None)
+        if fn is None:
+            raise NotImplementedError(
+                f"{method} declared but not implemented on {self.active_protocol}")
+        return fn(**kwargs)
 
-    def save_config(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().save_config()
-        raise NotImplementedError("save_config is not implemented for this protocol")
+    def save_config(self, dest='nvm'):
+        """Save running config to NVM/ENVM."""
+        return self._execute_transport('save_config', dest=dest)
 
-    def get_config_remote(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().get_config_remote()
-        raise NotImplementedError("get_config_remote is not implemented for this protocol")
-
-    def set_config_remote(self, action=None, server=None, profile=None,
-                          source='nvm', destination='nvm',
-                          auto_backup=None, auto_backup_url=None,
-                          auto_backup_username=None, auto_backup_password=None,
-                          username=None, password=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().set_config_remote(
-                action=action, server=server, profile=profile,
-                source=source, destination=destination,
-                auto_backup=auto_backup, auto_backup_url=auto_backup_url,
-                auto_backup_username=auto_backup_username,
-                auto_backup_password=auto_backup_password,
-                username=username, password=password,
-            )
-        raise NotImplementedError("set_config_remote is not implemented for this protocol")
-
-    def is_factory_default(self):
-        if self.active_protocol in ('ssh', 'mops', 'offline'):
-            return self._get_active_connection().is_factory_default()
-        if self.active_protocol == 'snmp':
-            # SNMP is gated on factory-default devices — if we're connected, it's not factory-default
-            return False
-        raise NotImplementedError("is_factory_default is not implemented for this protocol")
+    def load_config(self, xml_data, profile=None, destination='nvm'):
+        """Upload config XML to device."""
+        return self._execute_transport('load_config', xml_data=xml_data,
+                                        profile=profile, destination=destination)
 
     def onboard(self, new_password):
-        if self.active_protocol in ('ssh', 'mops', 'offline'):
-            return self._get_active_connection().onboard(new_password)
-        raise NotImplementedError(
-            "onboard not available via SNMP — "
-            "SNMP is gated on factory-default devices. Use MOPS or SSH.")
+        """Change default password on factory-fresh device."""
+        return self._execute_transport('onboard', new_password=new_password)
+
+    def is_factory_default(self):
+        """Check if device is in factory-default state."""
+        return self._execute_transport('is_factory_default')
 
     def clear_config(self, keep_ip=False):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().clear_config(keep_ip=keep_ip)
-        raise NotImplementedError("clear_config is not implemented for this protocol")
+        """Clear running config."""
+        return self._execute_transport('clear_config', keep_ip=keep_ip)
 
     def clear_factory(self, erase_all=False):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().clear_factory(erase_all=erase_all)
-        raise NotImplementedError("clear_factory is not implemented for this protocol")
-
-    def set_mrp(self, operation='enable', mode='client', port_primary=None,
-                port_secondary=None, vlan=None, recovery_delay=None,
-                advanced_mode=None):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().set_mrp(
-                operation, mode, port_primary, port_secondary, vlan,
-                recovery_delay, advanced_mode,
-            )
-        raise NotImplementedError("set_mrp is not implemented for this protocol")
-
-    def delete_mrp(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().delete_mrp()
-        raise NotImplementedError("delete_mrp is not implemented for this protocol")
-
-    def get_mrp_sub_ring(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().get_mrp_sub_ring()
-        raise NotImplementedError("get_mrp_sub_ring is not implemented for this protocol")
-
-    def set_mrp_sub_ring(self, ring_id=None, enabled=None, mode='manager',
-                         port=None, vlan=None, name=None):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().set_mrp_sub_ring(
-                ring_id, enabled, mode, port, vlan, name,
-            )
-        raise NotImplementedError("set_mrp_sub_ring is not implemented for this protocol")
-
-    def delete_mrp_sub_ring(self, ring_id=None):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().delete_mrp_sub_ring(ring_id)
-        raise NotImplementedError("delete_mrp_sub_ring is not implemented for this protocol")
-
-    def set_interface(self, interface, enabled=None, description=None):
-        if enabled is None and description is None:
-            return
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().set_interface(interface, enabled=enabled, description=description)
-        raise NotImplementedError("set_interface is not implemented for this protocol")
-
-    def set_hidiscovery(self, status, blinking=None):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().set_hidiscovery(status, blinking=blinking)
-        raise NotImplementedError("set_hidiscovery is not implemented for this protocol")
-
-    def get_sflow(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_sflow()
-        raise NotImplementedError("get_sflow is not implemented for this protocol")
-
-    def set_sflow(self, receiver, address=None, port=None, owner=None,
-                  timeout=None, max_datagram_size=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_sflow(
-                receiver, address=address, port=port, owner=owner,
-                timeout=timeout, max_datagram_size=max_datagram_size)
-        raise NotImplementedError("set_sflow is not implemented for this protocol")
-
-    def get_sflow_port(self, interfaces=None, type=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_sflow_port(
-                interfaces=interfaces, type=type)
-        raise NotImplementedError("get_sflow_port is not implemented for this protocol")
-
-    def set_sflow_port(self, interfaces, receiver, sample_rate=None,
-                       interval=None, max_header_size=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_sflow_port(
-                interfaces, receiver, sample_rate=sample_rate,
-                interval=interval, max_header_size=max_header_size)
-        raise NotImplementedError("set_sflow_port is not implemented for this protocol")
-
-    def get_snmp_information(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            snmp_info = self._get_active_connection().get_snmp_information()
-            required_keys = ['chassis_id', 'community', 'contact', 'location']
-            for key in required_keys:
-                if key not in snmp_info:
-                    snmp_info[key] = '' if key != 'community' else {}
-            return snmp_info
-        raise NotImplementedError("get_snmp_information is not implemented for this protocol")
-
-    def set_snmp_information(self, hostname=None, contact=None, location=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_snmp_information(
-                hostname=hostname, contact=contact, location=location,
-            )
-        raise NotImplementedError("set_snmp_information is not implemented for this protocol")
-
-    def get_profiles(self, storage='nvm'):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().get_profiles(storage)
-        raise NotImplementedError("get_profiles is not implemented for this protocol")
-
-    def get_config_fingerprint(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().get_config_fingerprint()
-        raise NotImplementedError("get_config_fingerprint is not implemented for this protocol")
-
-    def activate_profile(self, storage='nvm', index=1):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().activate_profile(storage, index)
-        raise NotImplementedError("activate_profile is not implemented for this protocol")
-
-    def delete_profile(self, storage='nvm', index=1):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().delete_profile(storage, index)
-        raise NotImplementedError("delete_profile is not implemented for this protocol")
-
-    def get_rstp(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().get_rstp()
-        raise NotImplementedError("get_rstp is not implemented for this protocol")
-
-    def get_rstp_port(self, interface=None):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().get_rstp_port(interface)
-        raise NotImplementedError("get_rstp_port is not implemented for this protocol")
-
-    def set_rstp(self, enabled=None, mode=None, priority=None,
-                 hello_time=None, max_age=None, forward_delay=None,
-                 hold_count=None, bpdu_guard=None, bpdu_filter=None):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().set_rstp(
-                enabled, mode, priority, hello_time, max_age, forward_delay,
-                hold_count, bpdu_guard, bpdu_filter,
-            )
-        raise NotImplementedError("set_rstp is not implemented for this protocol")
-
-    def set_rstp_port(self, interface, enabled=None, edge_port=None,
-                      auto_edge=None, path_cost=None, priority=None,
-                      root_guard=None, loop_guard=None, tcn_guard=None,
-                      bpdu_filter=None, bpdu_flood=None):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
-            return self._get_active_connection().set_rstp_port(
-                interface, enabled, edge_port, auto_edge, path_cost, priority,
-                root_guard, loop_guard, tcn_guard, bpdu_filter, bpdu_flood,
-            )
-        raise NotImplementedError("set_rstp_port is not implemented for this protocol")
-
-    def get_auto_disable(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_auto_disable()
-        raise NotImplementedError("get_auto_disable is not implemented for this protocol")
-
-    def set_auto_disable(self, interface, timer=0):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_auto_disable(interface, timer)
-        raise NotImplementedError("set_auto_disable is not implemented for this protocol")
-
-    def reset_auto_disable(self, interface):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().reset_auto_disable(interface)
-        raise NotImplementedError("reset_auto_disable is not implemented for this protocol")
-
-    def set_auto_disable_reason(self, reason, enabled=True):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_auto_disable_reason(reason, enabled)
-        raise NotImplementedError("set_auto_disable_reason is not implemented for this protocol")
-
-    def get_loop_protection(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_loop_protection()
-        raise NotImplementedError("get_loop_protection is not implemented for this protocol")
-
-    def set_loop_protection(self, interface=None, enabled=None, mode=None,
-                            action=None, vlan_id=None,
-                            transmit_interval=None, receive_threshold=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_loop_protection(
-                interface, enabled, mode, action, vlan_id,
-                transmit_interval, receive_threshold,
-            )
-        raise NotImplementedError("set_loop_protection is not implemented for this protocol")
-
-    # ------------------------------------------------------------------
-    # Storm Control
-    # ------------------------------------------------------------------
-
-    def get_storm_control(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_storm_control()
-        raise NotImplementedError("get_storm_control is not implemented for this protocol")
-
-    def set_storm_control(self, interface, unit=None,
-                          broadcast_enabled=None, broadcast_threshold=None,
-                          multicast_enabled=None, multicast_threshold=None,
-                          unicast_enabled=None, unicast_threshold=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_storm_control(
-                interface, unit=unit,
-                broadcast_enabled=broadcast_enabled,
-                broadcast_threshold=broadcast_threshold,
-                multicast_enabled=multicast_enabled,
-                multicast_threshold=multicast_threshold,
-                unicast_enabled=unicast_enabled,
-                unicast_threshold=unicast_threshold,
-            )
-        raise NotImplementedError("set_storm_control is not implemented for this protocol")
-
-    def get_qos(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_qos()
-        raise NotImplementedError("get_qos is not implemented for this protocol")
-
-    def set_qos(self, interface, trust_mode=None, shaping_rate=None,
-                queue=None, scheduler=None, min_bw=None, max_bw=None,
-                default_priority=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_qos(
-                interface, trust_mode=trust_mode, shaping_rate=shaping_rate,
-                queue=queue, scheduler=scheduler,
-                min_bw=min_bw, max_bw=max_bw,
-                default_priority=default_priority,
-            )
-        raise NotImplementedError("set_qos is not implemented for this protocol")
-
-    def get_qos_mapping(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_qos_mapping()
-        raise NotImplementedError("get_qos_mapping is not implemented for this protocol")
-
-    def set_qos_mapping(self, dot1p=None, dscp=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_qos_mapping(
-                dot1p=dot1p, dscp=dscp,
-            )
-        raise NotImplementedError("set_qos_mapping is not implemented for this protocol")
-
-    def get_management_priority(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_management_priority()
-        raise NotImplementedError("get_management_priority is not implemented for this protocol")
-
-    def set_management_priority(self, dot1p=None, ip_dscp=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_management_priority(
-                dot1p=dot1p, ip_dscp=ip_dscp,
-            )
-        raise NotImplementedError("set_management_priority is not implemented for this protocol")
-
-    def get_management(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_management()
-        raise NotImplementedError("get_management is not implemented for this protocol")
-
-    def set_management(self, protocol=None, vlan_id=None, ip_address=None,
-                       netmask=None, gateway=None, mgmt_port=None,
-                       dhcp_option_66_67=None, ipv6_enabled=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_management(
-                protocol=protocol, vlan_id=vlan_id, ip_address=ip_address,
-                netmask=netmask, gateway=gateway, mgmt_port=mgmt_port,
-                dhcp_option_66_67=dhcp_option_66_67, ipv6_enabled=ipv6_enabled,
-            )
-        raise NotImplementedError("set_management is not implemented for this protocol")
-
-    # ------------------------------------------------------------------
-    # Login Policy
-    # ------------------------------------------------------------------
-
-    def get_login_policy(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_login_policy()
-        raise NotImplementedError("get_login_policy is not implemented for this protocol")
-
-    def set_login_policy(self, min_password_length=None,
-                         max_login_attempts=None, lockout_duration=None,
-                         min_uppercase=None, min_lowercase=None,
-                         min_numeric=None, min_special=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_login_policy(
-                min_password_length=min_password_length,
-                max_login_attempts=max_login_attempts,
-                lockout_duration=lockout_duration,
-                min_uppercase=min_uppercase,
-                min_lowercase=min_lowercase,
-                min_numeric=min_numeric,
-                min_special=min_special,
-            )
-        raise NotImplementedError("set_login_policy is not implemented for this protocol")
-
-    # ------------------------------------------------------------------
-    # Config Watchdog
-    # ------------------------------------------------------------------
-
-    def get_watchdog_status(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().get_watchdog_status()
-        raise NotImplementedError("get_watchdog_status is not implemented for this protocol")
-
-    def start_watchdog(self, seconds):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().start_watchdog(seconds)
-        raise NotImplementedError("start_watchdog is not implemented for this protocol")
-
-    def stop_watchdog(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().stop_watchdog()
-        raise NotImplementedError("stop_watchdog is not implemented for this protocol")
-
-    # ------------------------------------------------------------------
-    # Syslog
-    # ------------------------------------------------------------------
-
-    def get_syslog(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_syslog()
-        raise NotImplementedError("get_syslog is not implemented for this protocol")
-
-    def set_syslog(self, enabled=None, servers=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_syslog(
-                enabled=enabled, servers=servers,
-            )
-        raise NotImplementedError("set_syslog is not implemented for this protocol")
-
-    # ------------------------------------------------------------------
-    # NTP
-    # ------------------------------------------------------------------
-
-    def get_ntp(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_ntp()
-        raise NotImplementedError("get_ntp is not implemented for this protocol")
-
-    def set_ntp(self, enabled=None, servers=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_ntp(
-                client_enabled=enabled, servers=servers,
-            )
-        raise NotImplementedError("set_ntp is not implemented for this protocol")
-
-    # ------------------------------------------------------------------
-    # Services
-    # ------------------------------------------------------------------
-
-    def get_services(self, *fields):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_services(*fields)
-        raise NotImplementedError("get_services is not implemented for this protocol")
-
-    def set_services(self, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_services(**kwargs)
-        raise NotImplementedError("set_services is not implemented for this protocol")
-
-    # ------------------------------------------------------------------
-    # SNMP Config
-    # ------------------------------------------------------------------
-
-    def get_snmp_config(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_snmp_config()
-        raise NotImplementedError("get_snmp_config is not implemented for this protocol")
-
-    def set_snmp_config(self, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_snmp_config(**kwargs)
-        raise NotImplementedError("set_snmp_config is not implemented for this protocol")
-
-    # ------------------------------------------------------------------
-    # MOPS staging (atomic multi-setter batching)
-    # ------------------------------------------------------------------
+        """Factory reset."""
+        return self._execute_transport('clear_factory', erase_all=erase_all)
 
     def start_staging(self):
-        """Enter staging mode — MOPS mutations are queued, not sent.
-
-        Staging batches mutations into one atomic POST. The driver does
-        not validate dependencies between staged operations. Operations
-        that depend on prior state (e.g. set_vlan_egress requires the
-        VLAN to exist) must have their prerequisites committed first.
-        Tool layer is responsible for operation ordering.
-
-        VLAN CRUD (create/update/delete_vlan) always fires immediately
-        regardless of staging mode.
-
-        Raises NotImplementedError for SNMP/SSH (use load_merge_candidate
-        for SSH CLI staging).
-        """
-        if self.active_protocol in ('mops', 'offline'):
-            return self._get_active_connection().start_staging()
-        raise NotImplementedError(
-            "start_staging is only available via MOPS/offline. "
-            "Use load_merge_candidate() for SSH CLI staging.")
+        """Begin MOPS staging transaction."""
+        return self._execute_transport('start_staging')
 
     def commit_staging(self):
-        """Fire all queued mutations in one atomic batch.
-
-        Does NOT save to NVM — call save_config() separately when ready.
-        """
-        if self.active_protocol in ('mops', 'offline'):
-            return self._get_active_connection().commit_staging()
-        raise NotImplementedError("commit_staging is only available via MOPS/offline")
+        """Commit staged MOPS mutations atomically."""
+        return self._execute_transport('commit_staging')
 
     def discard_staging(self):
-        """Clear queued mutations without applying."""
-        if self.active_protocol in ('mops', 'offline'):
-            return self._get_active_connection().discard_staging()
-        raise NotImplementedError("discard_staging is only available via MOPS/offline")
+        """Discard staged MOPS mutations."""
+        return self._execute_transport('discard_staging')
 
     def get_staged_mutations(self):
-        """Return list of staged mutation tuples for inspection."""
-        if self.active_protocol in ('mops', 'offline'):
-            return self._get_active_connection().get_staged_mutations()
-        raise NotImplementedError("get_staged_mutations is only available via MOPS")
+        """Return list of staged MOPS mutations."""
+        return self._execute_transport('get_staged_mutations')
+
+    # ==================================================================
+    # CAPABILITIES
+    # ==================================================================
+
+    def get_capabilities(self, facts=None):
+        """Return available CRUDE operations and protocol support.
+
+        Args:
+            facts: optional dict from get_facts(). If connected and not
+                   provided, calls get_facts() automatically. Pass cached
+                   facts to avoid device query.
+        """
+        device_info = {}
+        if facts:
+            device_info = self._parse_device_info(facts)
+        elif self._is_alive:
+            try:
+                device_info = self._fetch_device_info()
+            except Exception:
+                pass
+
+        caps = self.engine.get_capabilities(device_info=device_info or None)
+
+        # Add transport layer info — execute_methods from protocol YAML
+        active_proto = self._engine_protocol() if self._is_alive else None
+        active_execute = []
+        if active_proto:
+            active_execute = self.engine.get_execute_methods(active_proto)
+
+        caps["transport"] = {
+            "active": self.active_protocol,
+            "preference": self.protocol_preference,
+            "connected": {p: p in self._transports for p in _PROTOCOLS},
+            "execute_methods": active_execute,
+        }
+
+        # Transport execute methods belong in crude["execute"] too
+        caps["crude"]["execute"] = active_execute
+        caps["totals"]["execute"] = len(active_execute)
+        caps["totals"]["total"] = sum(caps["totals"].get(k, 0) for k in ("create", "read", "upsert", "delete", "execute"))
+
+        return caps
+
+    def _parse_device_info(self, facts):
+        """Extract guard-relevant fields from a facts dict.
+
+        Accepts any dict. Extracts what it can, ignores what it can't.
+        Vendor-specific parsing (os_version format) is best-effort.
+        """
+        import re
+        info = {}
+        try:
+            descr = str(facts.get('os_version', ''))
+            m = re.search(r'(\w+)-(\d[A-Z])-(\S+)', descr)
+            if m:
+                info['os'] = m.group(1).lower()
+                info['swlevel'] = f'L{m.group(2)}'
+                info['swversion'] = m.group(3)
+            model = facts.get('model', '')
+            if model:
+                info['hwtype'] = str(model)
+        except Exception:
+            pass
+        return info
+
+    # ==================================================================
+    # NAPALM STANDARD GETTERS
+    # ==================================================================
 
     # ------------------------------------------------------------------
-    # Signal Contact / Device Monitor / Device Security / Banner
+    # NAPALM base class overrides — required because NetworkDriver
+    # defines stubs that raise NotImplementedError. __getattr__ can't
+    # override these since Python finds the base class method first.
+    #
+    # Methods that need reshaping have a _shape_<method> above them.
+    # napalm_compat=True (default) reshapes for NAPALM.
+    # napalm_compat=False returns canonical engine output.
     # ------------------------------------------------------------------
 
-    def get_signal_contact(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_signal_contact()
-        raise NotImplementedError("get_signal_contact is not implemented for this protocol")
+    def get_facts(self, napalm_compat=True, **kw):
+        if not kw and hasattr(self, '_cached_facts') and self._cached_facts:
+            return self._cached_facts
+        return self._call('get_facts', **kw)
 
-    def set_signal_contact(self, contact_id=1, mode=None,
-                           manual_state=None, trap_enabled=None,
-                           monitoring=None, power_supply=None,
-                           link_alarm=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_signal_contact(
-                contact_id=contact_id, mode=mode,
-                manual_state=manual_state, trap_enabled=trap_enabled,
-                monitoring=monitoring, power_supply=power_supply,
-                link_alarm=link_alarm)
-        raise NotImplementedError("set_signal_contact is not implemented for this protocol")
+    # -- get_interfaces: key renames + type conversion ----------------
 
-    def get_device_monitor(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_device_monitor()
-        raise NotImplementedError("get_device_monitor is not implemented for this protocol")
+    @staticmethod
+    def _shape_get_interfaces(data):
+        return {port: {
+            'is_up': row.get('oper_status') == 'up',
+            'is_enabled': row.get('admin_status') == 'enabled',
+            'description': row.get('alias', ''),
+            'last_flapped': -1.0,
+            'speed': row.get('speed', 0),
+            'mtu': row.get('mtu', 1500),
+            'mac_address': row.get('phys_address', ''),
+        } for port, row in data.items()}
 
-    def set_device_monitor(self, trap_enabled=None, monitoring=None,
-                           power_supply=None, link_alarm=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_device_monitor(
-                trap_enabled=trap_enabled, monitoring=monitoring,
-                power_supply=power_supply, link_alarm=link_alarm)
-        raise NotImplementedError("set_device_monitor is not implemented for this protocol")
+    def get_interfaces(self, napalm_compat=True, **kw):
+        result = self._call('get_interfaces', **kw)
+        return self._shape_get_interfaces(result) if napalm_compat else result
 
-    def get_devsec_status(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_devsec_status()
-        raise NotImplementedError("get_devsec_status is not implemented for this protocol")
+    # -- get_interfaces_ip: flat → nested per-interface ---------------
 
-    def set_devsec_status(self, trap_enabled=None, monitoring=None,
-                          no_link=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_devsec_status(
-                trap_enabled=trap_enabled, monitoring=monitoring,
-                no_link=no_link)
-        raise NotImplementedError("set_devsec_status is not implemented for this protocol")
+    @staticmethod
+    def _shape_get_interfaces_ip(data):
+        result = {}
+        for iface, info in data.items():
+            ipv4 = info.get('ipv4', {})
+            ipv6 = info.get('ipv6', {})
+            if ipv4 or ipv6:
+                result[iface] = {'ipv4': ipv4, 'ipv6': ipv6}
+        return result
 
-    def get_banner(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_banner()
-        raise NotImplementedError("get_banner is not implemented for this protocol")
+    def get_interfaces_ip(self, napalm_compat=True, **kw):
+        result = self._call('get_interfaces_ip', **kw)
+        return self._shape_get_interfaces_ip(result) if napalm_compat else result
 
-    def set_banner(self, pre_login_enabled=None, pre_login_text=None,
-                   cli_login_enabled=None, cli_login_text=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_banner(
-                pre_login_enabled=pre_login_enabled,
-                pre_login_text=pre_login_text,
-                cli_login_enabled=cli_login_enabled,
-                cli_login_text=cli_login_text)
-        raise NotImplementedError("set_banner is not implemented for this protocol")
+    # -- get_interfaces_counters: strip non-NAPALM fields ---------------
+
+    _NAPALM_COUNTER_KEYS = {
+        'tx_errors', 'rx_errors', 'tx_discards', 'rx_discards',
+        'tx_octets', 'rx_octets', 'tx_unicast_packets', 'rx_unicast_packets',
+        'tx_multicast_packets', 'rx_multicast_packets',
+        'tx_broadcast_packets', 'rx_broadcast_packets',
+    }
+
+    @classmethod
+    def _shape_get_interfaces_counters(cls, data):
+        return {port: {k: v for k, v in row.items() if k in cls._NAPALM_COUNTER_KEYS}
+                for port, row in data.items()}
+
+    def get_interfaces_counters(self, napalm_compat=True, **kw):
+        result = self._call('get_interface_statistics', **kw)
+        return self._shape_get_interfaces_counters(result) if napalm_compat else result
+
+    # -- get_lldp_neighbors: key renames ------------------------------
+
+    @staticmethod
+    def _shape_get_lldp_neighbors(data):
+        return {port: [
+            {'hostname': e.get('sys_name', ''), 'port': e.get('port_id', '')}
+            for e in entries
+        ] for port, entries in data.items()}
+
+    def get_lldp_neighbors(self, napalm_compat=True, **kw):
+        result = self._call('get_lldp_neighbors', **kw)
+        return self._shape_get_lldp_neighbors(result) if napalm_compat else result
+
+    # -- get_lldp_neighbors_detail: key renames -----------------------
+
+    @staticmethod
+    def _shape_get_lldp_neighbors_detail(data):
+        return {port: [{
+            'remote_hostname': e.get('sys_name', ''),
+            'remote_port': e.get('port_id', ''),
+            'remote_port_description': e.get('port_description', ''),
+            'remote_chassis_id': e.get('chassis_id', ''),
+            'remote_system_description': e.get('sys_description', ''),
+            'remote_system_capabilities': e.get('sys_capabilities', []),
+            'remote_system_enabled_capabilities': e.get('sys_enabled_capabilities', []),
+            'autoneg_supported': e.get('autoneg_supported', False),
+            'autoneg_enabled': e.get('autoneg_enabled', False),
+            'mau_type': e.get('mau_type', 0),
+            'pvid': e.get('pvid', 0),
+            'aggregation_enabled': e.get('aggregation_enabled', []),
+            'aggregation_port_id': e.get('aggregation_port_id', 0),
+        } for e in entries] for port, entries in data.items()}
+
+    def get_lldp_neighbors_detail(self, interface="", napalm_compat=True, **kw):
+        result = self._call('get_lldp_neighbors_detail', **kw)
+        return self._shape_get_lldp_neighbors_detail(result) if napalm_compat else result
+
+    # -- get_mac_address_table: status decomposition ------------------
+
+    @staticmethod
+    def _shape_get_mac_address_table(data):
+        return [{
+            'mac': row.get('mac', ''),
+            'interface': row.get('interface', ''),
+            'vlan': row.get('vlan', 0),
+            'active': row.get('status') in ('learned', 'self', 'mgmt'),
+            'static': row.get('status') in ('self', 'mgmt'),
+            'moves': 0,
+            'last_move': -1.0,
+        } for row in data]
+
+    def get_mac_address_table(self, napalm_compat=True, **kw):
+        result = self._call('get_mac_address_table', **kw)
+        return self._shape_get_mac_address_table(result) if napalm_compat else result
+
+    def get_arp_table(self, vrf='', napalm_compat=True, **kw):
+        return self._call('get_arp_table', **kw)
+
+    def get_ntp_servers(self, napalm_compat=True, **kw):
+        return self._call('get_ntp_servers', **kw)
+
+    def get_ntp_stats(self, napalm_compat=True, **kw):
+        return self._call('get_ntp_stats', **kw)
+
+    def get_users(self, napalm_compat=True, **kw):
+        return self._call('get_users', **kw)
+
+    def get_snmp_information(self, napalm_compat=True, **kw):
+        return self._call('get_snmp_information', **kw)
+
+    # -- get_optics: flat → nested physical_channels ------------------
+
+    @staticmethod
+    def _shape_get_optics(data):
+        _zero = {'instant': 0.0, 'avg': 0.0, 'min': 0.0, 'max': 0.0}
+        result = {}
+        for port, row in data.items():
+            tx = row.get('tx_power', 0.0)
+            rx = row.get('rx_power', 0.0)
+            if not tx and not rx:
+                continue
+            try:
+                tx = float(tx)
+            except (ValueError, TypeError):
+                tx = 0.0
+            try:
+                rx = float(rx)
+            except (ValueError, TypeError):
+                rx = 0.0
+            result[port] = {
+                'physical_channels': {
+                    'channel': [{
+                        'index': 0,
+                        'state': {
+                            'input_power': {**_zero, 'instant': rx},
+                            'output_power': {**_zero, 'instant': tx},
+                            'laser_bias_current': dict(_zero),
+                        },
+                    }],
+                },
+            }
+        return result
+
+    def get_optics(self, napalm_compat=True, **kw):
+        result = self._call('get_optics', **kw)
+        return self._shape_get_optics(result) if napalm_compat else result
+
+    def get_config(self, retrieve='all', full=False, sanitized=False, napalm_compat=True, **kw):
+        return self._call('get_config', **kw)
+
+    def get_environment(self, napalm_compat=True, **kw):
+        return self._call('get_environment', **kw)
+
+    def get_vlans(self, napalm_compat=True, **kw):
+        return self._call('get_vlans', **kw)
+
+    def get_route_to(self, destination='', protocol='', longer=False, napalm_compat=True, **kw):
+        return self._call('get_route_to', **kw)
+
+    def get_ipv6_neighbors_table(self, napalm_compat=True, **kw):
+        return self._call('get_ipv6_neighbors_table', **kw)
+
+    # ==================================================================
+    # NAPALM UTILITY METHODS (SSH-only, engine dispatch)
+    # ==================================================================
+
+    def _ensure_execute_transport(self, method):
+        """Ensure a transport supporting the execute method is available.
+
+        Checks connected transports first, then tries connecting protocols
+        that declare the method in their execute_methods.
+        """
+        # Already have a connected transport that supports this method?
+        for proto, transport in self._transports.items():
+            engine_proto = _get_engine_protocol(proto)
+            if method in self.engine.get_execute_methods(engine_proto):
+                return proto, transport
+
+        # Try connecting protocols that might support it
+        for proto in _PROTOCOLS:
+            if proto in self._transports:
+                continue
+            if self._try_connect(proto):
+                engine_proto = _get_engine_protocol(proto)
+                if method in self.engine.get_execute_methods(engine_proto):
+                    return proto, self._transports[proto]
+
+        raise NotImplementedError(
+            f"No protocol supports execute method '{method}' "
+            f"(active protocol: {self.active_protocol})"
+        )
+
+    def cli(self, commands=None, encoding='text'):
+        """Execute CLI commands on the device. Returns {command: output}."""
+        proto, transport = self._ensure_execute_transport('cli')
+        result = self.engine.execute(
+            'cli', _get_engine_protocol(proto), transport,
+            commands=commands or []
+        )
+        return result.get('outputs', result)
+
+    def ping(self, destination, source='', ttl=0, timeout=0, size=0,
+             count=5, vrf='', source_interface=''):
+        """Execute ping from the device. Returns NAPALM-compliant dict."""
+        proto, transport = self._ensure_execute_transport('ping')
+        raw = self.engine.execute(
+            'ping', _get_engine_protocol(proto), transport,
+            destination=destination, count=count
+        )
+        return self._parse_ping(raw.get('raw_output', ''))
+
+    def traceroute(self, destination, source='', ttl=0, timeout=0, vrf=''):
+        """Execute traceroute from the device. Returns NAPALM-compliant dict."""
+        proto, transport = self._ensure_execute_transport('traceroute')
+        raw = self.engine.execute(
+            'traceroute', _get_engine_protocol(proto), transport,
+            destination=destination
+        )
+        return self._parse_traceroute(raw.get('raw_output', ''))
 
     # ------------------------------------------------------------------
-    # Session Config / IP Restrict
+    # Output parsers for execute methods
+    # ------------------------------------------------------------------
+    # These parse CLI text into NAPALM-compliant nested dicts.
+    # They live in hios.py (not engine) because the output shapes are
+    # NAPALM-specific and don't generalize to other engine consumers.
+    # ENGINE MIGRATION PATH: if a future `parser:` tag on execute sources
+    # can declare output shaping in YAML, move these there. The raw output
+    # is already captured by the engine — only the shaping step would move.
     # ------------------------------------------------------------------
 
-    def get_session_config(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_session_config()
-        raise NotImplementedError("get_session_config is not implemented for this protocol")
+    @staticmethod
+    def _parse_ping(raw: str) -> dict:
+        """Parse HiOS ping output into NAPALM format.
 
-    def set_session_config(self, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_session_config(**kwargs)
-        raise NotImplementedError("set_session_config is not implemented for this protocol")
+        HiOS (BusyBox) format:
+            64 bytes from 1.2.3.4: seq=0 ttl=64 time=3.672 ms
+            ...
+            round-trip min/avg/max = 3.372/5.218/8.474 ms
+        """
+        if not raw:
+            return {'error': 'Ping returned no output'}
 
-    def get_ip_restrict(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_ip_restrict()
-        raise NotImplementedError("get_ip_restrict is not implemented for this protocol")
+        results = []
+        for m in re.finditer(
+            r'(\d+) bytes from ([\d.]+): seq=\d+ ttl=(\d+) time=([\d.]+)', raw
+        ):
+            results.append({
+                'ip_address': m.group(2),
+                'rtt': float(m.group(4)),
+            })
 
-    def set_ip_restrict(self, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_ip_restrict(**kwargs)
-        raise NotImplementedError("set_ip_restrict is not implemented for this protocol")
+        # Summary line
+        rtt_min = rtt_avg = rtt_max = 0.0
+        m_rtt = re.search(r'min/avg/max = ([\d.]+)/([\d.]+)/([\d.]+)', raw)
+        if m_rtt:
+            rtt_min, rtt_avg, rtt_max = (
+                float(m_rtt.group(1)), float(m_rtt.group(2)), float(m_rtt.group(3))
+            )
 
-    def add_ip_restrict_rule(self, index, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().add_ip_restrict_rule(index, **kwargs)
-        raise NotImplementedError("add_ip_restrict_rule is not implemented for this protocol")
+        m_loss = re.search(r'(\d+) packets transmitted, (\d+) packets received', raw)
+        probes_sent = int(m_loss.group(1)) if m_loss else len(results)
+        probes_received = int(m_loss.group(2)) if m_loss else len(results)
+        packet_loss = probes_sent - probes_received
 
-    def delete_ip_restrict_rule(self, index):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().delete_ip_restrict_rule(index)
-        raise NotImplementedError("delete_ip_restrict_rule is not implemented for this protocol")
+        return {
+            'success': {
+                'probes_sent': probes_sent,
+                'packet_loss': packet_loss,
+                'rtt_min': rtt_min,
+                'rtt_avg': rtt_avg,
+                'rtt_max': rtt_max,
+                'results': results,
+            }
+        }
 
-    def get_dns(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_dns()
-        raise NotImplementedError("get_dns is not implemented for this protocol")
+    @staticmethod
+    def _parse_traceroute(raw: str) -> dict:
+        """Parse HiOS traceroute output into NAPALM format.
 
-    def set_dns(self, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().set_dns(**kwargs)
-        raise NotImplementedError("set_dns is not implemented for this protocol")
+        HiOS (BusyBox) format:
+            1  192.168.60.81  4.918 ms  2.394 ms  2.946 ms
+            2  10.0.0.1  1.234 ms  *  2.345 ms
+            3  * * *
+        """
+        if not raw:
+            return {'error': 'Traceroute returned no output'}
 
-    def add_dns_server(self, address):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().add_dns_server(address)
-        raise NotImplementedError("add_dns_server is not implemented for this protocol")
+        hops = {}
+        for line in raw.splitlines():
+            m = re.match(r'\s*(\d+)\s+(.+)', line)
+            if not m:
+                continue
+            hop_num = int(m.group(1))
+            rest = m.group(2).strip()
 
-    def delete_dns_server(self, address):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().delete_dns_server(address)
-        raise NotImplementedError("delete_dns_server is not implemented for this protocol")
+            # Parse probes: alternating IP/hostname and rtt values
+            # Format: "IP  rtt ms  rtt ms  rtt ms" or "* * *"
+            probes = {}
+            probe_idx = 1
+            current_ip = '*'
+            tokens = rest.split()
+            i = 0
+            while i < len(tokens):
+                token = tokens[i]
+                if token == '*':
+                    probes[probe_idx] = {
+                        'host_name': '*', 'ip_address': '*', 'rtt': -1.0
+                    }
+                    probe_idx += 1
+                    i += 1
+                elif token == 'ms':
+                    i += 1
+                elif re.match(r'[\d.]+$', token) and i + 1 < len(tokens) and tokens[i + 1] == 'ms':
+                    # This is an RTT value
+                    probes[probe_idx] = {
+                        'host_name': current_ip,
+                        'ip_address': current_ip,
+                        'rtt': float(token),
+                    }
+                    probe_idx += 1
+                    i += 2  # skip value + 'ms'
+                else:
+                    # IP address or hostname
+                    current_ip = token
+                    i += 1
 
-    def get_poe(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_poe()
-        raise NotImplementedError("get_poe is not implemented for this protocol")
+            if probes:
+                hops[hop_num] = {'probes': probes}
 
-    def set_poe(self, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().set_poe(**kwargs)
-        raise NotImplementedError("set_poe is not implemented for this protocol")
+        if not hops:
+            return {'error': 'Could not parse traceroute output'}
 
-    def get_remote_auth(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_remote_auth()
-        raise NotImplementedError("get_remote_auth is not implemented for this protocol")
+        return {'success': hops}
 
-    def get_users(self):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_users()
-        raise NotImplementedError("get_users is not implemented for this protocol")
+    # ------------------------------------------------------------------
+    # NAPALM standard methods not applicable to HiOS (BGP, firewalls, probes)
+    # are NOT overridden — base class raises NotImplementedError per NAPALM spec.
 
-    def set_user(self, name, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().set_user(name, **kwargs)
-        raise NotImplementedError("set_user is not implemented for this protocol")
-
-    def delete_user(self, name):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().delete_user(name)
-        raise NotImplementedError("delete_user is not implemented for this protocol")
-
-    def add_snmp_trap_dest(self, name, address, port=162,
-                           security_model='v3', security_name='admin',
-                           security_level='authpriv'):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().add_snmp_trap_dest(
-                name, address, port=port,
-                security_model=security_model,
-                security_name=security_name,
-                security_level=security_level)
-        raise NotImplementedError("add_snmp_trap_dest is not implemented for this protocol")
-
-    def delete_snmp_trap_dest(self, name):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().delete_snmp_trap_dest(name)
-        raise NotImplementedError("delete_snmp_trap_dest is not implemented for this protocol")
-
-    def get_port_security(self, interface=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_port_security(interface=interface)
-        raise NotImplementedError("get_port_security is not implemented for this protocol")
-
-    def set_port_security(self, interface=None, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_port_security(interface=interface, **kwargs)
-        raise NotImplementedError("set_port_security is not implemented for this protocol")
-
-    def add_port_security(self, interface, vlan=None, mac=None, ip=None,
-                          entries=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().add_port_security(
-                interface, vlan=vlan, mac=mac, ip=ip, entries=entries)
-        raise NotImplementedError("add_port_security is not implemented for this protocol")
-
-    def delete_port_security(self, interface, vlan=None, mac=None, ip=None,
-                             entries=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh'):
-            return self._get_active_connection().delete_port_security(
-                interface, vlan=vlan, mac=mac, ip=ip, entries=entries)
-        raise NotImplementedError("delete_port_security is not implemented for this protocol")
-
-    def get_dhcp_snooping(self, interface=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_dhcp_snooping(interface=interface)
-        raise NotImplementedError("get_dhcp_snooping is not implemented for this protocol")
-
-    def set_dhcp_snooping(self, interface=None, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_dhcp_snooping(interface=interface, **kwargs)
-        raise NotImplementedError("set_dhcp_snooping is not implemented for this protocol")
-
-    def get_arp_inspection(self, interface=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_arp_inspection(interface=interface)
-        raise NotImplementedError("get_arp_inspection is not implemented for this protocol")
-
-    def set_arp_inspection(self, interface=None, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_arp_inspection(interface=interface, **kwargs)
-        raise NotImplementedError("set_arp_inspection is not implemented for this protocol")
-
-    def get_ip_source_guard(self, interface=None):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().get_ip_source_guard(interface=interface)
-        raise NotImplementedError("get_ip_source_guard is not implemented for this protocol")
-
-    def set_ip_source_guard(self, interface=None, **kwargs):
-        if self.active_protocol in ('mops', 'snmp', 'ssh', 'offline'):
-            return self._get_active_connection().set_ip_source_guard(interface=interface, **kwargs)
-        raise NotImplementedError("set_ip_source_guard is not implemented for this protocol")
+    # All setters, CRUD operations, and vendor-specific methods are
+    # handled by __getattr__ dynamic dispatch. No explicit definitions
+    # needed — if a schema or feature YAML exists, it works.
