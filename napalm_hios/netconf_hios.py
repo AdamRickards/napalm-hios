@@ -395,14 +395,21 @@ class NetconfHIOS:
         reply = self.connection.get_config(source=source)
         return _as_element(reply)
 
-    def _rpc_get_data(self, datastore: str, container: etree._Element) -> etree._Element:
-        """NMDA <get-data> (read-only). ``datastore`` is e.g. 'operational'."""
+    def _rpc_get_data(self, datastore: str, container: Optional[etree._Element] = None) -> etree._Element:
+        """NMDA <get-data> (read-only). ``datastore`` is e.g. 'operational'.
+
+        ``container`` is an optional subtree filter. This YumaWorks beta
+        omits ``ietf-system`` hostname from a system subtree filter, but
+        includes it in an unfiltered ds:operational read — callers that
+        need hostname should pass ``container=None``.
+        """
         self._require_connection()
         rpc = etree.Element("{%s}get-data" % NMDA_NS, nsmap={None: NMDA_NS, "ds": DS_NS})
         ds = etree.SubElement(rpc, "{%s}datastore" % NMDA_NS)
         ds.text = "ds:%s" % datastore
-        filt = etree.SubElement(rpc, "{%s}subtree-filter" % NMDA_NS)
-        filt.append(container)
+        if container is not None:
+            filt = etree.SubElement(rpc, "{%s}subtree-filter" % NMDA_NS)
+            filt.append(container)
         reply = self.connection.dispatch(rpc)
         return _as_element(reply)
 
@@ -422,7 +429,10 @@ class NetconfHIOS:
         hostname = _xpath_text(system, paths["hostname"])
         if not hostname:
             try:
-                operational = self._rpc_get_data("operational", _elem(SYS_NS, "system"))
+                # Unfiltered: a subtree filter of ietf-system omits
+                # hostname on this beta (even with an explicit
+                # <hostname/> leaf in the filter).
+                operational = self._rpc_get_data("operational")
                 hostname = _xpath_text(operational, paths["hostname_operational"])
             except Exception:
                 logger.debug(

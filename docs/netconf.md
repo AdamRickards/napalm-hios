@@ -123,8 +123,13 @@ SSH.
 - **`ds:operational` has empty interfaces.** An unfiltered (or
   interface-filtered) NMDA `<get-data>` on `ds:operational` returns
   empty `interfaces` / `interfaces-state`. Interface config and state
-  come from a namespaced plain `<get>`. Hostname, however, may appear
-  only under operational `ietf-system`.
+  come from a namespaced plain `<get>`.
+- **Hostname is missing from a filtered operational `<system>`.** A
+  subtree filter of `ietf-system` (even with an explicit `<hostname/>`
+  leaf) omits hostname on this beta. An unfiltered `ds:operational`
+  `<get-data>` includes `/ietf-system:system/hostname`. The facts
+  getter uses that unfiltered fallback when a plain `<get>` has no
+  hostname. Do not print the value in reports.
 - **Config is not HiOS running-config.** running, candidate and
   intended are a 4 KiB IETF slice: interface config plus system
   contact/location/timezone. No users, VLANs, SNMP, or NTP.
