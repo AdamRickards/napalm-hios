@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="1">
+  <data>
+    <interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces">
+      <interface>
+        <name>1/1</name>
+        <description/>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:ethernetCsmacd</type>
+        <enabled>true</enabled>
+        <link-up-down-trap-enable>enabled</link-up-down-trap-enable>
+      </interface>
+      <interface>
+        <name>1/2</name>
+        <description/>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:ethernetCsmacd</type>
+        <enabled>true</enabled>
+        <link-up-down-trap-enable>enabled</link-up-down-trap-enable>
+      </interface>
+      <interface>
+        <name>1/3</name>
+        <description/>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:ethernetCsmacd</type>
+        <enabled>true</enabled>
+        <link-up-down-trap-enable>enabled</link-up-down-trap-enable>
+      </interface>
+      <interface>
+        <name>1/4</name>
+        <description>uplink to core</description>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:ethernetCsmacd</type>
+        <enabled>false</enabled>
+        <link-up-down-trap-enable>enabled</link-up-down-trap-enable>
+      </interface>
+      <interface>
+        <name>cpu/1</name>
+        <description/>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:other</type>
+        <enabled>true</enabled>
+        <link-up-down-trap-enable>enabled</link-up-down-trap-enable>
+      </interface>
+    </interfaces>
+    <interfaces-state xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces">
+      <interface>
+        <name>1/1</name>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:ethernetCsmacd</type>
+        <admin-status>up</admin-status>
+        <oper-status>up</oper-status>
+        <if-index>1</if-index>
+        <phys-address>00:11:22:33:44:01</phys-address>
+        <statistics>
+          <in-octets>1000</in-octets>
+          <in-unicast-pkts>10</in-unicast-pkts>
+          <in-broadcast-pkts>1</in-broadcast-pkts>
+          <in-multicast-pkts>2</in-multicast-pkts>
+          <in-discards>0</in-discards>
+          <in-errors>0</in-errors>
+          <out-octets>2000</out-octets>
+          <out-unicast-pkts>20</out-unicast-pkts>
+          <out-broadcast-pkts>3</out-broadcast-pkts>
+          <out-multicast-pkts>4</out-multicast-pkts>
+          <out-discards>0</out-discards>
+          <out-errors>0</out-errors>
+        </statistics>
+      </interface>
+      <interface>
+        <name>1/2</name>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:ethernetCsmacd</type>
+        <admin-status>up</admin-status>
+        <oper-status>up</oper-status>
+        <if-index>2</if-index>
+        <phys-address>00:11:22:33:44:02</phys-address>
+        <speed>1000000000</speed>
+        <statistics>
+          <in-octets>111</in-octets>
+          <in-unicast-pkts>5</in-unicast-pkts>
+          <in-broadcast-pkts>0</in-broadcast-pkts>
+          <in-multicast-pkts>0</in-multicast-pkts>
+          <in-discards>1</in-discards>
+          <in-errors>2</in-errors>
+          <out-octets>222</out-octets>
+          <out-unicast-pkts>6</out-unicast-pkts>
+          <out-broadcast-pkts>0</out-broadcast-pkts>
+          <out-multicast-pkts>0</out-multicast-pkts>
+          <out-discards>3</out-discards>
+          <out-errors>4</out-errors>
+        </statistics>
+      </interface>
+      <interface>
+        <name>1/3</name>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:ethernetCsmacd</type>
+        <admin-status>up</admin-status>
+        <oper-status>down</oper-status>
+        <if-index>3</if-index>
+        <phys-address>00:11:22:33:44:03</phys-address>
+        <speed>0</speed>
+        <statistics>
+          <in-octets>0</in-octets>
+          <in-unicast-pkts>0</in-unicast-pkts>
+          <in-broadcast-pkts>0</in-broadcast-pkts>
+          <in-multicast-pkts>0</in-multicast-pkts>
+          <in-discards>0</in-discards>
+          <in-errors>0</in-errors>
+          <out-octets>0</out-octets>
+          <out-unicast-pkts>0</out-unicast-pkts>
+          <out-broadcast-pkts>0</out-broadcast-pkts>
+          <out-multicast-pkts>0</out-multicast-pkts>
+          <out-discards>0</out-discards>
+          <out-errors>0</out-errors>
+        </statistics>
+      </interface>
+      <interface>
+        <name>1/4</name>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:ethernetCsmacd</type>
+        <admin-status>down</admin-status>
+        <oper-status>down</oper-status>
+        <if-index>4</if-index>
+        <phys-address>00:11:22:33:44:04</phys-address>
+        <statistics>
+          <in-octets>0</in-octets>
+          <in-unicast-pkts>0</in-unicast-pkts>
+          <in-broadcast-pkts>0</in-broadcast-pkts>
+          <in-multicast-pkts>0</in-multicast-pkts>
+          <in-discards>0</in-discards>
+          <in-errors>0</in-errors>
+          <out-octets>0</out-octets>
+          <out-unicast-pkts>0</out-unicast-pkts>
+          <out-broadcast-pkts>0</out-broadcast-pkts>
+          <out-multicast-pkts>0</out-multicast-pkts>
+          <out-discards>0</out-discards>
+          <out-errors>0</out-errors>
+        </statistics>
+      </interface>
+      <interface>
+        <name>cpu/1</name>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:other</type>
+        <admin-status>up</admin-status>
+        <oper-status>up</oper-status>
+        <if-index>1000</if-index>
+        <phys-address>00:11:22:33:44:00</phys-address>
+        <speed>0</speed>
+        <statistics>
+          <in-octets>9</in-octets>
+          <in-unicast-pkts>1</in-unicast-pkts>
+          <in-broadcast-pkts>0</in-broadcast-pkts>
+          <in-multicast-pkts>0</in-multicast-pkts>
+          <in-discards>0</in-discards>
+          <in-errors>0</in-errors>
+          <out-octets>8</out-octets>
+          <out-unicast-pkts>1</out-unicast-pkts>
+          <out-broadcast-pkts>0</out-broadcast-pkts>
+          <out-multicast-pkts>0</out-multicast-pkts>
+          <out-discards>0</out-discards>
+          <out-errors>0</out-errors>
+        </statistics>
+      </interface>
+    </interfaces-state>
+  </data>
+</rpc-reply>

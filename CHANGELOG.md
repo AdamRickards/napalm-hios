@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.18.0
+
+### NETCONF transport (IETF models on HiOS 10.7 beta)
+
+First-class NETCONF client for the 10.7.00 BETA83 BRS image. That beta
+runs a stock YumaWorks server with IETF and Yuma models only — no
+Hirschmann / Belden vendor YANG — so the mapping is intentionally thin
+and honest. When vendor models ship, add a profile to
+`NETCONF_PROFILES` (see [docs/netconf.md](docs/netconf.md)); do not
+invent fields the server does not serve.
+
+Supported getters:
+
+- `get_facts()` — hostname (ietf-system, operational fallback),
+  contact/location unused as facts fields, uptime from
+  current-datetime − boot-datetime (naive, to tolerate the beta's
+  clock-Z quirk). vendor is `Belden` (same as SSH/SNMP). model,
+  serial_number and os_version are empty (platform is the kernel).
+- `get_interfaces()` — admin `enabled` / `admin-status` → `is_enabled`,
+  `oper-status` → `is_up` (the previous stub had these swapped). Speed
+  is the IETF bits/s leaf (0 when absent). MTU is 1500 when the leaf
+  is absent, matching SSH. Empty description is `""`.
+- `get_interfaces_counters()` — IETF `statistics` counters.
+- `get_config()` — running and candidate via `<get-config>` (IETF
+  interface + system slice, not a HiOS running-config). startup is
+  empty (no startup datastore).
+- `get_snmp_information()` — contact and location from ietf-system
+  only; chassis_id is empty and community is `{}`.
+
+All other getters raise `NotImplementedError` so the driver does not
+pretend the IETF model covers VLANs, LLDP, MAC, ARP, users, NTP,
+optics, or the rest.
+
+`netconf` is last in the default `protocol_preference`
+(`mops`, `snmp`, `ssh`, `netconf`). A device that already answers
+MOPS, SNMP or SSH never opens port 830. To use NETCONF, put it first
+(or only) in `protocol_preference`. `netconf_port` is unchanged
+(default 830). Filters are namespaced subtree filters.
+
+
 ## 1.17.0
 
 ### Signal Contact — `get_signal_contact()` / `set_signal_contact()`

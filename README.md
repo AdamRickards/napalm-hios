@@ -92,16 +92,17 @@ See [docs/vendor_specific.md](docs/vendor_specific.md) for arguments, return val
 
 ## Protocol Support
 
-Default order: MOPS → SNMP → SSH. Override with `protocol_preference` in `optional_args`.
+Default order: MOPS → SNMP → SSH → NETCONF. NETCONF is last so existing devices are not probed on port 830. To use it, put `'netconf'` first in `protocol_preference`. See [docs/netconf.md](docs/netconf.md).
 
 | Protocol | Transport | Auth | Atomic Write | Dependencies |
 |----------|-----------|------|--------------|-------------|
 | **MOPS** | HTTPS 443 | HTTP Basic | Yes (single POST) | `requests` |
 | **SNMP** | UDP 161 | SNMPv3 authPriv (MD5/DES) | No | `pysnmp` |
 | **SSH** | TCP 22 | Password | No | `netmiko` |
+| **NETCONF** | SSH 830 | Password | No (read-only) | `ncclient` |
 | **Offline** | XML file | None | N/A (file) | None |
 
-MOPS is the default and preferred protocol. SSH lazy-connects on demand for SSH-only methods. Offline reads/writes HiOS config export XML files — all config getters/setters work, online-only methods return empty. See [docs/protocols.md](docs/protocols.md) for configuration, known cross-protocol differences, and the full method availability matrix.
+MOPS is the default and preferred protocol. SSH lazy-connects on demand for SSH-only methods. NETCONF on the 10.7 beta maps IETF interfaces, counters, a slice of facts, IETF get-config, and contact/location only; see [docs/netconf.md](docs/netconf.md). Offline reads/writes HiOS config export XML files — all config getters/setters work, online-only methods return empty. See [docs/protocols.md](docs/protocols.md) for configuration, known cross-protocol differences, and the full method availability matrix.
 
 ## Testing
 

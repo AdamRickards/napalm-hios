@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="4">
+  <data>
+    <interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces">
+      <interface>
+        <name>1/1</name>
+        <description/>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:ethernetCsmacd</type>
+        <enabled>true</enabled>
+        <link-up-down-trap-enable>enabled</link-up-down-trap-enable>
+      </interface>
+      <interface>
+        <name>cpu/1</name>
+        <description/>
+        <type xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">ianaift:other</type>
+        <enabled>true</enabled>
+        <link-up-down-trap-enable>enabled</link-up-down-trap-enable>
+      </interface>
+    </interfaces>
+    <system xmlns="urn:ietf:params:xml:ns:yang:ietf-system">
+      <contact>Example Contact</contact>
+      <location>Example Location</location>
+      <clock>
+        <timezone-utc-offset>660</timezone-utc-offset>
+      </clock>
+    </system>
+  </data>
+</rpc-reply>

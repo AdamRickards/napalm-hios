@@ -14,6 +14,11 @@ import time
 
 logger = logging.getLogger(__name__)
 
+# Default connect order. NETCONF is last so a device that already
+# answers MOPS, SNMP or SSH never spends a timeout on port 830.
+# Put 'netconf' first (or only) in protocol_preference to use it.
+DEFAULT_PROTOCOL_PREFERENCE = ['mops', 'snmp', 'ssh', 'netconf']
+
 class HIOSDriver(NetworkDriver):
     """
     NAPALM driver implementation for HIOS devices.
@@ -63,7 +68,7 @@ class HIOSDriver(NetworkDriver):
         
         If hostname is 'localhost', uses a mock device for testing.
         Otherwise attempts to connect using protocols in the order specified
-        in protocol_preference (defaults to ['snmp', 'ssh', 'netconf']).
+        in protocol_preference (defaults to DEFAULT_PROTOCOL_PREFERENCE: MOPS, then SNMP, then SSH, then NETCONF).
         
         Raises:
             ConnectionException: If unable to connect using any protocol
@@ -78,7 +83,7 @@ class HIOSDriver(NetworkDriver):
                 return
 
             # Get protocol preference from optional args or use default
-            protocol_preference = self.optional_args.get('protocol_preference', ['mops', 'snmp', 'ssh'])
+            protocol_preference = self.optional_args.get('protocol_preference', list(DEFAULT_PROTOCOL_PREFERENCE))
             
             # Try each protocol in order of preference
             for protocol in protocol_preference:
@@ -194,7 +199,7 @@ class HIOSDriver(NetworkDriver):
         return False
 
     def get_facts(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline', 'netconf'):
             facts = self._get_active_connection().get_facts()
             # Ensure all required keys are present
             required_keys = ['uptime', 'vendor', 'model', 'hostname', 'fqdn', 'os_version', 'serial_number', 'interface_list']
@@ -205,7 +210,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("get_facts is not implemented for this protocol")
     
     def get_interfaces_counters(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline', 'netconf'):
             counters = self._get_active_connection().get_interfaces_counters()
             required_keys = ['tx_errors', 'rx_errors', 'tx_discards', 'rx_discards', 'tx_octets', 'rx_octets', 'tx_unicast_packets', 'rx_unicast_packets', 'tx_multicast_packets', 'rx_multicast_packets', 'tx_broadcast_packets', 'rx_broadcast_packets']
             for interface in counters.values():
@@ -427,13 +432,17 @@ class HIOSDriver(NetworkDriver):
     
     def get_config(self, retrieve='all', full=False, sanitized=False, format='text',
                    **kwargs):
-        if self.active_protocol in ('mops', 'offline'):
+        if self.active_protocol == 'netconf':
+            # IETF running/candidate XML. Do not fall through to SSH.
+            config = self.netconf.get_config(
+                retrieve=retrieve, full=full, sanitized=sanitized)
+        elif self.active_protocol in ('mops', 'offline'):
             config = self._get_active_connection().get_config(
                 retrieve, full, sanitized, format, **kwargs)
         elif self.active_protocol == 'ssh' or self._ensure_ssh():
             config = self.ssh.get_config(retrieve, full, sanitized, format)
         else:
-            raise NotImplementedError("get_config requires SSH or MOPS")
+            raise NotImplementedError("get_config requires SSH, MOPS or NETCONF")
         for config_type in ['running', 'startup', 'candidate']:
             if config_type not in config:
                 config[config_type] = ''
@@ -447,7 +456,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("load_config requires MOPS")
 
     def get_interfaces(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline', 'netconf'):
             interfaces = self._get_active_connection().get_interfaces()
             # Ensure all required keys are present for each interface
             required_keys = ['is_up', 'is_enabled', 'description', 'last_flapped', 'speed', 'mtu', 'mac_address']
@@ -738,7 +747,7 @@ class HIOSDriver(NetworkDriver):
         raise NotImplementedError("set_sflow_port is not implemented for this protocol")
 
     def get_snmp_information(self):
-        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline'):
+        if self.active_protocol in ('ssh', 'snmp', 'mops', 'offline', 'netconf'):
             snmp_info = self._get_active_connection().get_snmp_information()
             required_keys = ['chassis_id', 'community', 'contact', 'location']
             for key in required_keys:
