@@ -1,12 +1,13 @@
 # Protocol Support
 
-The driver supports four protocols, selected via `protocol_preference` in `optional_args`. Default order: MOPS → SNMP → SSH.
+The driver supports five protocols, selected via `protocol_preference` in `optional_args`. Default order: MOPS → SNMP → SSH → NETCONF. NETCONF is last so a device that already answers an earlier protocol is never probed on port 830. To use NETCONF, put it first. See [netconf.md](netconf.md).
 
 | Protocol | Transport | Auth | Bulk Read | Atomic Write | Dependencies |
 |----------|-----------|------|-----------|--------------|-------------|
 | **MOPS** | HTTPS POST | HTTP Basic | One request = entire table | Yes (one POST) | `requests` |
 | **SNMP** | UDP 161 | SNMPv3 authPriv (MD5/DES) | GETBULK walk | No (one SET per OID) | `pysnmp` |
 | **SSH** | TCP 22 | Password | CLI parsing | No (one command at a time) | `netmiko` |
+| **NETCONF** | SSH 830 | Password | IETF `<get>` / `<get-config>` | No (read-only in 1.18) | `ncclient` |
 | **Offline** | XML file | None | In-memory | N/A (file) | None |
 
 MOPS is the default and preferred protocol — it uses the same internal mechanism as the HiOS web UI, supports atomic multi-table writes in a single POST, and requires only HTTP Basic auth (no USM key derivation). `get_config` now works on MOPS (HTTPS download) as well as SSH (CLI scraping). SSH is lazy-connected on demand when SSH-only methods are called (`ping`, `cli`, `commit_config` in SSH mode).
@@ -252,10 +253,25 @@ MOPS and SNMP return identical data (same underlying MIB). SSH parses CLI output
 
 ---
 
+## NETCONF Configuration
+
+NETCONF connects to TCP 830 (override with `netconf_port`). The 1.18
+client is read-only and maps IETF `ietf-interfaces` and `ietf-system`
+only. Put it first when you actually want this transport:
+
+```python
+device = driver(hostname, username, password,
+                optional_args={'protocol_preference': ['netconf'],
+                               'netconf_port': 830})
+```
+
+See [netconf.md](netconf.md) for the getter matrix and vendor-mapping
+extension points.
+
 ## Known Issues
 
 - SSH-only methods (`ping`, `cli`, `commit_config` in SSH mode) auto-connect SSH when the active protocol is MOPS or SNMP. If SSH credentials are incorrect or the SSH port is blocked, these methods raise `NotImplementedError`.
 - `activate_profile()` triggers a warm restart — the connection will drop. Reconnect after the device reboots.
 - `commit_config()` in SSH mode executes commands in configure mode. CLI errors are detected and raised as `CommitError`. NVM busy state is polled through (up to 5s) to handle back-to-back commits.
 - MOPS getter output matches SNMP output (same underlying MIB data), but some MOPS MIB/Node names are still being discovered.
-- NETCONF support is stub-only — not in default protocol order. Opt in via `protocol_preference=['mops', 'snmp', 'ssh', 'netconf']`.
+- NETCONF is last in the default order (`mops`, `snmp`, `ssh`, `netconf`) and is a real IETF client, not a stub. Existing flows are unchanged: port 830 is only opened if earlier protocols all fail, or if the caller puts `netconf` first. On the 10.7.00 BETA83 BRS beta the server is YumaWorks with IETF models only — see [netconf.md](netconf.md) for the getter matrix, quirks, and how to add vendor YANG later.

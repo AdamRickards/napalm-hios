@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="2">
+  <data>
+    <system xmlns="urn:ietf:params:xml:ns:yang:ietf-system">
+      <contact>Example Contact</contact>
+      <location>Example Location</location>
+      <clock>
+        <timezone-utc-offset>660</timezone-utc-offset>
+      </clock>
+    </system>
+    <system-state xmlns="urn:ietf:params:xml:ns:yang:ietf-system">
+      <platform>
+        <os-name>Linux</os-name>
+        <os-release>example-kernel</os-release>
+        <os-version>example-kernel</os-version>
+        <machine>armv7l</machine>
+      </platform>
+      <clock>
+        <current-datetime>2026-11-25T15:15:46Z</current-datetime>
+        <boot-datetime>2026-11-25T15:05:52Z</boot-datetime>
+      </clock>
+    </system-state>
+  </data>
+</rpc-reply>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rpc-reply xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="3">
+  <data>
+    <system xmlns="urn:ietf:params:xml:ns:yang:ietf-system">
+      <hostname>sw1</hostname>
+      <contact>Example Contact</contact>
+      <location>Example Location</location>
+      <clock>
+        <timezone-utc-offset>660</timezone-utc-offset>
+      </clock>
+    </system>
+  </data>
+</rpc-reply>
