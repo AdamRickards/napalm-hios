@@ -260,6 +260,20 @@ class TestNetconfGettersWithMockSession(unittest.TestCase):
         self.assertEqual(snmp["chassis_id"], "")
         self.assertEqual(snmp["community"], {})
 
+    def test_get_facts_hostname_from_dispatch_reply_without_data_ele(self):
+        """Yuma <get-data> comes back as RPCReply.xml, not GetReply.data_ele."""
+        class XmlOnlyReply:
+            def __init__(self, xml_text):
+                self.xml = xml_text
+                self.data_ele = None
+
+        self.client.connection.dispatch.side_effect = lambda rpc: XmlOnlyReply(
+            _load("ietf-system-operational-dispatch.xml")
+        )
+        facts = self.client.get_facts()
+        self.assertEqual(facts["hostname"], "sw1")
+        self.assertEqual(facts["uptime"], 594)
+
     def test_getters_require_connection(self):
         bare = NetconfHIOS(HOST, USER, PASS)
         with self.assertRaises(ConnectionException):

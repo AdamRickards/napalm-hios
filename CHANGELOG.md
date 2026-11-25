@@ -13,7 +13,7 @@ invent fields the server does not serve.
 
 Supported getters:
 
-- `get_facts()` — hostname (ietf-system, operational fallback),
+- `get_facts()` — hostname (ietf-system, operational fallback; `<get-data>` replies are unwrapped by local-name so a non-NC_NS `<data>` still parses),
   contact/location unused as facts fields, uptime from
   current-datetime − boot-datetime (naive, to tolerate the beta's
   clock-Z quirk). vendor is `Belden` (same as SSH/SNMP). model,

@@ -164,6 +164,29 @@ def select_netconf_profile(capabilities: Optional[Iterable[Any]] = None) -> str:
 # XML helpers
 # ---------------------------------------------------------------------------
 
+def _localname(node: etree._Element) -> str:
+    return etree.QName(node).localname
+
+
+def _find_data(root: etree._Element) -> Optional[etree._Element]:
+    """Return a <data> element regardless of namespace.
+
+    ncclient GetReply.data_ele is usually NC_NS, but a raw <get-data>
+    RPCReply (dispatch) on this YumaWorks server can put <data> in
+    another (or no) namespace. Matching only NC_NS left the client
+    sitting on <rpc-reply> and missing operational hostname.
+    """
+    if _localname(root) == "data":
+        return root
+    for child in list(root):
+        if _localname(child) == "data":
+            return child
+    for el in root.iter():
+        if _localname(el) == "data":
+            return el
+    return None
+
+
 def _as_element(reply: Any) -> etree._Element:
     """Return the <data> element (or the root) from an ncclient reply."""
     if reply is None:
@@ -179,10 +202,7 @@ def _as_element(reply: Any) -> etree._Element:
         root = etree.fromstring(xml.encode("utf-8"))
     else:
         raise TypeError("Unsupported NETCONF reply type: %s" % type(reply))
-    data = root.find(".//{%s}data" % NC_NS)
-    if data is None and root.tag != "{%s}data" % NC_NS:
-        # Some replies use an un-namespaced <data>
-        data = root.find(".//data")
+    data = _find_data(root)
     return data if data is not None else root
 
 
